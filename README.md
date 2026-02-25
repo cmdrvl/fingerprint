@@ -382,8 +382,10 @@ When multiple `--fp` are provided, each is tried in order. First match wins. If 
 
 | Code | Trigger | Next Step |
 |------|---------|-----------|
-| `E_BAD_INPUT` | Invalid JSONL or missing `bytes_hash` | Run `hash` first |
+| `E_BAD_INPUT` | Invalid JSONL, missing `bytes_hash` on non-skipped rows, or unsupported upstream version | Run `hash` first |
 | `E_UNKNOWN_FP` | Fingerprint ID not found | Check `fingerprint --list` for available IDs |
+| `E_DUPLICATE_FP_ID` | Duplicate fingerprint ID found across providers | Remove duplicate packs or pin one provider |
+| `E_UNTRUSTED_FP` | External fingerprint not allowlisted | Add provider to allowlist or use built-in fingerprints |
 
 **Compile mode:**
 
@@ -458,8 +460,8 @@ Content hash is only computed when a fingerprint matches. No match = no extracti
 | **No probabilistic matching** | Assertions are binary — match or no match. No confidence scores |
 | **Format support** | v0 supports CSV, XLSX, PDF. Other formats require custom crates |
 | **No data extraction/transformation** | fingerprint identifies templates — use downstream tools for data work |
-| **Plugin discovery** | `FINGERPRINT_PATH` for custom crate discovery is deferred in v0 |
-| **Compile mode** | DSL → Rust compilation is deferred in v0 |
+| **Plugin discovery** | `FINGERPRINT_PATH` for custom crate discovery is deferred in v0.1 |
+| **Compile mode** | Available in v0.1; advanced assertion coverage still evolves over time |
 | **Advanced assertions** | `range_populated`, `sum_eq`, `within_tolerance` deferred in v0 |
 
 ---
@@ -510,8 +512,8 @@ $ fingerprint --describe | jq '.exit_codes'
 
 $ fingerprint --describe | jq '.pipeline'
 {
-  "upstream": ["vacuum", "hash"],
-  "downstream": ["lock", "pack"]
+  "upstream": ["hash"],
+  "downstream": ["lock"]
 }
 ```
 
@@ -526,7 +528,7 @@ case $? in
   1) echo "partial — some files unrecognized"
      jq -s '[.[] | select(.fingerprint.matched == false)] | length' fp.jsonl ;;
   2) echo "refusal"
-     cat fp.jsonl | jq '.code'
+     cat fp.jsonl | jq '.refusal.code'
      exit 1 ;;
 esac
 

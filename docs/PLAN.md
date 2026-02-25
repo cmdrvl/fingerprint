@@ -4,7 +4,8 @@
 
 **Determine whether an artifact matches a known template — and if so, hash the matched content.**
 
-If it doesn't match, say so with reasons. If it can't be tested, refuse.
+If it doesn't match, say so with reasons. If the pipeline can't operate, refuse.
+If an individual artifact can't be processed, emit `_skipped` with structured warnings.
 
 Second promise: **Encode domain knowledge as versioned, testable, executable assertions.**
 
@@ -48,7 +49,7 @@ It tells you *whether this file matches a known template*, and if so, *what the 
 vacuum /data/models/ | hash | fingerprint --fp argus-model.v1 | lock --dataset-id "models-dec"
 ```
 
-fingerprint can also test multiple fingerprints (first match wins):
+fingerprint can also test multiple fingerprints (evaluated in CLI order; first match wins):
 
 ```bash
 vacuum /data/mixed/ | hash | fingerprint --fp argus-model.v1 --fp intex-cdr.v1 --fp xlsx.v0
@@ -76,7 +77,7 @@ Both modes share the `fingerprint` binary. Run mode is the default; compile mode
 
 ---
 
-## CLI (v0)
+## CLI (v0.1 target)
 
 ### Run mode
 
@@ -91,20 +92,27 @@ fingerprint witness <query|last|count> [OPTIONS]
 
 #### Flags
 
-- `--fp <ID>`: Fingerprint ID to test (repeatable). At least one required unless `--list` is specified. Multiple `--fp` flags: first matching fingerprint wins per artifact.
+- `--fp <ID>`: Fingerprint ID to test (repeatable). At least one required unless `--list` is specified. Multiple `--fp` flags are evaluated in CLI order; first match wins per artifact.
 - `--list`: List all available fingerprints (built-in + installed) and exit 0.
 - `--jobs <N>`: Number of parallel workers (default: CPU count). `--jobs 1` for sequential.
 - `--no-witness`: Suppress witness ledger recording.
-- `--describe`: Print `operator.json` to stdout and exit 0.
-- `--schema`: Print JSON Schema for the JSONL record to stdout and exit 0.
+- `--describe`: Print `operator.json` to stdout and exit 0. Checked before input is validated.
+- `--schema`: Print JSON Schema for the JSONL record to stdout and exit 0. Like `--describe`, checked before input is validated.
 - `--progress`: Emit structured progress JSONL to stderr.
 - `--version`: Print `fingerprint <semver>` to stdout and exit 0.
 
 #### Exit codes
 
-- `0`: All records matched a fingerprint.
-- `1`: Partial — some records didn't match any fingerprint (or were skipped).
-- `2`: Refusal / CLI error.
+- `0`: ALL_MATCHED — every record matched a fingerprint.
+- `1`: PARTIAL — some records didn't match any fingerprint (or were skipped).
+- `2`: REFUSAL — pipeline-level inability to operate / CLI error.
+
+#### Streams
+
+- **stdout (exit 0):** JSONL records, every record has `matched: true`.
+- **stdout (exit 1):** JSONL records, mix of matched/no-match/`_skipped`.
+- **stdout (exit 2):** Single refusal envelope JSON object (not JSONL).
+- **stderr:** Progress JSONL (if `--progress`); warnings for skipped files.
 
 ### Compile mode
 
@@ -123,8 +131,8 @@ fingerprint compile <YAML> [OPTIONS]
 
 #### Exit codes
 
-- `0`: Compilation succeeded.
-- `1`: Validation warnings (crate generated but has issues — e.g., unused extract fields).
+- `0`: Compile/check completed with no validation warnings.
+- `1`: Validation warnings (non-refusal). In compile mode a crate may still be generated; in `--check` mode no crate output is written.
 - `2`: Refusal (malformed YAML, unsupported assertion type).
 
 ---
@@ -153,8 +161,8 @@ pub struct FingerprintResult {
     pub matched: bool,
     pub reason: Option<String>,
     pub assertions: Vec<AssertionResult>,
-    pub extracted: HashMap<String, Value>,
-    pub content_hash: Option<String>,
+    pub extracted: Option<HashMap<String, Value>>,  // null when matched=false
+    pub content_hash: Option<String>,               // null when matched=false
 }
 
 pub struct AssertionResult {
@@ -176,7 +184,18 @@ pub struct AssertionResult {
 
 1. Built-in fingerprints bundled with the `fingerprint` CLI
 2. Installed fingerprint crates (discovered via cargo install paths)
-3. `FINGERPRINT_PATH` env var (colon-separated directories of .so/.dylib plugins, advanced)
+3. `FINGERPRINT_PATH` env var (colon-separated directories of .so/.dylib plugins, advanced; deferred in v0.1)
+
+Resolution must be deterministic:
+
+- `fingerprint_id` MUST be globally unique after registry load.
+- If duplicate IDs are discovered across sources, startup fails with `E_DUPLICATE_FP_ID` (no tie-break fallback).
+
+Trust boundary:
+
+- Built-in fingerprints are trusted by default.
+- External crates/plugins require explicit allowlisting in config (`~/.epistemic/config.toml`) before use.
+- Unallowlisted external fingerprints fail with `E_UNTRUSTED_FP`.
 
 ```bash
 # List available fingerprints
@@ -218,6 +237,8 @@ content_hash:
 ```
 
 ### DSL assertion types
+
+The table below is the full assertion roadmap. The v0.1 ship subset is defined in [Scope: v0.1](#scope-v01-ship-this).
 
 | Assertion | Purpose | Example |
 |-----------|---------|---------|
@@ -338,7 +359,8 @@ When an artifact doesn't match any provided fingerprint:
 }
 ```
 
-When multiple `--fp` are provided: each fingerprint is tried in order. The first match wins. If none match, the record shows the LAST fingerprint tried (with `matched: false`).
+When multiple `--fp` are provided: each fingerprint is tried in the exact CLI order. The first match wins. If none match, the record shows the LAST fingerprint tried (with `matched: false`).
+Recommended ordering is most specific → most general so confidence-tier fallback is explicit and deterministic.
 
 ### Key invariant
 
@@ -346,14 +368,20 @@ Fingerprint results are only comparable if `fingerprint_id` + `fingerprint_versi
 
 ### Passthrough of upstream `_skipped` records
 
-If an input record has `_skipped: true`, fingerprint passes it through unchanged (no fingerprinting attempted). Updates `version` and `tool_versions` only.
+If an input record has `_skipped: true`, fingerprint passes it through without attempting fingerprinting. This path bypasses the `bytes_hash` requirement. Fingerprint updates `version`, `tool_versions`, and sets `fingerprint: null` (so the key is always present for uniform downstream schema).
 
 ### New `_skipped` records
 
-When fingerprint encounters an IO/parse failure for a record (e.g., corrupted XLSX), it marks `_skipped: true` and appends a warning:
+When fingerprint encounters an IO/parse failure for a record (e.g., corrupted XLSX), it marks `_skipped: true`, sets `fingerprint: null`, and appends a warning. All upstream fields are preserved:
 
 ```json
 {
+  "version": "fingerprint.v0",
+  "path": "/data/models/corrupt.xlsx",
+  "bytes_hash": "sha256:abc1...",
+  "hash_algorithm": "sha256",
+  "tool_versions": { "vacuum": "0.1.0", "hash": "0.1.0", "fingerprint": "0.1.0" },
+  "fingerprint": null,
   "_skipped": true,
   "_warnings": [
     { "tool": "fingerprint", "code": "E_PARSE", "message": "Cannot parse XLSX", "detail": { "path": "corrupt.xlsx", "error": "Invalid ZIP" } }
@@ -364,6 +392,12 @@ When fingerprint encounters an IO/parse failure for a record (e.g., corrupted XL
 ### Ordering
 
 Output order matches input order. When processing in parallel (`--jobs > 1`), records are buffered and emitted in sequence.
+Implementation MUST bound in-flight work and reorder buffers (no unbounded growth). When the reorder buffer hits its configured limit, input reading pauses until earlier sequence slots are emitted.
+
+### Upstream version compatibility
+
+- fingerprint accepts records from the immediate upstream tool (`hash`) for the current schema version and explicitly supported prior versions.
+- fingerprint refuses unknown future upstream versions with `E_BAD_INPUT`.
 
 ---
 
@@ -373,17 +407,43 @@ Per-file IO/parse failures are NOT refusals. They are recorded as `_skipped: tru
 
 | Code | Trigger | Next step |
 |------|---------|-----------|
-| `E_BAD_INPUT` | Invalid JSONL or missing hash fields | Run hash first |
+| `E_BAD_INPUT` | Invalid JSONL, missing `bytes_hash` on non-skipped records, or unrecognized upstream `version` | Run hash first |
 | `E_UNKNOWN_FP` | Fingerprint ID not found in any installed crate | Check installed fingerprint crates (`fingerprint --list`) |
+| `E_DUPLICATE_FP_ID` | Same `fingerprint_id` discovered from multiple sources during registry load | Remove duplicate packs or pin to one source |
+| `E_UNTRUSTED_FP` | External fingerprint crate/plugin is not allowlisted | Add to allowlist or use built-in fingerprints |
 
-Refusal envelope:
+Per-code `detail` schemas:
+
+```
+E_BAD_INPUT:
+  { "line": 42, "error": "..." }        // parse failure
+  or
+  { "line": 1, "missing_field": "bytes_hash" }  // missing required field
+  or
+  { "line": 1, "version": "unknown.v3" }        // unrecognized version
+
+E_UNKNOWN_FP:
+  { "fingerprint_id": "argus-model.v1", "available": ["csv.v0", "xlsx.v0"] }
+
+E_DUPLICATE_FP_ID:
+  { "fingerprint_id": "argus-model.v1", "providers": ["builtin:argus", "crate:fingerprint-argus"] }
+
+E_UNTRUSTED_FP:
+  { "fingerprint_id": "argus-model.v1", "provider": "crate:fingerprint-argus", "policy": "allowlist_required" }
+```
+
+Refusal envelope (emitted to stdout):
 
 ```json
 {
-  "code": "E_UNKNOWN_FP",
-  "message": "Fingerprint ID not found",
-  "detail": { "fingerprint_id": "argus-model.v1", "available": ["csv.v0", "xlsx.v0"] },
-  "next_command": "cargo install fingerprint-argus"
+  "version": "fingerprint.v0",
+  "outcome": "REFUSAL",
+  "refusal": {
+    "code": "E_UNKNOWN_FP",
+    "message": "Fingerprint ID not found",
+    "detail": { "fingerprint_id": "argus-model.v1", "available": ["csv.v0", "xlsx.v0"] },
+    "next_command": "cargo install fingerprint-argus"
+  }
 }
 ```
 
@@ -411,34 +471,72 @@ This metadata is **not part of the fingerprint assertion logic**. Derivation rel
 
 ---
 
+## Witness Record
+
+fingerprint appends a witness record for every **run mode** invocation (success or refusal). Compile mode does not produce witness records — it is a build tool, not a pipeline run. The record follows the standard `witness.v0` schema:
+
+```json
+{
+  "id": "blake3:...",
+  "tool": "fingerprint",
+  "version": "0.1.0",
+  "binary_hash": "blake3:...",
+  "inputs": [
+    { "path": "stdin", "hash": null, "bytes": null }
+  ],
+  "params": { "fingerprints": ["argus-model.v1"], "jobs": 4 },
+  "outcome": "ALL_MATCHED",
+  "exit_code": 0,
+  "output_hash": "blake3:...",
+  "prev": "blake3:...",
+  "ts": "2026-02-24T10:00:00Z"
+}
+```
+
+Possible outcomes: `ALL_MATCHED` (exit 0), `PARTIAL` (exit 1), `REFUSAL` (exit 2).
+
+For fingerprint, `inputs` describes the JSONL source: `"stdin"` when piped, or the file path when a positional argument is given. `inputs[].hash` and `inputs[].bytes` are `null` for stdin; when a file argument is provided, they can be populated after reading. The `output_hash` is BLAKE3 of the full JSONL output (per spine witness protocol).
+
+---
+
 ## Implementation Notes
 
 ### Execution flow (run mode)
 
 ```
  1. Parse CLI args (clap)                → exit 2 on bad args; --version handled by clap
- 2. If --describe: print operator.json, exit 0
- 3. If --schema: print JSON Schema, exit 0
- 4. If --list: enumerate available fingerprints, print, exit 0
- 5. Resolve --fp IDs to fingerprint implementations
-    → E_UNKNOWN_FP if any ID not found (STOP)
- 6. Open input (file or stdin)
- 7. For each JSONL line:
-    a. Parse as JSON                     → E_BAD_INPUT if invalid (STOP)
-    b. Validate has bytes_hash           → E_BAD_INPUT if missing (STOP)
-    c. If _skipped: true, pass through   → update version + tool_versions only
-    d. Try each --fp in order:
-       i.   Open/parse the file (using mime_guess/extension for format dispatch)
-       ii.  Run assertions
+ 2. If witness subcommand: dispatch to witness query/last/count, exit
+ 3. If --describe: print operator.json, exit 0
+ 4. If --schema: print JSON Schema, exit 0
+ 5. If --list: enumerate available fingerprints, print, exit 0
+ 6. Validate at least one --fp provided  → exit 2 if none (CLI usage error)
+ 7. Resolve --fp IDs to fingerprint implementations
+    → E_UNKNOWN_FP if any ID not found
+    → E_DUPLICATE_FP_ID if duplicate IDs exist across providers
+    → E_UNTRUSTED_FP if provider is not allowlisted
+ 8. Open input (file or stdin)
+ 9. For each JSONL line:
+    a. Parse as JSON                     → E_BAD_INPUT if invalid
+    b. Check version field               → E_BAD_INPUT if unrecognized
+    c. If _skipped: true, pass through   → update version, tool_versions, set fingerprint: null
+    d. Validate has bytes_hash           → E_BAD_INPUT if missing (non-skipped only)
+    → On refusal (steps 7/9a/9b/9d): emit refusal envelope to stdout, append
+      witness record with outcome "REFUSAL" (if not --no-witness), exit 2
+    e. Open/parse the file once (using mime_guess/extension for format dispatch)
+       → On IO/parse error: mark _skipped, set fingerprint: null, append _warning, continue
+    f. Try each --fp in order:
+       i.   Check fingerprint's declared format vs Document type → skip if mismatch
+       ii.  Run assertions in declaration order; short-circuit on first failure
+            (remaining assertions are recorded as "Skipped" — some are also
+            structurally impossible, e.g., cell check when sheet doesn't exist)
        iii. If all pass: MATCH → extract content, compute content_hash, stop trying
        iv.  If any fail: NO_MATCH → try next --fp
-       v.   On IO/parse error: mark _skipped, append _warning, continue to next record
-    e. Build fingerprint result (match or last no-match)
-    f. Update version, merge tool_versions
-    g. Emit to stdout
- 8. Track: any skipped or unmatched? → exit 1 if yes, exit 0 if all matched
- 9. Append witness record
-10. Exit
+    g. Build fingerprint result (match or last no-match)
+    h. Update version, merge tool_versions
+    i. Emit to stdout
+10. Track: any skipped or unmatched? → exit 1 if yes, exit 0 if all matched
+11. Append witness record (if not --no-witness)
+12. Exit
 ```
 
 ### Core data structures
@@ -468,7 +566,10 @@ pub struct FingerprintInfo {
 
 // === Document abstraction ===
 
-/// Format-specific document access
+/// Format-specific document access.
+/// All variants carry the original file path (from the JSONL record's `path` field)
+/// so that metadata assertions like `filename_regex` can operate without
+/// needing a separate context parameter on the Fingerprint trait.
 pub enum Document {
     Xlsx(XlsxDocument),
     Csv(CsvDocument),
@@ -476,15 +577,22 @@ pub enum Document {
     Unknown(RawDocument),
 }
 
+impl Document {
+    pub fn path(&self) -> &Path; // delegates to inner variant
+}
+
 pub struct XlsxDocument {
+    pub path: PathBuf,
     // Lazy sheet access via calamine
 }
 
 pub struct CsvDocument {
+    pub path: PathBuf,
     // Header + streaming record access
 }
 
 pub struct PdfDocument {
+    pub path: PathBuf,
     // Structural access via lopdf (page count, metadata, form fields)
 }
 
@@ -509,12 +617,84 @@ pub enum Assertion {
 }
 ```
 
+### Cli struct
+
+```rust
+#[derive(Parser)]
+#[command(version)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
+    /// JSONL manifest file (default: stdin)
+    #[arg(value_name = "INPUT")]
+    pub input: Option<PathBuf>,
+
+    /// Fingerprint ID to test (repeatable; evaluated in CLI order, first match wins)
+    #[arg(long = "fp", value_name = "ID")]
+    pub fingerprints: Vec<String>,
+
+    /// List available fingerprints and exit
+    #[arg(long)]
+    pub list: bool,
+
+    /// Number of parallel workers (default: CPU count)
+    #[arg(long)]
+    pub jobs: Option<usize>,
+
+    /// Suppress witness ledger recording
+    #[arg(long)]
+    pub no_witness: bool,
+
+    /// Emit progress to stderr
+    #[arg(long)]
+    pub progress: bool,
+
+    /// Print operator.json and exit
+    #[arg(long)]
+    pub describe: bool,
+
+    /// Print JSON Schema and exit
+    #[arg(long)]
+    pub schema: bool,
+}
+
+#[derive(Subcommand)]
+pub enum Command {
+    /// Compile DSL fingerprint to Rust crate
+    Compile {
+        /// DSL fingerprint file (.fp.yaml)
+        yaml: PathBuf,
+
+        /// Output directory for generated crate
+        #[arg(long)]
+        out: Option<PathBuf>,
+
+        /// Validate only, don't generate code
+        #[arg(long)]
+        check: bool,
+    },
+    /// Query the witness ledger
+    Witness {
+        #[command(subcommand)]
+        action: WitnessAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum WitnessAction {
+    Query { /* filter flags */ },
+    Last,
+    Count { /* filter flags */ },
+}
+```
+
 ### Module structure
 
 ```
 src/
 ├── cli/
-│   ├── args.rs          # clap derive Args struct (run + compile subcommands)
+│   ├── args.rs          # clap derive Cli / Command / WitnessAction
 │   ├── exit.rs          # Outcome, exit_code()
 │   └── mod.rs
 ├── registry/
@@ -559,18 +739,32 @@ src/
 │   ├── ledger.rs
 │   ├── query.rs
 │   └── mod.rs
-├── lib.rs               # pub fn run() → Result<u8, Box<dyn Error>>
-└── main.rs              # Minimal
+├── lib.rs               # pub fn run() → u8 (handles errors internally, returns exit code)
+└── main.rs              # Minimal: calls fingerprint::run(), maps to ExitCode
+```
+
+### `main.rs` (≤15 lines)
+
+```rust
+#![forbid(unsafe_code)]
+
+fn main() -> std::process::ExitCode {
+    let code = fingerprint::run();
+    std::process::ExitCode::from(code)
+}
 ```
 
 ### Key dependencies
 
 | Crate | Purpose |
 |-------|---------|
+| `clap` | CLI argument parsing (derive API) |
+| `serde` + `serde_json` | JSONL serialization/deserialization |
 | `calamine` | Excel parsing (lazy sheet enumeration) |
 | `lopdf` | PDF structural access |
 | `csv` | CSV parsing |
-| `blake3` | Content hashing |
+| `blake3` | Content hashing + witness record hashing |
+| `chrono` | ISO 8601 timestamp formatting |
 | `globset` | Filename pattern matching |
 | `regex` | Cell/sheet regex assertions |
 | `serde_yaml` | DSL fingerprint parsing |
@@ -600,9 +794,13 @@ src/
   ],
 
   "options": [
-    { "name": "fp", "flag": "--fp", "type": "string", "repeatable": true, "description": "Fingerprint ID (first match wins)" },
+    { "name": "fp", "flag": "--fp", "type": "string", "repeatable": true, "description": "Fingerprint ID (evaluated in CLI order; first match wins)" },
     { "name": "list", "flag": "--list", "type": "boolean", "description": "List available fingerprints" },
-    { "name": "jobs", "flag": "--jobs", "type": "integer", "description": "Number of parallel workers" }
+    { "name": "jobs", "flag": "--jobs", "type": "integer", "description": "Number of parallel workers" },
+    { "name": "no_witness", "flag": "--no-witness", "type": "boolean", "description": "Suppress witness ledger recording" },
+    { "name": "progress", "flag": "--progress", "type": "boolean", "description": "Emit structured progress on stderr" },
+    { "name": "describe", "flag": "--describe", "type": "boolean", "description": "Print operator manifest and exit" },
+    { "name": "schema", "flag": "--schema", "type": "boolean", "description": "Print output schema and exit" }
   ],
 
   "exit_codes": {
@@ -613,7 +811,9 @@ src/
 
   "refusals": [
     { "code": "E_BAD_INPUT", "message": "Invalid JSONL or missing hash fields", "action": "run_upstream", "tool": "hash" },
-    { "code": "E_UNKNOWN_FP", "message": "Fingerprint ID not found", "action": "escalate" }
+    { "code": "E_UNKNOWN_FP", "message": "Fingerprint ID not found", "action": "escalate" },
+    { "code": "E_DUPLICATE_FP_ID", "message": "Duplicate fingerprint ID across providers", "action": "escalate" },
+    { "code": "E_UNTRUSTED_FP", "message": "Fingerprint provider not allowlisted", "action": "escalate" }
   ],
 
   "capabilities": {
@@ -651,18 +851,18 @@ src/
 
 - **Match tests:** artifact matches fingerprint → `matched: true`, content_hash populated
 - **No-match tests:** artifact fails assertions → `matched: false`, reason populated
-- **Multiple fingerprint tests:** first match wins; last no-match reported when none match
+- **Multiple fingerprint tests:** evaluated in CLI order; first match wins; last no-match reported when none match
 - **Assertion tests:** each DSL assertion type works correctly
 - **Content hash tests:** same content produces same hash; different content produces different hash
-- **Passthrough tests:** upstream fields preserved; `_skipped` records passed through
+- **Passthrough tests:** upstream fields preserved; `_skipped` records passed through with `fingerprint: null`
 - **New _skipped tests:** corrupted files produce `_skipped` records
 - **Ordering tests:** output order matches input order
 - **Compile tests:** DSL → Rust crate generation is deterministic
 - **Compile validation:** malformed YAML produces compile refusal
 - **`--list` tests:** lists built-in fingerprints
 - **Exit code tests:** 0 all matched, 1 partial, 2 refusal
-- **Refusal tests:** E_BAD_INPUT, E_UNKNOWN_FP
-- **Witness tests:** witness record appended
+- **Refusal tests:** E_BAD_INPUT, E_UNKNOWN_FP, E_DUPLICATE_FP_ID, E_UNTRUSTED_FP
+- **Witness tests:** witness record appended; witness query/last/count behavior and exit codes
 - **Golden file tests:** known XLSX through known fingerprint produces exact expected output
 
 ---
@@ -672,8 +872,11 @@ src/
 ### Must have
 
 - Run mode: stream enrichment with `--fp` (repeatable)
+- Compile mode (`fingerprint compile`)
 - `--list` flag
 - `--jobs` for parallelism
+- `--schema` flag
+- `--progress` flag
 - Core fingerprints: `csv.v0`, `xlsx.v0`, `pdf.v0`
 - DSL assertion types: `filename_regex`, `sheet_exists`, `sheet_name_regex`, `cell_eq`, `cell_regex`, `range_non_null`, `sheet_min_rows`
 - Content hash computation (blake3)
@@ -685,14 +888,11 @@ src/
 - `--version` flag
 - `operator.json` + `--describe`
 - Exit codes 0/1/2
-- Refusal system with `E_BAD_INPUT`, `E_UNKNOWN_FP`
+- Refusal system with `E_BAD_INPUT`, `E_UNKNOWN_FP`, `E_DUPLICATE_FP_ID`, `E_UNTRUSTED_FP`
 
 ### Can defer
 
-- Compile mode (`fingerprint compile`)
 - DSL assertion types: `range_populated`, `sum_eq`, `within_tolerance`
-- `--schema` flag
-- `--progress` flag
 - MinHash/LSH pre-filtering (Tier 1 optimization)
 - MIME-based pre-filtering (Tier 0 optimization)
 - `FINGERPRINT_PATH` plugin discovery
