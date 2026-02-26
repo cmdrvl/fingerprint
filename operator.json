@@ -1,0 +1,53 @@
+{
+  "schema_version": "operator.v0",
+  "name": "fingerprint",
+  "version": "0.1.0",
+  "description": "Tests artifacts against fingerprint definitions and produces content hashes",
+  "repository": "https://github.com/cmdrvl/fingerprint",
+  "license": "MIT",
+
+  "invocation": {
+    "binary": "fingerprint",
+    "output_mode": "stream",
+    "output_schema": "fingerprint.v0",
+    "json_flag": null
+  },
+
+  "arguments": [
+    { "name": "input", "type": "file_path", "required": false, "position": 0, "description": "JSONL manifest file (default: stdin)" }
+  ],
+
+  "options": [
+    { "name": "fp", "flag": "--fp", "type": "string", "repeatable": true, "description": "Fingerprint ID (evaluated in CLI order; first match wins)" },
+    { "name": "list", "flag": "--list", "type": "boolean", "description": "List available fingerprints" },
+    { "name": "jobs", "flag": "--jobs", "type": "integer", "description": "Number of parallel workers" },
+    { "name": "no_witness", "flag": "--no-witness", "type": "boolean", "description": "Suppress witness ledger recording" },
+    { "name": "progress", "flag": "--progress", "type": "boolean", "description": "Emit structured progress on stderr" },
+    { "name": "describe", "flag": "--describe", "type": "boolean", "description": "Print operator manifest and exit" },
+    { "name": "schema", "flag": "--schema", "type": "boolean", "description": "Print output schema and exit" }
+  ],
+
+  "exit_codes": {
+    "0": { "meaning": "ALL_MATCHED", "domain": "positive" },
+    "1": { "meaning": "PARTIAL", "domain": "negative" },
+    "2": { "meaning": "REFUSAL", "domain": "error" }
+  },
+
+  "refusals": [
+    { "code": "E_BAD_INPUT", "message": "Invalid JSONL or missing hash fields", "action": "run_upstream", "tool": "hash" },
+    { "code": "E_UNKNOWN_FP", "message": "Fingerprint ID not found", "action": "escalate" },
+    { "code": "E_DUPLICATE_FP_ID", "message": "Duplicate fingerprint ID across providers", "action": "escalate" },
+    { "code": "E_UNTRUSTED_FP", "message": "Fingerprint provider not allowlisted", "action": "escalate" }
+  ],
+
+  "capabilities": {
+    "formats": ["csv", "xlsx", "pdf"],
+    "profile_aware": false,
+    "streaming": true
+  },
+
+  "pipeline": {
+    "upstream": ["hash"],
+    "downstream": ["lock"]
+  }
+}
