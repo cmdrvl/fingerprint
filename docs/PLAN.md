@@ -893,6 +893,7 @@ fn main() -> std::process::ExitCode {
 ### Can defer
 
 - DSL assertion types: `range_populated`, `sum_eq`, `within_tolerance`
+- Temporal assertion type: `date_in_range` — first-class temporal gating in assertions (e.g., `date_in_range: { sheet: "Cover", cell: "B2", format: "%Y-%m", after: "2021-01" }`). Deferred because `valid_from`/`valid_until` metadata fields + fingerprint version proliferation handle most temporal cases without engine changes. Revisit if version proliferation becomes unmanageable.
 - MinHash/LSH pre-filtering (Tier 1 optimization)
 - MIME-based pre-filtering (Tier 0 optimization)
 - `FINGERPRINT_PATH` plugin discovery
