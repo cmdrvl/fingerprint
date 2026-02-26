@@ -114,6 +114,7 @@ If the user gives a direct instruction, follow it even if it conflicts with defa
 - `E_UNKNOWN_FP`: fingerprint ID not found.
 - `E_DUPLICATE_FP_ID`: same ID from multiple providers.
 - `E_UNTRUSTED_FP`: external provider not allowlisted.
+- `E_ORPHAN_CHILD`: child fingerprint references unloaded parent.
 - Per-file IO/parse failures are `_skipped` records, NOT refusals.
 
 ### 6. Content hash contract
