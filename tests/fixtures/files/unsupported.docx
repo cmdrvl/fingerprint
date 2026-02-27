@@ -1,0 +1,3 @@
+This is a mock Word document file for testing unsupported format handling.
+The fingerprint system should reject this with E_UNSUPPORTED_FORMAT.
+Content: Binary data would go here in a real DOCX file.

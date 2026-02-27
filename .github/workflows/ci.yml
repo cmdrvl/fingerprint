@@ -1,0 +1,160 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
+
+  unit-tests:
+    name: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test --lib
+        run: cargo test --lib
+
+  integration-tests:
+    name: integration-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test integration suites
+        run: |
+          cargo test \
+            --test chained_fingerprints \
+            --test chained_fingerprint_scenarios \
+            --test content_assertion_edge_cases \
+            --test infer_mode \
+            --test infer_schema_mode \
+            --test infer_subcommand \
+            --test pipeline_integration \
+            --test pipeline_parallel_execution \
+            --test pipeline_run_mode \
+            --test refusal_path_coverage \
+            --test run_mode_pipeline
+
+  smoke-tests:
+    name: smoke-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test --test cli_smoke_surfaces
+        run: cargo test --test cli_smoke_surfaces
+
+  golden-tests:
+    name: golden-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test --test golden_output_determinism
+        run: cargo test --test golden_output_determinism
+
+  smoke-build:
+    name: smoke-build (${{ matrix.os }})
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo build --release
+        run: cargo build --release
+      - name: fingerprint --version
+        run: cargo run --release -- --version
+      - name: fingerprint --help
+        run: cargo run --release -- --help
+
+  ci-success:
+    name: ci-success
+    if: always()
+    needs:
+      - fmt
+      - clippy
+      - unit-tests
+      - integration-tests
+      - smoke-tests
+      - golden-tests
+      - smoke-build
+    runs-on: ubuntu-latest
+    env:
+      FMT_RESULT: ${{ needs.fmt.result }}
+      CLIPPY_RESULT: ${{ needs.clippy.result }}
+      UNIT_RESULT: ${{ needs.unit-tests.result }}
+      INTEGRATION_RESULT: ${{ needs.integration-tests.result }}
+      SMOKE_SUITE_RESULT: ${{ needs.smoke-tests.result }}
+      GOLDEN_RESULT: ${{ needs.golden-tests.result }}
+      SMOKE_BUILD_RESULT: ${{ needs.smoke-build.result }}
+    steps:
+      - name: report suite status summary
+        run: |
+          {
+            echo "## CI Suite Status";
+            echo "";
+            echo "| Suite | Result |";
+            echo "|---|---|";
+            echo "| fmt | $FMT_RESULT |";
+            echo "| clippy | $CLIPPY_RESULT |";
+            echo "| unit-tests | $UNIT_RESULT |";
+            echo "| integration-tests | $INTEGRATION_RESULT |";
+            echo "| smoke-tests | $SMOKE_SUITE_RESULT |";
+            echo "| golden-tests | $GOLDEN_RESULT |";
+            echo "| smoke-build (tag only) | $SMOKE_BUILD_RESULT |";
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: verify required job results
+        run: |
+          set -euo pipefail
+          [ "$FMT_RESULT" = "success" ]
+          [ "$CLIPPY_RESULT" = "success" ]
+          [ "$UNIT_RESULT" = "success" ]
+          [ "$INTEGRATION_RESULT" = "success" ]
+          [ "$SMOKE_SUITE_RESULT" = "success" ]
+          [ "$GOLDEN_RESULT" = "success" ]
+          if [ "$SMOKE_BUILD_RESULT" != "success" ] && [ "$SMOKE_BUILD_RESULT" != "skipped" ]; then
+            echo "smoke-build result: $SMOKE_BUILD_RESULT"
+            exit 1
+          fi

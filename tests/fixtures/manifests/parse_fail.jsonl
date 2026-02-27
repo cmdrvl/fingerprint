@@ -1,0 +1,1 @@
+{"version":"hash.v0","path":"tests/fixtures/files/corrupt.xlsx","extension":".xlsx","bytes_hash":"sha256:27429598c09b3890e3ad018b8d4d8bd3a595429b6947786afe14c7620c9a5f9d","hash_algorithm":"sha256","tool_versions":{"vacuum":"0.1.0","hash":"0.1.0"}}

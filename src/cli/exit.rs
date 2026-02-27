@@ -18,3 +18,23 @@ impl Outcome {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Outcome;
+
+    #[test]
+    fn all_matched_maps_to_zero() {
+        assert_eq!(Outcome::AllMatched.exit_code(), 0);
+    }
+
+    #[test]
+    fn partial_maps_to_one() {
+        assert_eq!(Outcome::Partial.exit_code(), 1);
+    }
+
+    #[test]
+    fn refusal_maps_to_two() {
+        assert_eq!(Outcome::Refusal.exit_code(), 2);
+    }
+}

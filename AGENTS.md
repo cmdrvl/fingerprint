@@ -1,6 +1,6 @@
 # AGENTS.md — fingerprint
 
-> Guidelines for AI coding agents working in this Rust codebase.
+> Repo-specific guidelines. Inherits shared rules from [`../AGENTS.md`](../AGENTS.md).
 
 ---
 
@@ -14,9 +14,10 @@ Pipeline position:
 vacuum → hash → fingerprint → lock → pack
 ```
 
-Two modes:
+Three modes:
 - **Run mode** (default): stream enrichment — reads hash-enriched JSONL, tests each record against fingerprint definitions, emits enriched JSONL.
 - **Compile mode**: DSL compilation — reads `.fp.yaml` and generates a Rust crate implementing the Fingerprint trait.
+- **Infer mode**: learn definitions — observes a corpus and generates `.fp.yaml` candidates.
 
 ### Quick Reference
 
@@ -29,9 +30,6 @@ vacuum /data | hash | fingerprint --fp argus-model.v1 --fp csv.v0
 
 # Compile DSL to Rust crate
 fingerprint compile argus-model.fp.yaml --out fingerprint-argus-model-v1/
-
-# Quality gate
-cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
 ### Source of Truth
@@ -47,7 +45,7 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 | `src/lib.rs` | Orchestration: `pub fn run() → u8` |
 | `src/cli/` | Argument parsing (clap derive) + witness subcommands |
 | `src/registry/` | Fingerprint resolution: builtin, installed crates, listing |
-| `src/document/` | Format-specific document access (xlsx, csv, pdf, raw) |
+| `src/document/` | Format-specific document access (xlsx, csv, pdf, markdown, text, raw) |
 | `src/dsl/` | DSL parser, assertion engine, content extraction, content hash |
 | `src/compile/` | Codegen: DSL → Rust crate |
 | `src/pipeline/` | JSONL reader, record enricher, parallel processing |
@@ -55,13 +53,8 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 | `src/progress/` | Structured progress to stderr |
 | `src/refusal/` | Refusal codes and envelope construction |
 | `src/witness/` | Witness append/query behavior |
+| `src/infer/` | Corpus observation, contrastive analysis, schema-driven inference |
 | `operator.json` | Machine-readable operator contract |
-
----
-
-## RULE 0 — USER OVERRIDE
-
-If the user gives a direct instruction, follow it even if it conflicts with defaults in this file.
 
 ---
 
@@ -134,24 +127,7 @@ Ambient witness semantics must match spine conventions:
 
 ---
 
-## Toolchain
-
-- **Language:** Rust, Cargo only.
-- **Unsafe code:** forbidden in binary (`#![forbid(unsafe_code)]`).
-- **Dependencies:** explicit versions, small and pinned.
-
-Release profile:
-
-```toml
-[profile.release]
-opt-level = "z"
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-```
-
-### Key Dependencies
+## Key Dependencies
 
 | Crate | Purpose |
 |-------|---------|
@@ -167,96 +143,17 @@ strip = true
 
 ---
 
-## Quality Gate
+## Minimum Coverage Areas
 
-Run after any substantive change:
-
-```bash
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
-```
-
-### Minimum Coverage Areas
-
-- Assertion engine: each DSL assertion type (sheet_exists, cell_eq, cell_regex, range_non_null, sheet_min_rows, filename_regex, sheet_name_regex),
-- Match/no-match/partial outcome routing and exit codes,
-- Multiple `--fp` evaluation order (first match wins),
-- Content hash determinism (same content → same hash),
-- `_skipped` passthrough (upstream) and new skip creation (IO/parse failure),
-- Refusal paths (E_BAD_INPUT, E_UNKNOWN_FP, E_DUPLICATE_FP_ID, E_UNTRUSTED_FP),
-- Output ordering under parallel execution,
-- Compile mode: DSL → Rust determinism,
-- Witness append/query behavior,
-- E2E spine compatibility (`vacuum → hash → fingerprint → lock`).
-
----
-
-## Git and Release
-
-- **Primary branch:** `main`.
-- **`master`** exists for legacy URL compatibility — keep synced: `git push origin main:master`.
-- Bump `Cargo.toml` semver appropriately on release.
-- Sync `Cargo.lock` before release workflows that use `--locked`.
-
----
-
-## Editing Rules
-
-- **No file deletion** without explicit written user permission.
-- **No destructive git commands** (`reset --hard`, `clean -fd`, `rm -rf`, force push) without explicit authorization.
-- **No scripted mass edits** — make intentional, reviewable changes.
-- **No file proliferation** — edit existing files; create new files only for real new functionality.
-- **No surprise behavior** — do not invent behavior not in `docs/PLAN.md`.
-- **No backwards-compatibility shims** unless explicitly requested.
-
----
-
-## Beads (`br`) Workflow
-
-Use Beads as source of truth for task state.
-
-```bash
-br ready              # Show unblocked ready work
-br list --status=open # All open issues
-br show <id>          # Full issue details
-br update <id> --status=in_progress
-br close <id> --reason "Completed"
-br sync --flush-only  # Export to JSONL (no git ops)
-```
-
-Pick unblocked beads. Mark in-progress before coding. Close with validation evidence.
-
----
-
-## Multi-Agent Coordination
-
-### File Reservation Policy (strict)
-
-When multiple agents work concurrently, reserve only exact files you are actively editing.
-
-Allowed: `src/dsl/assertions.rs`, `tests/assertion_suite.rs`, `README.md`
-Forbidden: `src/**`, `src/dsl/`, `tests/**`
-
-Release reservations as soon as your edits are complete.
-
-### Agent Mail
-
-When Agent Mail is available:
-- Register identity in this project.
-- Reserve only specific files you are actively editing — never entire directories.
-- Send start/finish updates per bead.
-- Poll inbox regularly and acknowledge `ack_required` messages promptly.
-- Release reservations when done.
-
----
-
-## Session Completion
-
-Before ending a session:
-
-1. Run quality gate (`fmt` + `clippy` + `test`).
-2. Confirm docs/spec alignment for behavior changes.
-3. Commit with precise message.
-4. Push `main` and sync `master`.
-5. Summarize: what changed, what was validated, remaining risks.
+- Assertion engine: each DSL assertion type (sheet_exists, cell_eq, cell_regex, range_non_null, sheet_min_rows, filename_regex, sheet_name_regex, heading_exists, heading_regex, text_contains, text_regex, text_near, section_non_empty, section_min_lines, table_exists, table_columns, table_shape, table_min_rows, page_count, metadata_regex)
+- Match/no-match/partial outcome routing and exit codes
+- Multiple `--fp` evaluation order (first match wins)
+- Content hash determinism (same content → same hash)
+- `_skipped` passthrough (upstream) and new skip creation (IO/parse failure)
+- Refusal paths (E_BAD_INPUT, E_UNKNOWN_FP, E_DUPLICATE_FP_ID, E_UNTRUSTED_FP, E_ORPHAN_CHILD)
+- Output ordering under parallel execution
+- Compile mode: DSL → Rust determinism
+- Witness append/query behavior
+- Chained fingerprints (parent-child evaluation, exit code semantics)
+- Content assertions on format:pdf with text_path dispatch
+- E2E spine compatibility (`vacuum → hash → fingerprint → lock`)

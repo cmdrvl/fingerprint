@@ -67,3 +67,37 @@ No uncovered test-coverage gap remains after this mapping pass.
 - A written parity matrix exists with concrete baseline evidence.
 - Every missing area is linked to at least one executable bead.
 - Downstream test implementation beads are dependency-linked.
+
+## CI Enforcement (bd-3j6)
+
+`bd-3j6` is implemented by `.github/workflows/ci.yml` with required suites:
+- `fmt` (`cargo fmt --check`)
+- `clippy` (`cargo clippy --all-targets -- -D warnings`)
+- `unit-tests` (`cargo test --lib`)
+- `integration-tests` (integration targets excluding smoke/golden suites)
+- `smoke-tests` (`cargo test --test cli_smoke_surfaces`)
+- `golden-tests` (`cargo test --test golden_output_determinism`)
+
+The aggregate job `ci-success` reports suite status in the Actions summary and fails unless each required suite result is `success` (so skipped/failure/cancelled states fail the gate).
+
+Local reproduction of the CI gate:
+
+```bash
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test --lib
+cargo test \
+  --test chained_fingerprints \
+  --test chained_fingerprint_scenarios \
+  --test content_assertion_edge_cases \
+  --test infer_mode \
+  --test infer_schema_mode \
+  --test infer_subcommand \
+  --test pipeline_integration \
+  --test pipeline_parallel_execution \
+  --test pipeline_run_mode \
+  --test refusal_path_coverage \
+  --test run_mode_pipeline
+cargo test --test cli_smoke_surfaces
+cargo test --test golden_output_determinism
+```

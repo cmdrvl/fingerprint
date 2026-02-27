@@ -1,0 +1,1 @@
+{"version":"hash.v0","path":"tests/fixtures/test_files/report.pdf","text_path":"tests/fixtures/test_files/cbre_appraisal.md","bytes_hash":"blake3:4444444444444444444444444444444444444444444444444444444444444444","hash_algorithm":"blake3","tool_versions":{"vacuum":"0.1.0","hash":"0.1.0"}}

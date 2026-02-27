@@ -3,5 +3,5 @@ pub mod content_hash;
 pub mod extract;
 pub mod parser;
 
-pub use assertions::Assertion;
-pub use parser::FingerprintDefinition;
+pub use assertions::{Assertion, NamedAssertion};
+pub use parser::{ContentHashConfig, ExtractSection, FingerprintDefinition};

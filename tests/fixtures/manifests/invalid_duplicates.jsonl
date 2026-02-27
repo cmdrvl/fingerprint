@@ -1,0 +1,6 @@
+{"version":"hash.v0","path":"tests/fixtures/files/sample.csv","extension":".csv","bytes_hash":"sha256:first","tool_versions":{"hash":"0.1.0"}}
+{"version":"hash.v0","path":"tests/fixtures/files/sample.csv","extension":".csv","bytes_hash":"sha256:duplicate","tool_versions":{"hash":"0.1.0"}}
+
+{"missing_version":true,"path":"tests/fixtures/files/sample.xlsx","bytes_hash":"sha256:missing"}
+{"version":"hash.v0","bytes_hash":"sha256:missing_path","tool_versions":{"hash":"0.1.0"}}
+{"version":"hash.v0","path":"tests/fixtures/files/sample.pdf","extension":".pdf","tool_versions":{"hash":"0.1.0"}}

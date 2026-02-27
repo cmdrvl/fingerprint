@@ -26,3 +26,5 @@ target
 
 # ntm runtime state
 .ntm/
+target_codex/
+target_codex_hq/

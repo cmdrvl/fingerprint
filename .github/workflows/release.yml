@@ -1,0 +1,456 @@
+name: Release Build Matrix
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Prepare release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      bare_version: ${{ steps.meta.outputs.bare_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: derive version and verify release tag
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(python3 - <<'PY'
+          import tomllib
+          from pathlib import Path
+          data = tomllib.loads(Path("Cargo.toml").read_text())
+          print(data["package"]["version"])
+          PY
+          )
+          if [ -z "${VERSION:-}" ]; then
+            echo "Could not derive version from Cargo.toml"
+            exit 1
+          fi
+
+          TAG="v${VERSION}"
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ] && [ "${GITHUB_REF_NAME:-}" != "${TAG}" ]; then
+            echo "Tag mismatch: pushed tag '${GITHUB_REF_NAME}' does not match Cargo.toml version '${TAG}'"
+            exit 1
+          fi
+
+          git fetch --tags --force
+          if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "Expected tag '${TAG}' was not found."
+            exit 1
+          fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "bare_version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive_ext: tar.gz
+            bin: fingerprint
+            strip: linux
+            use_cross: false
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive_ext: tar.gz
+            bin: fingerprint
+            strip: linux-cross
+            use_cross: true
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            archive_ext: tar.gz
+            bin: fingerprint
+            strip: macos
+            use_cross: false
+          - target: aarch64-apple-darwin
+            os: macos-14
+            archive_ext: tar.gz
+            bin: fingerprint
+            strip: macos
+            use_cross: false
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive_ext: zip
+            bin: fingerprint.exe
+            strip: none
+            use_cross: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cross
+        if: matrix.use_cross
+        uses: taiki-e/install-action@cross
+
+      - name: Build (cross)
+        if: matrix.use_cross
+        shell: bash
+        run: |
+          set -euo pipefail
+          cross build --release --locked --target "${{ matrix.target }}"
+
+      - name: Build (cargo)
+        if: matrix.use_cross == false
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --target "${{ matrix.target }}"
+
+      - name: Strip binary (linux)
+        if: matrix.strip == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v strip >/dev/null; then
+            strip "target/${{ matrix.target }}/release/${{ matrix.bin }}"
+          else
+            echo "strip not available; skipping"
+          fi
+
+      - name: Strip binary (macos)
+        if: matrix.strip == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v strip >/dev/null; then
+            strip -x "target/${{ matrix.target }}/release/${{ matrix.bin }}"
+          else
+            echo "strip not available; skipping"
+          fi
+
+      - name: Install cross-strip toolchain
+        if: matrix.strip == 'linux-cross'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y binutils-aarch64-linux-gnu
+
+      - name: Strip binary (linux cross)
+        if: matrix.strip == 'linux-cross'
+        shell: bash
+        run: |
+          set -euo pipefail
+          aarch64-linux-gnu-strip "target/${{ matrix.target }}/release/${{ matrix.bin }}"
+
+      - name: package archive (unix)
+        if: matrix.archive_ext == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="v${{ needs.prepare.outputs.bare_version }}"
+          TARGET="${{ matrix.target }}"
+          BIN="${{ matrix.bin }}"
+          DIST_DIR="dist/${TARGET}"
+          mkdir -p "${DIST_DIR}"
+          cp "target/${TARGET}/release/${BIN}" "${DIST_DIR}/fingerprint"
+          tar -czf "fingerprint-${VERSION}-${TARGET}.tar.gz" -C "${DIST_DIR}" .
+
+      - name: package archive (windows)
+        if: matrix.archive_ext == 'zip'
+        shell: pwsh
+        run: |
+          $Version = "v${{ needs.prepare.outputs.bare_version }}"
+          $Target = "${{ matrix.target }}"
+          $Bin = "${{ matrix.bin }}"
+          $DistDir = "dist/$Target"
+          New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
+          Copy-Item "target/$Target/release/$Bin" "$DistDir/fingerprint.exe"
+          Compress-Archive -Path "$DistDir/*" -DestinationPath "fingerprint-$Version-$Target.zip" -Force
+
+      - name: upload build archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: fingerprint-v${{ needs.prepare.outputs.bare_version }}-${{ matrix.target }}
+          path: fingerprint-v${{ needs.prepare.outputs.bare_version }}-${{ matrix.target }}.${{ matrix.archive_ext }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish release assets
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: fingerprint-*
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          artifacts=(dist/fingerprint-*.tar.gz dist/fingerprint-*.zip)
+          if [ "${#artifacts[@]}" -eq 0 ]; then
+            echo "No release archives found in dist/"
+            exit 1
+          fi
+          sha256sum "${artifacts[@]}" > dist/SHA256SUMS
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-cyclonedx
+        uses: taiki-e/install-action@cargo-cyclonedx
+
+      - name: Generate CycloneDX SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo cyclonedx -f json --override-filename fingerprint.cdx
+          mv fingerprint.cdx.json dist/fingerprint.cdx.json
+
+      - name: Generate provenance statement
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          sha_lines = Path("dist/SHA256SUMS").read_text().splitlines()
+          subject = []
+          for line in sha_lines:
+              digest, rel_path = line.split(maxsplit=1)
+              artifact_name = Path(rel_path).name
+              subject.append({
+                  "name": artifact_name,
+                  "digest": {"sha256": digest},
+              })
+
+          statement = {
+              "_type": "https://in-toto.io/Statement/v0.1",
+              "subject": subject,
+              "predicateType": "https://slsa.dev/provenance/v1",
+              "predicate": {
+                  "buildType": "https://github.com/cmdrvl/fingerprint/.github/workflows/release.yml@v1",
+                  "builder": {
+                      "id": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+                  },
+                  "invocation": {
+                      "configSource": {
+                          "uri": f"git+https://github.com/{os.environ['GITHUB_REPOSITORY']}.git@{os.environ['GITHUB_SHA']}",
+                      },
+                      "parameters": {
+                          "tag": os.environ["RELEASE_TAG"],
+                          "version": os.environ["RELEASE_VERSION"],
+                      },
+                  },
+                  "metadata": {
+                      "buildInvocationId": os.environ["GITHUB_RUN_ID"],
+                  },
+              },
+          }
+
+          Path("dist/provenance.json").write_text(
+              json.dumps(statement, indent=2) + "\\n",
+              encoding="utf-8",
+          )
+          PY
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign release artifacts with cosign (keyless)
+        shell: bash
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          sign_targets=(
+            dist/fingerprint-*.tar.gz
+            dist/fingerprint-*.zip
+            dist/SHA256SUMS
+            dist/fingerprint.cdx.json
+            dist/provenance.json
+          )
+          if [ "${#sign_targets[@]}" -eq 0 ]; then
+            echo "No signable artifacts found."
+            exit 1
+          fi
+          for artifact in "${sign_targets[@]}"; do
+            cosign sign-blob --yes \
+              --output-signature "${artifact}.sig" \
+              --output-certificate "${artifact}.pem" \
+              "${artifact}"
+          done
+
+      - name: Publish to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: ${{ needs.prepare.outputs.tag }}
+          files: |
+            dist/fingerprint-*.tar.gz
+            dist/fingerprint-*.zip
+            dist/SHA256SUMS
+            dist/fingerprint.cdx.json
+            dist/provenance.json
+            dist/*.sig
+            dist/*.pem
+
+  homebrew:
+    name: Homebrew formula parity
+    needs: [prepare, publish]
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_BASE_URL: https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare.outputs.tag }}
+    steps:
+      - name: Download SHA256SUMS from published release
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "${RELEASE_BASE_URL}/SHA256SUMS" -o SHA256SUMS
+
+      - name: Generate Homebrew formula from release checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARM64_SHA="$(awk '/fingerprint-v'"${RELEASE_VERSION}"'-aarch64-apple-darwin\.tar\.gz$/ {print $1}' SHA256SUMS | head -n1)"
+          X64_SHA="$(awk '/fingerprint-v'"${RELEASE_VERSION}"'-x86_64-apple-darwin\.tar\.gz$/ {print $1}' SHA256SUMS | head -n1)"
+          LINUX_SHA="$(awk '/fingerprint-v'"${RELEASE_VERSION}"'-x86_64-unknown-linux-gnu\.tar\.gz$/ {print $1}' SHA256SUMS | head -n1)"
+
+          if [ -z "${ARM64_SHA}" ] || [ -z "${X64_SHA}" ] || [ -z "${LINUX_SHA}" ]; then
+            echo "Missing expected checksum(s) in SHA256SUMS"
+            exit 1
+          fi
+
+          mkdir -p dist/homebrew
+          cat > dist/homebrew/fingerprint.rb <<EOF
+          class Fingerprint < Formula
+            desc "Determine whether an artifact matches a known template"
+            homepage "https://github.com/cmdrvl/fingerprint"
+            version "${RELEASE_VERSION}"
+            license "Proprietary"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "${RELEASE_BASE_URL}/fingerprint-${RELEASE_TAG}-aarch64-apple-darwin.tar.gz"
+                sha256 "${ARM64_SHA}"
+              else
+                url "${RELEASE_BASE_URL}/fingerprint-${RELEASE_TAG}-x86_64-apple-darwin.tar.gz"
+                sha256 "${X64_SHA}"
+              end
+            end
+
+            on_linux do
+              url "${RELEASE_BASE_URL}/fingerprint-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz"
+              sha256 "${LINUX_SHA}"
+            end
+
+            def install
+              bin.install "fingerprint"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/fingerprint --version")
+            end
+          end
+          EOF
+
+      - name: Validate Homebrew formula syntax (dry-run)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -c dist/homebrew/fingerprint.rb
+
+      - name: Validate release artifact URLs (dry-run)
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsI "${RELEASE_BASE_URL}/fingerprint-${RELEASE_TAG}-aarch64-apple-darwin.tar.gz" >/dev/null
+          curl -fsI "${RELEASE_BASE_URL}/fingerprint-${RELEASE_TAG}-x86_64-apple-darwin.tar.gz" >/dev/null
+          curl -fsI "${RELEASE_BASE_URL}/fingerprint-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz" >/dev/null
+
+      - name: Upload generated formula artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: homebrew-formula-${{ needs.prepare.outputs.tag }}
+          path: dist/homebrew/fingerprint.rb
+          if-no-files-found: error
+
+      - name: Validate Homebrew tap configuration
+        shell: bash
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
+            echo "HOMEBREW_TAP_TOKEN is required for release workflow."
+            exit 1
+          fi
+          if [ -z "${HOMEBREW_TAP_REPO:-}" ]; then
+            echo "HOMEBREW_TAP_REPO is required for release workflow."
+            exit 1
+          fi
+
+      - name: Update Homebrew tap formula
+        shell: bash
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${HOMEBREW_TAP_REPO}.git" tap-repo
+          mkdir -p tap-repo/Formula
+          cp dist/homebrew/fingerprint.rb tap-repo/Formula/fingerprint.rb
+
+          cd tap-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet -- Formula/fingerprint.rb; then
+            echo "No Homebrew formula changes to push."
+            exit 0
+          fi
+
+          git add Formula/fingerprint.rb
+          git commit -m "chore: update fingerprint Homebrew formula to ${RELEASE_TAG}"
+          git push

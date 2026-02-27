@@ -1,0 +1,3 @@
+{"version":"hash.v0","path":"tests/fixtures/files/unsupported.docx","extension":".docx","bytes_hash":"sha256:docx","tool_versions":{"hash":"0.1.0"}}
+{"version":"hash.v0","path":"tests/fixtures/files/image.png","extension":".png","bytes_hash":"blake3:image","tool_versions":{"hash":"0.1.0"}}
+{"version":"hash.v0","path":"tests/fixtures/files/data.json","extension":".json","bytes_hash":"sha256:json","tool_versions":{"hash":"0.1.0"}}

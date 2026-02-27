@@ -1,10 +1,15 @@
 pub mod csv;
 pub mod dispatch;
+pub mod markdown;
 pub mod pdf;
 pub mod raw;
+pub mod text;
 pub mod xlsx;
 
+pub use dispatch::{open_document, open_document_from_path, open_document_with_text_path};
+pub use markdown::MarkdownDocument;
 use std::path::{Path, PathBuf};
+pub use text::TextDocument;
 
 /// Format-specific document access.
 ///
@@ -14,6 +19,8 @@ pub enum Document {
     Xlsx(XlsxDocument),
     Csv(CsvDocument),
     Pdf(PdfDocument),
+    Markdown(MarkdownDocument),
+    Text(TextDocument),
     Unknown(RawDocument),
 }
 
@@ -23,6 +30,8 @@ impl Document {
             Document::Xlsx(d) => &d.path,
             Document::Csv(d) => &d.path,
             Document::Pdf(d) => &d.path,
+            Document::Markdown(d) => &d.path,
+            Document::Text(d) => &d.path,
             Document::Unknown(d) => &d.path,
         }
     }
@@ -38,8 +47,10 @@ pub struct CsvDocument {
 
 pub struct PdfDocument {
     pub path: PathBuf,
+    pub text: Option<MarkdownDocument>,
 }
 
+#[derive(Debug)]
 pub struct RawDocument {
     pub path: PathBuf,
     pub bytes: Vec<u8>,

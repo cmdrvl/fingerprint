@@ -453,6 +453,76 @@ Content hash is only computed when a fingerprint matches. No match = no extracti
 
 ---
 
+## Using with Docling (PDF content fingerprinting)
+
+`fingerprint` does not extract text from PDFs. For content assertions on PDFs, pair it with a local extractor such as Docling and inject `text_path` into the JSONL stream.
+
+### Prerequisites
+
+```bash
+pip install docling
+docling --version
+```
+
+Docling runs fully local (including the 258M VLM), so this workflow is air-gap friendly and does not send document content off machine.
+
+### Pipeline: PDF -> Docling -> fingerprint
+
+```bash
+# Step 1: extract markdown next to each PDF
+docling --input-dir /data/appraisals/ --to md --output /data/appraisals/
+
+# Step 2: inject text_path and fingerprint
+vacuum /data/appraisals/ --ext pdf \
+  | hash \
+  | jq -c '. + {"text_path": (.path | sub("\\.pdf$"; ".md"))}' \
+  | fingerprint --fp cbre-appraisal.v1
+
+# Chained fingerprints (parent + children)
+vacuum /data/appraisals/ --ext pdf \
+  | hash \
+  | jq -c '. + {"text_path": (.path | sub("\\.pdf$"; ".md"))}' \
+  | fingerprint \
+      --fp cbre-appraisal.v1 \
+      --fp cbre-appraisal.v1/rent-roll.v1 \
+      --fp cbre-appraisal.v1/income-cap.v1
+```
+
+The `jq` expression sets `text_path` by replacing `.pdf` with `.md`. Adjust the pattern if extracted markdown is stored in a different directory.
+
+### Corpus-level failure analysis (`--diagnose`)
+
+```bash
+# Count failures by assertion name
+jq -r 'select(.fingerprint.matched == false)
+  | .fingerprint.assertions[]
+  | select(.passed == false)
+  | .name' output.jsonl \
+  | sort | uniq -c | sort -rn
+
+# Inspect diagnostic context for one assertion across the corpus
+jq 'select(.fingerprint.matched == false)
+  | { path: .path, context: (.fingerprint.assertions[]
+      | select(.name == "has_rent_roll_table" and .passed == false)
+      | .context) }' output.jsonl
+
+# See nearest heading matches for heading_regex failures
+jq 'select(.fingerprint.matched == false)
+  | { path: .path, failed: (.fingerprint.assertions[]
+      | select(.name == "heading_regex" and .passed == false)
+      | { nearest: .context.nearest_match, headings: .context.headings_found }) }' output.jsonl
+```
+
+### Alternative extractors
+
+| Tool | Quality | Tables | Local | Notes |
+|------|---------|--------|-------|-------|
+| **Docling** (recommended) | High | Excellent | Yes | 258M VLM, structured markdown/JSON |
+| `llm_aided_ocr` | High | Good | Depends on backend | Tesseract + LLM correction, markdown output |
+| `pdftotext` | Low | None | Yes | Plain text only; use as `format: text` fallback |
+
+---
+
 ## Limitations
 
 | Limitation | Detail |
@@ -599,8 +669,31 @@ fingerprint witness count [--tool <name>] [--since <iso8601>] [--until <iso8601>
 
 The full specification is [`docs/PLAN.md`](./docs/PLAN.md). This README covers intended v0 behavior; the spec adds implementation details, edge-case definitions, and testing requirements.
 
+### Required CI Suites
+
+- `unit-tests`: `cargo test --lib`
+- `integration-tests`: `cargo test --test chained_fingerprint_scenarios --test chained_fingerprints --test content_assertion_edge_cases --test infer_mode --test infer_schema_mode --test infer_subcommand --test pipeline_integration --test pipeline_parallel_execution --test pipeline_run_mode --test refusal_path_coverage --test run_mode_pipeline`
+- `smoke-tests`: `cargo test --test cli_smoke_surfaces`
+- `golden-tests`: `cargo test --test golden_output_determinism`
+
+### Reproduce CI Gate Locally
+
 ```bash
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo test
+cargo test --lib
+cargo test \
+  --test chained_fingerprint_scenarios \
+  --test chained_fingerprints \
+  --test content_assertion_edge_cases \
+  --test infer_mode \
+  --test infer_schema_mode \
+  --test infer_subcommand \
+  --test pipeline_integration \
+  --test pipeline_parallel_execution \
+  --test pipeline_run_mode \
+  --test refusal_path_coverage \
+  --test run_mode_pipeline
+cargo test --test cli_smoke_surfaces
+cargo test --test golden_output_determinism
 ```

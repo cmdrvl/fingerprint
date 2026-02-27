@@ -1,0 +1,3 @@
+{"id":"valid-record","version":"0.1.0","source_hash":"blake3:abc","inputs":[],"payload":{},"outcome":"ALL_MATCHED","exit_code":0,"output_hash":"blake3:def","created_ts":"2026-01-01T00:00:00Z"}
+{"invalid_json": missing_quote}
+{"id":"incomplete","version":"0.1.0","source_hash":"blake3:ghi"}
