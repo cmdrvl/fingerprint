@@ -50,6 +50,8 @@ pub fn dsl_json_schema() -> String {
                     { "$ref": "#/$defs/assertion_cell_regex" },
                     { "$ref": "#/$defs/assertion_range_non_null" },
                     { "$ref": "#/$defs/assertion_sheet_min_rows" },
+                    { "$ref": "#/$defs/assertion_column_search" },
+                    { "$ref": "#/$defs/assertion_header_row_match" },
                     { "$ref": "#/$defs/assertion_range_populated" },
                     { "$ref": "#/$defs/assertion_sum_eq" },
                     { "$ref": "#/$defs/assertion_within_tolerance" },
@@ -106,6 +108,7 @@ pub fn dsl_json_schema() -> String {
                         "required": ["pattern"],
                         "properties": {
                             "pattern": { "type": "string", "minLength": 1 },
+                            "bind": { "type": "string", "minLength": 1 },
                         },
                     },
                 },
@@ -176,6 +179,61 @@ pub fn dsl_json_schema() -> String {
                         "properties": {
                             "sheet": { "type": "string", "minLength": 1 },
                             "min_rows": { "type": "integer", "minimum": 0 },
+                        },
+                    },
+                },
+            },
+            "assertion_column_search": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["column_search"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "column_search": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["sheet", "column", "row_range", "pattern"],
+                        "properties": {
+                            "sheet": { "type": "string", "minLength": 1 },
+                            "column": { "type": "string", "minLength": 1 },
+                            "row_range": {
+                                "type": "string",
+                                "pattern": "^\\s*\\d+\\s*:\\s*\\d+\\s*$"
+                            },
+                            "pattern": { "type": "string", "minLength": 1 },
+                        },
+                    },
+                },
+            },
+            "assertion_header_row_match": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["header_row_match"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "header_row_match": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["sheet", "row_range", "min_match", "columns"],
+                        "properties": {
+                            "sheet": { "type": "string", "minLength": 1 },
+                            "row_range": {
+                                "type": "string",
+                                "pattern": "^\\s*\\d+\\s*:\\s*\\d+\\s*$"
+                            },
+                            "min_match": { "type": "integer", "minimum": 1 },
+                            "columns": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": ["pattern"],
+                                    "properties": {
+                                        "pattern": { "type": "string", "minLength": 1 }
+                                    }
+                                }
+                            },
                         },
                     },
                 },
@@ -572,6 +630,8 @@ mod tests {
             "assertion_cell_regex",
             "assertion_range_non_null",
             "assertion_sheet_min_rows",
+            "assertion_column_search",
+            "assertion_header_row_match",
             "assertion_filename_regex",
             "assertion_sheet_name_regex",
         ] {

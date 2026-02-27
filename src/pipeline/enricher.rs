@@ -314,7 +314,10 @@ fn update_tool_versions(enriched_obj: &mut Map<String, Value>) {
         .cloned()
         .unwrap_or_default();
 
-    tool_versions.insert("fingerprint".to_owned(), Value::String("0.1.0".to_owned()));
+    tool_versions.insert(
+        "fingerprint".to_owned(),
+        Value::String(env!("CARGO_PKG_VERSION").to_owned()),
+    );
     enriched_obj.insert("tool_versions".to_owned(), Value::Object(tool_versions));
 }
 
@@ -341,7 +344,7 @@ fn create_skipped_record_with_warning(
 fn create_error_record(code: &str, message: &str) -> Value {
     json!({
         "version": "fingerprint.v0",
-        "tool_versions": { "fingerprint": "0.1.0" },
+        "tool_versions": { "fingerprint": env!("CARGO_PKG_VERSION") },
         "fingerprint": null,
         "_skipped": true,
         "_warnings": [{
@@ -440,7 +443,10 @@ mod tests {
         assert_eq!(output["version"], "fingerprint.v0");
         assert_eq!(output["fingerprint"], Value::Null);
         assert_eq!(output["_skipped"], true);
-        assert_eq!(output["tool_versions"]["fingerprint"], "0.1.0");
+        assert_eq!(
+            output["tool_versions"]["fingerprint"],
+            env!("CARGO_PKG_VERSION")
+        );
     }
 
     #[test]

@@ -125,7 +125,7 @@ fn assertion_base_name(assertion: &crate::dsl::assertions::Assertion) -> String 
         Assertion::SheetExists(sheet) => {
             format!("sheet_exists__{}", literal_excerpt(sheet, 20, false))
         }
-        Assertion::SheetNameRegex { pattern } => {
+        Assertion::SheetNameRegex { pattern, .. } => {
             format!("sheet_name_regex__{}", regex_excerpt(pattern, 20))
         }
         Assertion::CellRegex { sheet, cell, .. } => format!(
@@ -145,6 +145,14 @@ fn assertion_base_name(assertion: &crate::dsl::assertions::Assertion) -> String 
         ),
         Assertion::SheetMinRows { sheet, .. } => {
             format!("sheet_min_rows__{}", literal_excerpt(sheet, 20, false))
+        }
+        Assertion::ColumnSearch { sheet, column, .. } => format!(
+            "column_search__{}__{}",
+            literal_excerpt(sheet, 20, false),
+            literal_excerpt(column, 20, false)
+        ),
+        Assertion::HeaderRowMatch { sheet, .. } => {
+            format!("header_row_match__{}", literal_excerpt(sheet, 20, false))
         }
         Assertion::SumEq {
             range, equals_cell, ..
@@ -457,5 +465,54 @@ assertions:
 
         let parsed = parse(file.path()).expect("parse yaml");
         assert_eq!(parsed.assertions[0].name.as_deref(), Some("explicit_name"));
+    }
+
+    #[test]
+    fn parse_supports_sheet_binding_and_row_scanning_assertions() {
+        let parsed = parse(std::path::Path::new(
+            "tests/fixtures/cmbs-watl/cmbs-watl-desired.fp.yaml",
+        ))
+        .expect("parse cmbs-watl desired fixture");
+
+        assert_eq!(parsed.fingerprint_id, "cmbs-watl.v2");
+        assert_eq!(parsed.assertions.len(), 4);
+
+        match &parsed.assertions[0].assertion {
+            Assertion::SheetNameRegex { pattern, bind } => {
+                assert_eq!(pattern, "(?i)watch\\s?list|WATL");
+                assert_eq!(bind.as_deref(), Some("$watl_sheet"));
+            }
+            other => panic!("expected Assertion::SheetNameRegex, got {other:?}"),
+        }
+
+        match &parsed.assertions[1].assertion {
+            Assertion::ColumnSearch {
+                sheet,
+                column,
+                row_range,
+                pattern,
+            } => {
+                assert_eq!(sheet, "$watl_sheet");
+                assert_eq!(column, "A");
+                assert_eq!(row_range, "1:20");
+                assert!(pattern.contains("CREFC Investor Reporting"));
+            }
+            other => panic!("expected Assertion::ColumnSearch, got {other:?}"),
+        }
+
+        match &parsed.assertions[2].assertion {
+            Assertion::HeaderRowMatch {
+                sheet,
+                row_range,
+                min_match,
+                columns,
+            } => {
+                assert_eq!(sheet, "$watl_sheet");
+                assert_eq!(row_range, "1:30");
+                assert_eq!(*min_match, 5);
+                assert_eq!(columns.len(), 7);
+            }
+            other => panic!("expected Assertion::HeaderRowMatch, got {other:?}"),
+        }
     }
 }

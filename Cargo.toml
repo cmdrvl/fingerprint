@@ -1,6 +1,6 @@
 [package]
 name = "fingerprint"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["CMD+RVL Inc. <engineering@cmd.com>"]
 description = "Content fingerprinting and document recognition system with DSL-based assertion engine"

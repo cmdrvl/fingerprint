@@ -5,6 +5,7 @@ use chrono::NaiveDate;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -32,6 +33,8 @@ pub enum Assertion {
     SheetExists(String),
     SheetNameRegex {
         pattern: String,
+        #[serde(default)]
+        bind: Option<String>,
     },
     CellEq {
         sheet: String,
@@ -55,6 +58,18 @@ pub enum Assertion {
     SheetMinRows {
         sheet: String,
         min_rows: u64,
+    },
+    ColumnSearch {
+        sheet: String,
+        column: String,
+        row_range: String,
+        pattern: String,
+    },
+    HeaderRowMatch {
+        sheet: String,
+        row_range: String,
+        min_match: u64,
+        columns: Vec<ColumnPattern>,
     },
     SumEq {
         range: String,
@@ -120,6 +135,16 @@ pub enum Assertion {
     },
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ColumnPattern {
+    pub pattern: String,
+}
+
+#[derive(Debug, Default, Clone)]
+struct EvaluationContext {
+    sheet_bindings: HashMap<String, String>,
+}
+
 /// A DSL assertion entry with an optional human-readable name.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct NamedAssertion {
@@ -130,7 +155,8 @@ pub struct NamedAssertion {
 
 /// Evaluate a named assertion and preserve its DSL-level name in output.
 pub fn evaluate_named(named_assertion: &NamedAssertion, doc: &Document) -> AssertionResult {
-    evaluate_named_with_diagnose(named_assertion, doc, diagnose_mode())
+    let mut context = EvaluationContext::default();
+    evaluate_named_with_diagnose_and_context(named_assertion, doc, diagnose_mode(), &mut context)
 }
 
 /// Evaluate a named assertion with explicit diagnostic mode.
@@ -139,7 +165,18 @@ pub fn evaluate_named_with_diagnose(
     doc: &Document,
     diagnose: bool,
 ) -> AssertionResult {
-    let mut result = evaluate_with_diagnose(&named_assertion.assertion, doc, diagnose);
+    let mut context = EvaluationContext::default();
+    evaluate_named_with_diagnose_and_context(named_assertion, doc, diagnose, &mut context)
+}
+
+fn evaluate_named_with_diagnose_and_context(
+    named_assertion: &NamedAssertion,
+    doc: &Document,
+    diagnose: bool,
+    context: &mut EvaluationContext,
+) -> AssertionResult {
+    let mut result =
+        evaluate_with_diagnose_and_context(&named_assertion.assertion, doc, diagnose, context);
     if let Some(name) = &named_assertion.name {
         result.name = name.clone();
     }
@@ -163,9 +200,11 @@ pub fn evaluate_named_assertions_with_diagnose(
     doc: &Document,
     diagnose: bool,
 ) -> Vec<AssertionResult> {
+    let mut context = EvaluationContext::default();
     let mut results = Vec::with_capacity(assertions.len());
     for assertion in assertions {
-        let result = evaluate_named_with_diagnose(assertion, doc, diagnose);
+        let result =
+            evaluate_named_with_diagnose_and_context(assertion, doc, diagnose, &mut context);
         let failed = !result.passed;
         results.push(result);
         if failed && !diagnose {
@@ -186,24 +225,59 @@ pub fn evaluate_with_diagnose(
     doc: &Document,
     diagnose: bool,
 ) -> AssertionResult {
+    let mut context = EvaluationContext::default();
+    evaluate_with_diagnose_and_context(assertion, doc, diagnose, &mut context)
+}
+
+fn evaluate_with_diagnose_and_context(
+    assertion: &Assertion,
+    doc: &Document,
+    diagnose: bool,
+    context: &mut EvaluationContext,
+) -> AssertionResult {
     let name = assertion_type_name(assertion).to_owned();
     let result = if is_content_assertion(assertion) {
         evaluate_content_assertion(assertion, doc)
     } else {
         match assertion {
             Assertion::FilenameRegex { pattern } => evaluate_filename_regex(doc, pattern),
-            Assertion::SheetExists(sheet) => evaluate_sheet_exists(doc, sheet),
-            Assertion::SheetNameRegex { pattern } => evaluate_sheet_name_regex(doc, pattern),
-            Assertion::CellEq { sheet, cell, value } => evaluate_cell_eq(doc, sheet, cell, value),
+            Assertion::SheetExists(sheet) => resolve_sheet_name(sheet, context)
+                .and_then(|resolved| evaluate_sheet_exists(doc, &resolved)),
+            Assertion::SheetNameRegex { pattern, bind } => evaluate_sheet_name_regex(doc, pattern)
+                .and_then(|matched_sheet| {
+                    if let Some(bind_name) = bind {
+                        bind_sheet_name(context, bind_name, &matched_sheet)?;
+                    }
+                    Ok(())
+                }),
+            Assertion::CellEq { sheet, cell, value } => resolve_sheet_name(sheet, context)
+                .and_then(|resolved| evaluate_cell_eq(doc, &resolved, cell, value)),
             Assertion::CellRegex {
                 sheet,
                 cell,
                 pattern,
-            } => evaluate_cell_regex(doc, sheet, cell, pattern),
-            Assertion::RangeNonNull { sheet, range } => evaluate_range_non_null(doc, sheet, range),
-            Assertion::SheetMinRows { sheet, min_rows } => {
-                evaluate_sheet_min_rows(doc, sheet, *min_rows)
-            }
+            } => resolve_sheet_name(sheet, context)
+                .and_then(|resolved| evaluate_cell_regex(doc, &resolved, cell, pattern)),
+            Assertion::RangeNonNull { sheet, range } => resolve_sheet_name(sheet, context)
+                .and_then(|resolved| evaluate_range_non_null(doc, &resolved, range)),
+            Assertion::SheetMinRows { sheet, min_rows } => resolve_sheet_name(sheet, context)
+                .and_then(|resolved| evaluate_sheet_min_rows(doc, &resolved, *min_rows)),
+            Assertion::ColumnSearch {
+                sheet,
+                column,
+                row_range,
+                pattern,
+            } => resolve_sheet_name(sheet, context).and_then(|resolved| {
+                evaluate_column_search(doc, &resolved, column, row_range, pattern)
+            }),
+            Assertion::HeaderRowMatch {
+                sheet,
+                row_range,
+                min_match,
+                columns,
+            } => resolve_sheet_name(sheet, context).and_then(|resolved| {
+                evaluate_header_row_match(doc, &resolved, row_range, *min_match, columns)
+            }),
             Assertion::PageCount { min, max } => evaluate_page_count(doc, *min, *max),
             Assertion::MetadataRegex { key, pattern } => evaluate_metadata_regex(doc, key, pattern),
             _ => Err(format!(
@@ -222,7 +296,7 @@ pub fn evaluate_with_diagnose(
         },
         Err(detail) => {
             let context = if diagnose {
-                diagnostic_context(assertion, doc)
+                diagnostic_context(assertion, doc, context)
             } else {
                 None
             };
@@ -244,7 +318,46 @@ pub fn evaluate_assertion(
     Ok(evaluate(assertion, doc))
 }
 
-fn diagnostic_context(assertion: &Assertion, doc: &Document) -> Option<Value> {
+fn normalize_binding_name(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("binding name cannot be empty".to_owned());
+    }
+    let normalized = trimmed.strip_prefix('$').unwrap_or(trimmed).trim();
+    if normalized.is_empty() {
+        return Err(format!("binding name '{value}' is invalid"));
+    }
+    Ok(normalized.to_owned())
+}
+
+fn bind_sheet_name(
+    context: &mut EvaluationContext,
+    binding: &str,
+    sheet_name: &str,
+) -> Result<(), String> {
+    let key = normalize_binding_name(binding)?;
+    context.sheet_bindings.insert(key, sheet_name.to_owned());
+    Ok(())
+}
+
+fn resolve_sheet_name(sheet: &str, context: &EvaluationContext) -> Result<String, String> {
+    if !sheet.starts_with('$') {
+        return Ok(sheet.to_owned());
+    }
+
+    let key = normalize_binding_name(sheet)?;
+    context
+        .sheet_bindings
+        .get(&key)
+        .cloned()
+        .ok_or_else(|| format!("sheet binding '{sheet}' was not found"))
+}
+
+fn diagnostic_context(
+    assertion: &Assertion,
+    doc: &Document,
+    context: &EvaluationContext,
+) -> Option<Value> {
     match assertion {
         Assertion::HeadingExists(heading) => heading_diagnostic_context(doc, heading),
         Assertion::HeadingRegex { pattern } | Assertion::HeadingLevel { pattern, .. } => {
@@ -263,8 +376,102 @@ fn diagnostic_context(assertion: &Assertion, doc: &Document) -> Option<Value> {
         Assertion::SectionNonEmpty { heading } | Assertion::SectionMinLines { heading, .. } => {
             section_diagnostic_context(doc, heading)
         }
+        Assertion::ColumnSearch {
+            sheet,
+            column,
+            row_range,
+            pattern,
+        } => column_search_diagnostic_context(doc, sheet, column, row_range, pattern, context),
+        Assertion::HeaderRowMatch {
+            sheet,
+            row_range,
+            min_match,
+            columns,
+        } => {
+            header_row_match_diagnostic_context(doc, sheet, row_range, *min_match, columns, context)
+        }
         _ => None,
     }
+}
+
+fn column_search_diagnostic_context(
+    doc: &Document,
+    sheet: &str,
+    column: &str,
+    row_range: &str,
+    pattern: &str,
+    context: &EvaluationContext,
+) -> Option<Value> {
+    let resolved_sheet = resolve_sheet_name(sheet, context).ok()?;
+    let column_index = parse_column_ref(column).ok()?;
+    let (start_row, end_row) = parse_row_range_ref(row_range).ok()?;
+    let rows = spreadsheet_rows(doc, &resolved_sheet).ok()?;
+
+    let mut scanned_cells = Vec::new();
+    let mut partial_matches = Vec::new();
+    let tokens = tokenize_hint(&regex_hint(pattern));
+
+    for row_index in start_row..=end_row {
+        if scanned_cells.len() >= 60 {
+            break;
+        }
+
+        let value = rows
+            .get(row_index)
+            .and_then(|row| row.get(column_index))
+            .cloned()
+            .unwrap_or_default();
+        let cell_ref = to_cell_ref(row_index, column_index);
+        scanned_cells.push(json!({
+            "cell": cell_ref,
+            "value": value
+        }));
+
+        if partial_matches.len() < 5 && !tokens.is_empty() {
+            let candidate = value.to_ascii_lowercase();
+            if tokens.iter().any(|token| candidate.contains(token)) {
+                partial_matches.push(value);
+            }
+        }
+    }
+
+    Some(json!({
+        "sheet": resolved_sheet,
+        "column": column,
+        "row_range": row_range,
+        "scanned_cells": scanned_cells,
+        "partial_matches": partial_matches
+    }))
+}
+
+fn header_row_match_diagnostic_context(
+    doc: &Document,
+    sheet: &str,
+    row_range: &str,
+    min_match: u64,
+    columns: &[ColumnPattern],
+    context: &EvaluationContext,
+) -> Option<Value> {
+    let resolved_sheet = resolve_sheet_name(sheet, context).ok()?;
+    let (start_row, end_row) = parse_row_range_ref(row_range).ok()?;
+    let patterns = compile_column_patterns(columns).ok()?;
+    let rows = spreadsheet_rows(doc, &resolved_sheet).ok()?;
+    let (best_row, best_match_count, best_pattern_indexes) =
+        best_header_row_match(&rows, start_row, end_row, &patterns);
+
+    let best_patterns: Vec<String> = best_pattern_indexes
+        .into_iter()
+        .filter_map(|index| columns.get(index).map(|column| column.pattern.clone()))
+        .collect();
+
+    Some(json!({
+        "sheet": resolved_sheet,
+        "row_range": row_range,
+        "min_match": min_match,
+        "best_row": best_row.map(|row| row + 1),
+        "best_match_count": best_match_count,
+        "best_patterns": best_patterns
+    }))
 }
 
 fn heading_diagnostic_context(doc: &Document, target: &str) -> Option<Value> {
@@ -604,6 +811,8 @@ fn assertion_type_name(assertion: &Assertion) -> &'static str {
         Assertion::RangeNonNull { .. } => "range_non_null",
         Assertion::RangePopulated { .. } => "range_populated",
         Assertion::SheetMinRows { .. } => "sheet_min_rows",
+        Assertion::ColumnSearch { .. } => "column_search",
+        Assertion::HeaderRowMatch { .. } => "header_row_match",
         Assertion::SumEq { .. } => "sum_eq",
         Assertion::WithinTolerance { .. } => "within_tolerance",
         Assertion::HeadingExists(_) => "heading_exists",
@@ -672,7 +881,7 @@ fn evaluate_sheet_exists(doc: &Document, sheet: &str) -> Result<(), String> {
     }
 }
 
-fn evaluate_sheet_name_regex(doc: &Document, pattern: &str) -> Result<(), String> {
+fn evaluate_sheet_name_regex(doc: &Document, pattern: &str) -> Result<String, String> {
     let regex =
         Regex::new(pattern).map_err(|error| format!("invalid regex '{pattern}': {error}"))?;
 
@@ -681,22 +890,24 @@ fn evaluate_sheet_name_regex(doc: &Document, pattern: &str) -> Result<(), String
             let workbook = open_workbook_auto(&xlsx.path).map_err(|error| {
                 format!("failed opening workbook '{}': {error}", xlsx.path.display())
             })?;
-            if workbook
+            if let Some(matched) = workbook
                 .sheet_names()
                 .iter()
-                .any(|sheet| regex.is_match(sheet))
+                .find(|sheet| regex.is_match(sheet))
+                .cloned()
             {
-                Ok(())
+                Ok(matched)
             } else {
                 Err(format!("no sheet name matched pattern '{}'", pattern))
             }
         }
         Document::Csv(csv) => {
-            if csv_virtual_sheet_names(&csv.path)
+            if let Some(matched) = csv_virtual_sheet_names(&csv.path)
                 .iter()
-                .any(|sheet| regex.is_match(sheet))
+                .find(|sheet| regex.is_match(sheet))
+                .cloned()
             {
-                Ok(())
+                Ok(matched)
             } else {
                 Err(format!(
                     "no csv virtual sheet name matched pattern '{}'",
@@ -766,6 +977,121 @@ fn evaluate_sheet_min_rows(doc: &Document, sheet: &str, min_rows: u64) -> Result
     }
 }
 
+fn evaluate_column_search(
+    doc: &Document,
+    sheet: &str,
+    column: &str,
+    row_range: &str,
+    pattern: &str,
+) -> Result<(), String> {
+    let column_index = parse_column_ref(column)?;
+    let (start_row, end_row) = parse_row_range_ref(row_range)?;
+    let regex =
+        Regex::new(pattern).map_err(|error| format!("invalid regex '{pattern}': {error}"))?;
+    let rows = spreadsheet_rows(doc, sheet)?;
+
+    for row_index in start_row..=end_row {
+        if let Some(value) = rows.get(row_index).and_then(|row| row.get(column_index))
+            && regex.is_match(value)
+        {
+            return Ok(());
+        }
+    }
+
+    Err(format!(
+        "no cell in column {column} rows {row_range} matched pattern '{pattern}'"
+    ))
+}
+
+fn evaluate_header_row_match(
+    doc: &Document,
+    sheet: &str,
+    row_range: &str,
+    min_match: u64,
+    columns: &[ColumnPattern],
+) -> Result<(), String> {
+    if columns.is_empty() {
+        return Err("header_row_match requires at least one column pattern".to_owned());
+    }
+
+    let (start_row, end_row) = parse_row_range_ref(row_range)?;
+    let patterns = compile_column_patterns(columns)?;
+    let rows = spreadsheet_rows(doc, sheet)?;
+    let (best_row, best_count, _) = best_header_row_match(&rows, start_row, end_row, &patterns);
+
+    if best_count as u64 >= min_match {
+        return Ok(());
+    }
+
+    let best_row_message = best_row
+        .map(|row| (row + 1).to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    Err(format!(
+        "no row in range {row_range} reached min_match {min_match}; best row was {best_row_message} with {best_count} matches"
+    ))
+}
+
+fn compile_column_patterns(columns: &[ColumnPattern]) -> Result<Vec<Regex>, String> {
+    columns
+        .iter()
+        .enumerate()
+        .map(|(index, column)| {
+            Regex::new(&column.pattern).map_err(|error| {
+                format!(
+                    "invalid regex for header_row_match columns[{index}] '{}': {error}",
+                    column.pattern
+                )
+            })
+        })
+        .collect()
+}
+
+fn best_header_row_match(
+    rows: &[Vec<String>],
+    start_row: usize,
+    end_row: usize,
+    patterns: &[Regex],
+) -> (Option<usize>, usize, Vec<usize>) {
+    let mut best_row = None;
+    let mut best_count = 0usize;
+    let mut best_patterns = Vec::new();
+
+    for row_index in start_row..=end_row {
+        let row = rows.get(row_index).map(Vec::as_slice).unwrap_or(&[]);
+        let (match_count, matched_pattern_indexes) = row_pattern_matches(row, patterns);
+        if match_count > best_count {
+            best_row = Some(row_index);
+            best_count = match_count;
+            best_patterns = matched_pattern_indexes;
+        }
+    }
+
+    (best_row, best_count, best_patterns)
+}
+
+fn row_pattern_matches(row: &[String], patterns: &[Regex]) -> (usize, Vec<usize>) {
+    let mut matched_patterns = HashSet::new();
+
+    for value in row {
+        if value.trim().is_empty() {
+            continue;
+        }
+        for (pattern_index, pattern) in patterns.iter().enumerate() {
+            if matched_patterns.contains(&pattern_index) {
+                continue;
+            }
+            if pattern.is_match(value) {
+                matched_patterns.insert(pattern_index);
+                break;
+            }
+        }
+    }
+
+    let mut matched_indexes: Vec<usize> = matched_patterns.into_iter().collect();
+    matched_indexes.sort_unstable();
+    (matched_indexes.len(), matched_indexes)
+}
+
 fn spreadsheet_cell_value(
     doc: &Document,
     sheet: &str,
@@ -825,6 +1151,29 @@ fn spreadsheet_non_empty_row_count(doc: &Document, sheet: &str) -> Result<usize,
     }
 }
 
+fn spreadsheet_rows(doc: &Document, sheet: &str) -> Result<Vec<Vec<String>>, String> {
+    match doc {
+        Document::Xlsx(xlsx) => {
+            let mut workbook = open_workbook_auto(&xlsx.path).map_err(|error| {
+                format!("failed opening workbook '{}': {error}", xlsx.path.display())
+            })?;
+            let worksheet = workbook
+                .worksheet_range(sheet)
+                .map_err(|error| format!("failed reading sheet '{sheet}': {error}"))?;
+
+            Ok(worksheet
+                .rows()
+                .map(|row| row.iter().map(ToString::to_string).collect())
+                .collect())
+        }
+        Document::Csv(csv) => {
+            validate_csv_sheet_name(&csv.path, sheet)?;
+            load_csv_rows(&csv.path)
+        }
+        _ => Err("spreadsheet assertion requires xlsx or csv document".to_owned()),
+    }
+}
+
 fn parse_cell_ref(cell: &str) -> Result<CellRef, String> {
     let mut letters = String::new();
     let mut digits = String::new();
@@ -878,6 +1227,45 @@ fn parse_range_ref(range: &str) -> Result<CellRange, String> {
     ))
 }
 
+fn parse_column_ref(column: &str) -> Result<usize, String> {
+    let trimmed = column.trim();
+    if trimmed.is_empty() {
+        return Err("column reference cannot be empty".to_owned());
+    }
+
+    let mut parsed = 0usize;
+    for character in trimmed.chars() {
+        if !character.is_ascii_alphabetic() {
+            return Err(format!("invalid column reference '{column}'"));
+        }
+        let upper = character.to_ascii_uppercase();
+        parsed = parsed.saturating_mul(26) + (upper as usize - 'A' as usize + 1);
+    }
+
+    Ok(parsed - 1)
+}
+
+fn parse_row_range_ref(row_range: &str) -> Result<(usize, usize), String> {
+    let (start, end) = row_range
+        .split_once(':')
+        .ok_or_else(|| format!("invalid row_range '{row_range}'"))?;
+
+    let start_row: usize = start
+        .trim()
+        .parse()
+        .map_err(|error| format!("invalid row_range start '{}': {error}", start.trim()))?;
+    let end_row: usize = end
+        .trim()
+        .parse()
+        .map_err(|error| format!("invalid row_range end '{}': {error}", end.trim()))?;
+
+    if start_row == 0 || end_row == 0 {
+        return Err(format!("row_range '{row_range}' must use 1-based rows"));
+    }
+
+    Ok((start_row.min(end_row) - 1, start_row.max(end_row) - 1))
+}
+
 fn to_cell_ref(row: usize, col: usize) -> String {
     let mut remaining = col + 1;
     let mut letters = String::new();
@@ -915,6 +1303,7 @@ fn validate_csv_sheet_name(path: &Path, sheet: &str) -> Result<(), String> {
 fn load_csv_rows(path: &Path) -> Result<Vec<Vec<String>>, String> {
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(false)
+        .flexible(true)
         .from_path(path)
         .map_err(|error| format!("failed opening csv '{}': {error}", path.display()))?;
     let mut rows = Vec::new();
@@ -1658,7 +2047,7 @@ mod tests {
             &doc,
         );
 
-        assert!(result.passed);
+        assert!(result.passed, "{result:?}");
         assert_eq!(result.name, "filename_regex");
         assert_eq!(result.detail, None);
     }
@@ -1667,7 +2056,7 @@ mod tests {
     fn sheet_exists_uses_csv_virtual_sheet_names() {
         let doc = csv_document("a,b\nx,y\n");
         let result = evaluate(&Assertion::SheetExists("Sheet1".to_owned()), &doc);
-        assert!(result.passed);
+        assert!(result.passed, "{result:?}");
     }
 
     #[test]
@@ -1676,10 +2065,69 @@ mod tests {
         let result = evaluate(
             &Assertion::SheetNameRegex {
                 pattern: "(?i)^sheet1$".to_owned(),
+                bind: None,
             },
             &doc,
         );
         assert!(result.passed);
+    }
+
+    #[test]
+    fn sheet_name_regex_returns_first_match_when_multiple_names_match() {
+        let doc = csv_document("a,b\nx,y\n");
+        let matched = evaluate_sheet_name_regex(&doc, "(?i)sheet1|csv").expect("sheet name match");
+        assert_eq!(matched, "Sheet1");
+    }
+
+    #[test]
+    fn sheet_binding_resolves_for_downstream_assertions() {
+        let doc = csv_document("metric,value\ncap_rate,6.25%\n");
+        let assertions = vec![
+            NamedAssertion {
+                name: Some("bind_sheet".to_owned()),
+                assertion: Assertion::SheetNameRegex {
+                    pattern: "(?i)^sheet1$".to_owned(),
+                    bind: Some("$watl_sheet".to_owned()),
+                },
+            },
+            NamedAssertion {
+                name: Some("bound_cell".to_owned()),
+                assertion: Assertion::CellEq {
+                    sheet: "$watl_sheet".to_owned(),
+                    cell: "A1".to_owned(),
+                    value: "metric".to_owned(),
+                },
+            },
+        ];
+
+        let results = evaluate_named_assertions(&assertions, &doc);
+        assert_eq!(results.len(), 2);
+        assert!(results[0].passed);
+        assert!(results[1].passed);
+    }
+
+    #[test]
+    fn unresolved_sheet_binding_fails_with_clear_message() {
+        let doc = csv_document("metric,value\ncap_rate,6.25%\n");
+        let assertions = vec![NamedAssertion {
+            name: Some("missing_binding".to_owned()),
+            assertion: Assertion::CellEq {
+                sheet: "$missing_sheet".to_owned(),
+                cell: "A1".to_owned(),
+                value: "metric".to_owned(),
+            },
+        }];
+
+        let results = evaluate_named_assertions(&assertions, &doc);
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].passed);
+        assert!(
+            results[0]
+                .detail
+                .as_deref()
+                .expect("detail")
+                .contains("sheet binding '$missing_sheet' was not found")
+        );
     }
 
     #[test]
@@ -1720,7 +2168,7 @@ mod tests {
             },
             &doc,
         );
-        assert!(!result.passed);
+        assert!(!result.passed, "{result:?}");
         assert!(
             result
                 .detail
@@ -1741,6 +2189,201 @@ mod tests {
             &doc,
         );
         assert!(result.passed);
+    }
+
+    #[test]
+    fn column_search_finds_pattern_in_row_range() {
+        let doc = csv_document("header\npreface\nCREFC Investor Reporting Package\nvalue\n");
+        let result = evaluate(
+            &Assertion::ColumnSearch {
+                sheet: "Sheet1".to_owned(),
+                column: "A".to_owned(),
+                row_range: "1:5".to_owned(),
+                pattern: "(?i)crefc investor reporting".to_owned(),
+            },
+            &doc,
+        );
+        assert!(result.passed);
+    }
+
+    #[test]
+    fn column_search_fails_when_no_cells_match() {
+        let doc = csv_document("header\npreface\nvalue\n");
+        let result = evaluate(
+            &Assertion::ColumnSearch {
+                sheet: "Sheet1".to_owned(),
+                column: "A".to_owned(),
+                row_range: "1:3".to_owned(),
+                pattern: "(?i)crefc".to_owned(),
+            },
+            &doc,
+        );
+        assert!(!result.passed);
+        assert!(
+            result
+                .detail
+                .as_deref()
+                .expect("detail")
+                .contains("no cell in column A rows 1:3 matched")
+        );
+    }
+
+    #[test]
+    fn column_search_diagnose_context_reports_scanned_cells() {
+        let doc = csv_document("header\npreface\nvalue\n");
+        let result = evaluate_with_diagnose(
+            &Assertion::ColumnSearch {
+                sheet: "Sheet1".to_owned(),
+                column: "A".to_owned(),
+                row_range: "1:3".to_owned(),
+                pattern: "(?i)crefc".to_owned(),
+            },
+            &doc,
+            true,
+        );
+        assert!(!result.passed);
+        let context = result.context.expect("diagnostic context");
+        assert_eq!(context["sheet"], "Sheet1");
+        assert_eq!(context["row_range"], "1:3");
+        assert_eq!(context["scanned_cells"].as_array().map(Vec::len), Some(3));
+    }
+
+    #[test]
+    fn column_search_supports_bound_sheet_names() {
+        let doc = csv_document("header\nCREFC Investor Reporting Package\nvalue\n");
+        let assertions = vec![
+            NamedAssertion {
+                name: Some("bind_sheet".to_owned()),
+                assertion: Assertion::SheetNameRegex {
+                    pattern: "(?i)^sheet1$".to_owned(),
+                    bind: Some("$sheet_ref".to_owned()),
+                },
+            },
+            NamedAssertion {
+                name: Some("search_bound".to_owned()),
+                assertion: Assertion::ColumnSearch {
+                    sheet: "$sheet_ref".to_owned(),
+                    column: "A".to_owned(),
+                    row_range: "1:3".to_owned(),
+                    pattern: "(?i)crefc".to_owned(),
+                },
+            },
+        ];
+
+        let results = evaluate_named_assertions(&assertions, &doc);
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|result| result.passed), "{results:?}");
+    }
+
+    #[test]
+    fn header_row_match_passes_when_threshold_is_met() {
+        let doc = csv_document(
+            "preface\nmetadata\nTransaction ID,Loan ID,Property Name,Comments - Servicer Watchlist\n1,2,Main Plaza,On watch\n",
+        );
+        let result = evaluate(
+            &Assertion::HeaderRowMatch {
+                sheet: "Sheet1".to_owned(),
+                row_range: "1:5".to_owned(),
+                min_match: 3,
+                columns: vec![
+                    ColumnPattern {
+                        pattern: "(?i)transaction\\s*id|^L1$".to_owned(),
+                    },
+                    ColumnPattern {
+                        pattern: "(?i)loan\\s*id|^L3$".to_owned(),
+                    },
+                    ColumnPattern {
+                        pattern: "(?i)property\\s*name|^S55$".to_owned(),
+                    },
+                    ColumnPattern {
+                        pattern: "(?i)comments.*watchlist|^19$".to_owned(),
+                    },
+                ],
+            },
+            &doc,
+        );
+        assert!(result.passed);
+    }
+
+    #[test]
+    fn header_row_match_fails_below_threshold_and_reports_best_row_in_diagnose() {
+        let doc = csv_document(
+            "preface\nmetadata\nTransaction ID,Loan ID,Property Name\n1,2,Main Plaza\n",
+        );
+        let result = evaluate_with_diagnose(
+            &Assertion::HeaderRowMatch {
+                sheet: "Sheet1".to_owned(),
+                row_range: "1:5".to_owned(),
+                min_match: 4,
+                columns: vec![
+                    ColumnPattern {
+                        pattern: "(?i)transaction\\s*id|^L1$".to_owned(),
+                    },
+                    ColumnPattern {
+                        pattern: "(?i)loan\\s*id|^L3$".to_owned(),
+                    },
+                    ColumnPattern {
+                        pattern: "(?i)property\\s*name|^S55$".to_owned(),
+                    },
+                    ColumnPattern {
+                        pattern: "(?i)comments.*watchlist|^19$".to_owned(),
+                    },
+                ],
+            },
+            &doc,
+            true,
+        );
+        assert!(!result.passed, "{result:?}");
+        assert!(
+            result
+                .detail
+                .as_deref()
+                .expect("detail")
+                .contains("best row was 3 with 3 matches")
+        );
+
+        let context = result.context.expect("diagnostic context");
+        assert_eq!(context["best_row"], 3);
+        assert_eq!(context["best_match_count"], 3);
+    }
+
+    #[test]
+    fn header_row_match_supports_bound_sheet_names() {
+        let doc = csv_document(
+            "preface\nmetadata\nTransaction ID,Loan ID,Property Name,Comments - Servicer Watchlist\n",
+        );
+        let assertions = vec![
+            NamedAssertion {
+                name: Some("bind_sheet".to_owned()),
+                assertion: Assertion::SheetNameRegex {
+                    pattern: "(?i)^sheet1$".to_owned(),
+                    bind: Some("$watl_sheet".to_owned()),
+                },
+            },
+            NamedAssertion {
+                name: Some("header_match".to_owned()),
+                assertion: Assertion::HeaderRowMatch {
+                    sheet: "$watl_sheet".to_owned(),
+                    row_range: "1:4".to_owned(),
+                    min_match: 3,
+                    columns: vec![
+                        ColumnPattern {
+                            pattern: "(?i)transaction\\s*id|^L1$".to_owned(),
+                        },
+                        ColumnPattern {
+                            pattern: "(?i)loan\\s*id|^L3$".to_owned(),
+                        },
+                        ColumnPattern {
+                            pattern: "(?i)property\\s*name|^S55$".to_owned(),
+                        },
+                    ],
+                },
+            },
+        ];
+
+        let results = evaluate_named_assertions(&assertions, &doc);
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|result| result.passed), "{results:?}");
     }
 
     #[test]
