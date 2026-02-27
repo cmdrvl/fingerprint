@@ -1,0 +1,60 @@
+# Desired WATL fingerprint — uses proposed DSL enhancements.
+# This is the target definition once sheet_ref binding, column_search,
+# and header_row_match are implemented.
+#
+# NOT valid YAML for current fingerprint version — serves as spec for enhancements.
+
+fingerprint_id: cmbs-watl.v2
+format: xlsx
+
+assertions:
+  # Enhancement 1: sheet_name_regex with bind
+  # Captures the matched sheet name as $watl_sheet for downstream assertions.
+  - name: watl_sheet_present
+    sheet_name_regex:
+      pattern: "(?i)watch\\s?list|WATL"
+      bind: "$watl_sheet"
+
+  # Enhancement 2: column_search
+  # Searches column A rows 1-20 for any cell matching the pattern.
+  # Proves CREFC-standard content exists without knowing the exact row.
+  - name: crefc_or_watl_label
+    column_search:
+      sheet: "$watl_sheet"
+      column: A
+      row_range: "1:20"
+      pattern: "(?i)CREFC Investor Reporting|Watch\\s?List|SERVICER WATCHLIST"
+
+  # Enhancement 3: header_row_match
+  # Searches rows 1-30 for a row where >= min_match cells match the given column patterns.
+  # This mirrors the Lambda's NAME strategy column matching.
+  - name: watl_header_row
+    header_row_match:
+      sheet: "$watl_sheet"
+      row_range: "1:30"
+      min_match: 5
+      columns:
+        - pattern: "(?i)Trans(action)?\\s*ID|^L1|^1(\\.0)?$"
+        - pattern: "(?i)Group\\s*ID|^L2|^2(\\.0)?$"
+        - pattern: "(?i)^Loan\\s*ID|^L3|^3(\\.0)?$"
+        - pattern: "(?i)Prospectus\\s*Loan\\s*ID|^L4|^4(\\.0)?$"
+        - pattern: "(?i)Property\\s*Name|^S55$|^5(\\.0)?$"
+        - pattern: "(?i)Property\\s*Type|^S61$|^6(\\.0)?$"
+        - pattern: "(?i)Comments.*Servicer.*Watchlist|Comment.*Action.*taken|Watchlist Comments|^19(\\.0)?$"
+
+  # Standard assertion using bound sheet name
+  - name: has_data_rows
+    sheet_min_rows:
+      sheet: "$watl_sheet"
+      min_rows: 5
+
+extract:
+  - name: watl_headers
+    type: range
+    sheet: "$watl_sheet"
+    range: "A1:V30"
+
+content_hash:
+  algorithm: blake3
+  over:
+    - watl_headers

@@ -1,0 +1,39 @@
+# Current best-effort WATL fingerprint (v1 — hardcoded sheet name)
+# Matches BCMS/BMO RSRV workbooks but fails on MSC (different sheet name)
+# and CGCMT supp (different boilerplate layout). See README.md for details.
+
+fingerprint_id: cmbs-watl.v1
+format: xlsx
+
+assertions:
+  - name: watl_sheet_present
+    sheet_name_regex:
+      pattern: "(?i)watch\\s?list|WATL"
+
+  - name: crefc_boilerplate
+    cell_regex:
+      sheet: "Watchlist"
+      cell: A2
+      pattern: "(?i)CREFC Investor Reporting Package"
+
+  - name: field_ids_or_header_row9
+    cell_regex:
+      sheet: "Watchlist"
+      cell: A9
+      pattern: "(?i)^L1|^Trans|^1\\.0$"
+
+  - name: has_data_rows
+    sheet_min_rows:
+      sheet: "Watchlist"
+      min_rows: 10
+
+extract:
+  - name: watl_header_area
+    type: range
+    sheet: "Watchlist"
+    range: "A8:V12"
+
+content_hash:
+  algorithm: blake3
+  over:
+    - watl_header_area
