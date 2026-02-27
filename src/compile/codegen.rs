@@ -203,33 +203,76 @@ fn generate_extracted_code(extract: &[ExtractSection]) -> String {
         return "            None".to_string();
     }
 
-    let mut code_lines = vec!["            let mut extracted = HashMap::new();".to_string()];
-
+    let mut section_inits = Vec::new();
     for section in extract {
-        code_lines.push(format!(
-            r#"            // Extract section: {}
-            // TODO: Implement extraction for type: {}
-            extracted.insert("{}.to_owned(), json!("extracted_placeholder"));"#,
-            section.name, section.r#type, section.name
+        section_inits.push(format!(
+            r#"                fingerprint::dsl::parser::ExtractSection {{
+                    name: {name}.to_owned(),
+                    r#type: {typ}.to_owned(),
+                    sheet: {sheet},
+                    range: {range},
+                    anchor_heading: {anchor_heading},
+                    index: {index},
+                    anchor: {anchor},
+                    pattern: {pattern},
+                    within_chars: {within_chars},
+                }}"#,
+            name = format_args!("{:?}", section.name),
+            typ = format_args!("{:?}", section.r#type),
+            sheet = codegen_option_string(section.sheet.as_deref()),
+            range = codegen_option_string(section.range.as_deref()),
+            anchor_heading = codegen_option_string(section.anchor_heading.as_deref()),
+            index = codegen_option_display(section.index),
+            anchor = codegen_option_string(section.anchor.as_deref()),
+            pattern = codegen_option_string(section.pattern.as_deref()),
+            within_chars = codegen_option_display(section.within_chars),
         ));
     }
 
-    code_lines.push("            Some(extracted)".to_string());
-    code_lines.join("\n")
+    format!(
+        r#"            let sections = vec![
+{sections}
+            ];
+            match fingerprint::dsl::extract::extract(doc, &sections) {{
+                Ok(map) => Some(map),
+                Err(_) => None,
+            }}"#,
+        sections = section_inits.join(",\n"),
+    )
 }
 
 /// Generate code for content hash computation.
 fn generate_content_hash_code(content_hash: &Option<ContentHashConfig>) -> String {
     match content_hash {
         Some(config) => {
+            let over_entries: Vec<String> = config
+                .over
+                .iter()
+                .map(|name| format!("{:?}.to_owned()", name))
+                .collect();
             format!(
-                r#"            // Content hash over fields: {:?}
-            // TODO: Implement {} content hash computation
-            Some("{}:placeholder".to_owned())"#,
-                config.over, config.algorithm, config.algorithm
+                r#"            let over = vec![{over}];
+            extracted.as_ref().map(|ext| fingerprint::dsl::content_hash::content_hash(ext, &over))"#,
+                over = over_entries.join(", "),
             )
         }
         None => "            None".to_string(),
+    }
+}
+
+/// Generate Rust source for `Option<String>` — `Some("value".to_owned())` or `None`.
+fn codegen_option_string(value: Option<&str>) -> String {
+    match value {
+        Some(s) => format!("Some({:?}.to_owned())", s),
+        None => "None".to_owned(),
+    }
+}
+
+/// Generate Rust source for `Option<T: Display>` — `Some(42)` or `None`.
+fn codegen_option_display<T: std::fmt::Display>(value: Option<T>) -> String {
+    match value {
+        Some(v) => format!("Some({})", v),
+        None => "None".to_owned(),
     }
 }
 

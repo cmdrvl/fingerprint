@@ -59,7 +59,7 @@ description = "{description}"
 # Source: DSL definition for {fingerprint_id}
 
 [dependencies]
-fingerprint = {{ path = "../.." }}
+fingerprint = {{ version = "{compiler_version}" }}
 serde_json = "1.0"
 
 [lib]

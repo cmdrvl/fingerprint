@@ -229,7 +229,13 @@ impl std::error::Error for RegistryValidationError {}
 fn is_trusted_source(source: &str, allowlist: &[String]) -> bool {
     source == "builtin"
         || source.starts_with("builtin:")
-        || allowlist.iter().any(|entry| entry == source)
+        || allowlist.iter().any(|entry| {
+            if let Some(prefix) = entry.strip_suffix('*') {
+                source.starts_with(prefix)
+            } else {
+                entry == source
+            }
+        })
 }
 
 #[cfg(test)]

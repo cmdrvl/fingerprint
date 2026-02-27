@@ -413,6 +413,57 @@ fn handle_run_mode(cli: cli::Cli) -> u8 {
     outcome.exit_code()
 }
 
+/// Trust configuration file format (YAML).
+#[derive(serde::Deserialize, Default)]
+struct TrustConfig {
+    #[serde(default)]
+    trust: Vec<String>,
+}
+
+/// Load trust allowlist from config files.
+///
+/// Searches (in order, merging entries):
+/// 1. `~/.fingerprint/trust.yaml` (user config)
+/// 2. `.fingerprint/trust.yaml` (project config)
+///
+/// Override location with `FINGERPRINT_TRUST` environment variable.
+fn load_trust_config() -> Vec<String> {
+    let mut entries = Vec::new();
+
+    if let Ok(path) = std::env::var("FINGERPRINT_TRUST") {
+        load_trust_file(&std::path::PathBuf::from(path), &mut entries);
+        return entries;
+    }
+
+    // User config: ~/.fingerprint/trust.yaml
+    let home_config = std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join(".fingerprint")
+        .join("trust.yaml");
+    load_trust_file(&home_config, &mut entries);
+
+    // Project config: .fingerprint/trust.yaml
+    let project_config = std::path::PathBuf::from(".fingerprint").join("trust.yaml");
+    load_trust_file(&project_config, &mut entries);
+
+    entries
+}
+
+fn load_trust_file(path: &std::path::Path, entries: &mut Vec<String>) {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(config) = serde_yaml::from_str::<TrustConfig>(&contents) else {
+        eprintln!(
+            "Warning: failed to parse trust config '{}', skipping",
+            path.display()
+        );
+        return;
+    };
+    entries.extend(config.trust);
+}
+
 /// Build the fingerprint registry with builtin fingerprints.
 #[allow(clippy::result_large_err)]
 fn build_registry() -> Result<registry::FingerprintRegistry, refusal::codes::RefusalEnvelope> {
@@ -436,10 +487,13 @@ fn build_registry() -> Result<registry::FingerprintRegistry, refusal::codes::Ref
         registry.register_with_info(builtin, info);
     }
 
-    // TODO: Discover and register installed fingerprint crates
+    // Discover and register installed fingerprint definitions
+    for (installed, info) in registry::installed::discover_installed() {
+        registry.register_with_info(installed, info);
+    }
 
     // Validate registry (check for duplicates and trust policy)
-    let allowlist: Vec<String> = vec![]; // TODO: Load from config
+    let allowlist = load_trust_config();
     registry
         .validate(&allowlist)
         .map_err(|validation_error| match validation_error {
@@ -459,16 +513,22 @@ fn build_registry() -> Result<registry::FingerprintRegistry, refusal::codes::Ref
                 fingerprint_id,
                 provider,
                 policy,
-            } => build_envelope(
-                RefusalCode::UntrustedFp,
-                "Untrusted fingerprint provider",
-                RefusalDetail::UntrustedFp(refusal::codes::UntrustedFpDetail {
-                    fingerprint_id,
-                    provider,
-                    policy,
-                }),
-                Some("Add provider to allowlist or use --trust-all".to_owned()),
-            ),
+            } => {
+                let next_command = format!(
+                    "Add to ~/.fingerprint/trust.yaml:\ntrust:\n  - \"{}\"",
+                    provider
+                );
+                build_envelope(
+                    RefusalCode::UntrustedFp,
+                    "Untrusted fingerprint provider",
+                    RefusalDetail::UntrustedFp(refusal::codes::UntrustedFpDetail {
+                        fingerprint_id,
+                        provider,
+                        policy,
+                    }),
+                    Some(next_command),
+                )
+            }
         })?;
 
     Ok(registry)
