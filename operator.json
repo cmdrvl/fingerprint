@@ -5,6 +5,7 @@
   "description": "Tests artifacts against fingerprint definitions and produces content hashes",
   "repository": "https://github.com/cmdrvl/fingerprint",
   "license": "MIT",
+  "agent_guide": "https://github.com/cmdrvl/.github/blob/main/profile/AGENT_PROMPT.md",
 
   "invocation": {
     "binary": "fingerprint",

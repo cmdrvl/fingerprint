@@ -481,6 +481,8 @@ vacuum /data/models | hash | fingerprint --fp argus-model.v1
 
 ## Agent integration
 
+For the full toolchain guide, see the [Agent Operator Guide](https://github.com/cmdrvl/.github/blob/main/profile/AGENT_PROMPT.md).
+
 ```bash
 # Self-describing contract
 fingerprint --describe | jq '.refusals[] | select(.action == "retry_with_flag")'
