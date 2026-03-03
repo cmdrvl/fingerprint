@@ -15,6 +15,18 @@ pub fn generate_rust(def: &FingerprintDefinition) -> Result<String, String> {
     let extracted_code = generate_extracted_code(&def.extract);
     let content_hash_code = generate_content_hash_code(&def.content_hash);
 
+    let needs_column_pattern = def.assertions.iter().any(|a| {
+        matches!(
+            a.assertion,
+            crate::dsl::assertions::Assertion::HeaderRowMatch { .. }
+        )
+    });
+    let column_pattern_import = if needs_column_pattern {
+        ", ColumnPattern"
+    } else {
+        ""
+    };
+
     let rust_code = format!(
         r#"//! Generated fingerprint implementation from DSL definition.
 //!
@@ -22,7 +34,7 @@ pub fn generate_rust(def: &FingerprintDefinition) -> Result<String, String> {
 //! DO NOT EDIT MANUALLY.
 
 use fingerprint::{{Document, Fingerprint, FingerprintResult}};
-use fingerprint::dsl::assertions::{{diagnose_mode, evaluate_named_assertions_with_diagnose, ColumnPattern, NamedAssertion}};
+use fingerprint::dsl::assertions::{{diagnose_mode, evaluate_named_assertions_with_diagnose{column_pattern_import}, NamedAssertion}};
 use fingerprint::dsl::assertions::Assertion::*;
 
 pub struct GeneratedFingerprint {{}}
@@ -133,7 +145,15 @@ fn generate_assertions_code(assertions: &[NamedAssertion]) -> Result<String, Str
     let mut code_lines = Vec::new();
     code_lines.push("        let generated_assertions: Vec<NamedAssertion> = vec![".to_owned());
     for assertion in assertions {
-        code_lines.push(format!("            {assertion:?},"));
+        let name_code = match &assertion.name {
+            Some(n) => format!("Some({:?}.to_owned())", n),
+            None => "None".to_owned(),
+        };
+        let assertion_code = codegen_assertion(&assertion.assertion);
+        code_lines.push(format!(
+            "            NamedAssertion {{ name: {}, assertion: {} }},",
+            name_code, assertion_code
+        ));
     }
     code_lines.push("        ];".to_owned());
     code_lines.push(
@@ -147,6 +167,265 @@ fn generate_assertions_code(assertions: &[NamedAssertion]) -> Result<String, Str
     code_lines.push("            .find(|result| !result.passed)".to_owned());
     code_lines.push("            .and_then(|result| result.detail.clone());".to_owned());
     Ok(code_lines.join("\n"))
+}
+
+/// Generate Rust source for a single Assertion enum variant with owned String fields.
+fn codegen_assertion(assertion: &crate::dsl::assertions::Assertion) -> String {
+    use crate::dsl::assertions::Assertion;
+
+    /// Format a String field as `"value".to_owned()`.
+    fn s(value: &str) -> String {
+        format!("{:?}.to_owned()", value)
+    }
+
+    /// Format an Option<String> field.
+    fn opt_s(value: &Option<String>) -> String {
+        match value {
+            Some(v) => format!("Some({:?}.to_owned())", v),
+            None => "None".to_owned(),
+        }
+    }
+
+    /// Format an Option<usize>.
+    fn opt_u(value: Option<usize>) -> String {
+        match value {
+            Some(v) => format!("Some({})", v),
+            None => "None".to_owned(),
+        }
+    }
+
+    /// Format an Option<u64>.
+    fn opt_u64(value: Option<u64>) -> String {
+        match value {
+            Some(v) => format!("Some({})", v),
+            None => "None".to_owned(),
+        }
+    }
+
+    /// Format a Vec<String> as `vec!["a".to_owned(), "b".to_owned()]`.
+    fn vec_s(values: &[String]) -> String {
+        let items: Vec<String> = values.iter().map(|v| format!("{:?}.to_owned()", v)).collect();
+        format!("vec![{}]", items.join(", "))
+    }
+
+    /// Format a Vec<ColumnPattern>.
+    fn vec_cp(values: &[crate::dsl::assertions::ColumnPattern]) -> String {
+        let items: Vec<String> = values
+            .iter()
+            .map(|cp| format!("ColumnPattern {{ pattern: {:?}.to_owned() }}", cp.pattern))
+            .collect();
+        format!("vec![{}]", items.join(", "))
+    }
+
+    match assertion {
+        Assertion::FilenameRegex { pattern } => {
+            format!("FilenameRegex {{ pattern: {} }}", s(pattern))
+        }
+        Assertion::SheetExists(name) => {
+            format!("SheetExists({})", s(name))
+        }
+        Assertion::SheetNameRegex { pattern, bind } => {
+            format!(
+                "SheetNameRegex {{ pattern: {}, bind: {} }}",
+                s(pattern),
+                opt_s(bind)
+            )
+        }
+        Assertion::CellEq { sheet, cell, value } => {
+            format!(
+                "CellEq {{ sheet: {}, cell: {}, value: {} }}",
+                s(sheet),
+                s(cell),
+                s(value)
+            )
+        }
+        Assertion::CellRegex {
+            sheet,
+            cell,
+            pattern,
+        } => {
+            format!(
+                "CellRegex {{ sheet: {}, cell: {}, pattern: {} }}",
+                s(sheet),
+                s(cell),
+                s(pattern)
+            )
+        }
+        Assertion::RangeNonNull { sheet, range } => {
+            format!(
+                "RangeNonNull {{ sheet: {}, range: {} }}",
+                s(sheet),
+                s(range)
+            )
+        }
+        Assertion::RangePopulated {
+            sheet,
+            range,
+            min_pct,
+        } => {
+            format!(
+                "RangePopulated {{ sheet: {}, range: {}, min_pct: {}_f64 }}",
+                s(sheet),
+                s(range),
+                min_pct
+            )
+        }
+        Assertion::SheetMinRows { sheet, min_rows } => {
+            format!(
+                "SheetMinRows {{ sheet: {}, min_rows: {} }}",
+                s(sheet),
+                min_rows
+            )
+        }
+        Assertion::ColumnSearch {
+            sheet,
+            column,
+            row_range,
+            pattern,
+        } => {
+            format!(
+                "ColumnSearch {{ sheet: {}, column: {}, row_range: {}, pattern: {} }}",
+                s(sheet),
+                s(column),
+                s(row_range),
+                s(pattern)
+            )
+        }
+        Assertion::HeaderRowMatch {
+            sheet,
+            row_range,
+            min_match,
+            columns,
+        } => {
+            format!(
+                "HeaderRowMatch {{ sheet: {}, row_range: {}, min_match: {}, columns: {} }}",
+                s(sheet),
+                s(row_range),
+                min_match,
+                vec_cp(columns)
+            )
+        }
+        Assertion::SumEq {
+            range,
+            equals_cell,
+            tolerance,
+        } => {
+            format!(
+                "SumEq {{ range: {}, equals_cell: {}, tolerance: {}_f64 }}",
+                s(range),
+                s(equals_cell),
+                tolerance
+            )
+        }
+        Assertion::WithinTolerance { cell, min, max } => {
+            format!(
+                "WithinTolerance {{ cell: {}, min: {}_f64, max: {}_f64 }}",
+                s(cell),
+                min,
+                max
+            )
+        }
+        Assertion::HeadingExists(text) => {
+            format!("HeadingExists({})", s(text))
+        }
+        Assertion::HeadingRegex { pattern } => {
+            format!("HeadingRegex {{ pattern: {} }}", s(pattern))
+        }
+        Assertion::HeadingLevel { level, pattern } => {
+            format!(
+                "HeadingLevel {{ level: {}, pattern: {} }}",
+                level,
+                s(pattern)
+            )
+        }
+        Assertion::TextContains(text) => {
+            format!("TextContains({})", s(text))
+        }
+        Assertion::TextRegex { pattern } => {
+            format!("TextRegex {{ pattern: {} }}", s(pattern))
+        }
+        Assertion::TextNear {
+            anchor,
+            pattern,
+            within_chars,
+        } => {
+            format!(
+                "TextNear {{ anchor: {}, pattern: {}, within_chars: {} }}",
+                s(anchor),
+                s(pattern),
+                within_chars
+            )
+        }
+        Assertion::SectionNonEmpty { heading } => {
+            format!("SectionNonEmpty {{ heading: {} }}", s(heading))
+        }
+        Assertion::SectionMinLines { heading, min_lines } => {
+            format!(
+                "SectionMinLines {{ heading: {}, min_lines: {} }}",
+                s(heading),
+                min_lines
+            )
+        }
+        Assertion::TableExists { heading, index } => {
+            format!(
+                "TableExists {{ heading: {}, index: {} }}",
+                s(heading),
+                opt_u(*index)
+            )
+        }
+        Assertion::TableColumns {
+            heading,
+            index,
+            patterns,
+        } => {
+            format!(
+                "TableColumns {{ heading: {}, index: {}, patterns: {} }}",
+                s(heading),
+                opt_u(*index),
+                vec_s(patterns)
+            )
+        }
+        Assertion::TableShape {
+            heading,
+            index,
+            min_columns,
+            column_types,
+        } => {
+            format!(
+                "TableShape {{ heading: {}, index: {}, min_columns: {}, column_types: {} }}",
+                s(heading),
+                opt_u(*index),
+                min_columns,
+                vec_s(column_types)
+            )
+        }
+        Assertion::TableMinRows {
+            heading,
+            index,
+            min_rows,
+        } => {
+            format!(
+                "TableMinRows {{ heading: {}, index: {}, min_rows: {} }}",
+                s(heading),
+                opt_u(*index),
+                min_rows
+            )
+        }
+        Assertion::PageCount { min, max } => {
+            format!(
+                "PageCount {{ min: {}, max: {} }}",
+                opt_u64(*min),
+                opt_u64(*max)
+            )
+        }
+        Assertion::MetadataRegex { key, pattern } => {
+            format!(
+                "MetadataRegex {{ key: {}, pattern: {} }}",
+                s(key),
+                s(pattern)
+            )
+        }
+    }
 }
 
 /// Generate code for content extraction.

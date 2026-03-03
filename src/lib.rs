@@ -13,6 +13,10 @@ pub mod refusal;
 pub mod registry;
 pub mod witness;
 
+// Public re-exports for compiled fingerprint crates.
+pub use document::Document;
+pub use registry::{Fingerprint, FingerprintResult};
+
 struct DiagnoseModeGuard;
 
 impl DiagnoseModeGuard {

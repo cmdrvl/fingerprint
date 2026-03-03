@@ -119,9 +119,23 @@ vacuum /data | hash | fingerprint --fp cbre-appraisal.v1 --diagnose
 
 The `context` field shows every heading in the document and the closest match to what you were looking for. Your regex said `rent roll` but the document says `RENT ROLL SUMMARY` — now you know exactly what to fix. With `--diagnose`, all assertions are evaluated even if earlier ones fail, so you see the full diagnostic picture in one pass.
 
-### Write YAML, get compiled Rust
+### Run YAML directly — no compile step
 
-Most fingerprints are authored as declarative YAML and compiled to optimized Rust crates:
+Drop a `.fp.yaml` file into the definitions directory and fingerprint runs it immediately:
+
+```bash
+# After infer generates your YAML, just install it
+cp cbre-appraisal.fp.yaml ~/.fingerprint/definitions/
+
+# Run it — no compilation needed
+vacuum /data | hash | fingerprint --fp cbre-appraisal.v1
+```
+
+The runtime evaluates DSL assertions directly. Same assertions, same results, same `--diagnose` output. This is the fastest path from `infer` output to tested fingerprint — iterate on the YAML, re-test, repeat. Override the definitions directory with `FINGERPRINT_DEFINITIONS=/path/to/dir`.
+
+### Compile to Rust for production
+
+When the fingerprint is stable, compile it for native performance:
 
 ```bash
 fingerprint compile argus-model.fp.yaml --out fingerprint-argus-model-v1/
@@ -469,7 +483,14 @@ content_hash:
   over: [market_leasing_assumptions]
 ```
 
-Compile it, install it, use it:
+Run it directly (development):
+
+```bash
+cp argus-model.fp.yaml ~/.fingerprint/definitions/
+vacuum /data/models | hash | fingerprint --fp argus-model.v1
+```
+
+Or compile for production:
 
 ```bash
 fingerprint compile argus-model.fp.yaml --out fingerprint-argus-model-v1/
