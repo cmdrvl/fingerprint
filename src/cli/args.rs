@@ -12,7 +12,7 @@ pub struct Cli {
     pub input: Option<PathBuf>,
 
     /// Fingerprint ID to test (repeatable; evaluated in CLI order, first match wins)
-    #[arg(long = "fp", value_name = "ID")]
+    #[arg(long = "fp", alias = "fingerprint", value_name = "ID")]
     pub fingerprints: Vec<String>,
 
     /// List available fingerprints and exit
@@ -227,6 +227,22 @@ mod tests {
             }) => {}
             other => panic!("unexpected witness count command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_fingerprint_alias_for_fp_flag() {
+        let cli = Cli::parse_from([
+            "fingerprint",
+            "--fingerprint",
+            "argus-model.v1",
+            "--fingerprint",
+            "csv.v0",
+        ]);
+
+        assert_eq!(
+            cli.fingerprints,
+            vec!["argus-model.v1".to_owned(), "csv.v0".to_owned()]
+        );
     }
 
     #[test]

@@ -181,28 +181,19 @@ fn handle_compile_command(
     Ok(())
 }
 
-/// Handle --describe flag: print operator.json and exit.
+/// Handle --describe flag: print compiled operator.json and exit.
 fn handle_describe() -> u8 {
-    let operator = serde_json::json!({
-        "name": "fingerprint",
-        "version": env!("CARGO_PKG_VERSION"),
-        "description": "Determine whether an artifact matches a known template",
-        "author": "CMD+RVL",
-        "repository": "https://github.com/SaltIO/fingerprint",
-        "pipeline_role": "enricher",
-        "input_format": "JSONL",
-        "output_format": "JSONL",
-        "stdin_support": true,
-        "file_support": true
-    });
-
-    if let Ok(json) = serde_json::to_string_pretty(&operator) {
-        println!("{}", json);
-        0
-    } else {
-        eprintln!("Error: Failed to serialize operator metadata");
-        2
+    use std::io::Write;
+    let mut stdout = std::io::stdout();
+    if stdout
+        .write_all(include_bytes!("../operator.json"))
+        .is_err()
+        || stdout.write_all(b"\n").is_err()
+        || stdout.flush().is_err()
+    {
+        return 2;
     }
+    0
 }
 
 /// Handle --schema flag: print JSON Schema and exit.

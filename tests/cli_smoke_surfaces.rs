@@ -47,6 +47,22 @@ fn smoke_describe_schema_and_list_exit_zero() {
     let describe_json: Value =
         serde_json::from_slice(&describe.stdout).expect("describe should be valid JSON");
     assert_eq!(describe_json["name"], "fingerprint");
+    assert_eq!(
+        describe_json["schema_version"], "operator.v0",
+        "--describe must emit operator.v0 schema"
+    );
+    assert!(
+        describe_json.get("exit_codes").is_some(),
+        "--describe must include exit_codes"
+    );
+    assert!(
+        describe_json.get("refusals").is_some(),
+        "--describe must include refusals"
+    );
+    assert!(
+        describe_json.get("pipeline").is_some(),
+        "--describe must include pipeline"
+    );
 
     let schema = run_fingerprint(&["--schema"]);
     assert_eq!(schema.status.code(), Some(0));

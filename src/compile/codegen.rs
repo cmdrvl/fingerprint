@@ -204,7 +204,10 @@ fn codegen_assertion(assertion: &crate::dsl::assertions::Assertion) -> String {
 
     /// Format a Vec<String> as `vec!["a".to_owned(), "b".to_owned()]`.
     fn vec_s(values: &[String]) -> String {
-        let items: Vec<String> = values.iter().map(|v| format!("{:?}.to_owned()", v)).collect();
+        let items: Vec<String> = values
+            .iter()
+            .map(|v| format!("{:?}.to_owned()", v))
+            .collect();
         format!("vec![{}]", items.join(", "))
     }
 
