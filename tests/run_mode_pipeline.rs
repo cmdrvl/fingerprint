@@ -199,13 +199,13 @@ fn run_mode_witness_records_exact_output_hash_and_prev_chain() {
 
     let first = Command::new(env!("CARGO_BIN_EXE_fingerprint"))
         .arg(manifest.path())
-        .args(["--fp", "csv.v0"])
+        .args(["--fp", "csv.v0", "--jobs", "4"])
         .env("EPISTEMIC_WITNESS", &witness_path)
         .output()
         .expect("run fingerprint binary");
     let second = Command::new(env!("CARGO_BIN_EXE_fingerprint"))
         .arg(manifest.path())
-        .args(["--fp", "csv.v0"])
+        .args(["--fp", "csv.v0", "--jobs", "4"])
         .env("EPISTEMIC_WITNESS", &witness_path)
         .output()
         .expect("run fingerprint binary");
@@ -230,6 +230,7 @@ fn run_mode_witness_records_exact_output_hash_and_prev_chain() {
         witness_rows[0]["inputs"][0]["bytes"],
         u64::try_from(manifest_bytes.len()).expect("manifest length fits u64")
     );
+    assert_eq!(witness_rows[0]["params"]["jobs"], 4);
     assert_eq!(witness_rows[0]["output_hash"], expected_first_output_hash);
     assert!(
         witness_rows[0]["binary_hash"]
@@ -238,6 +239,7 @@ fn run_mode_witness_records_exact_output_hash_and_prev_chain() {
     );
     assert!(witness_rows[0]["prev"].is_null());
     assert_eq!(witness_rows[1]["prev"], witness_rows[0]["id"]);
+    assert_eq!(witness_rows[1]["params"]["jobs"], 4);
     assert_eq!(witness_rows[1]["output_hash"], expected_second_output_hash);
 }
 

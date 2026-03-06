@@ -148,6 +148,16 @@ fn current_binary_hash() -> String {
         .unwrap_or_else(|| "blake3:unknown".to_owned())
 }
 
+fn default_run_jobs() -> usize {
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
+}
+
+fn normalize_run_jobs(jobs: Option<usize>) -> usize {
+    jobs.unwrap_or_else(default_run_jobs).max(1)
+}
+
 fn describe_run_input(input_path: Option<&std::path::Path>) -> witness::record::WitnessInput {
     match input_path {
         Some(path) => {
@@ -180,7 +190,12 @@ fn last_witness_id(ledger_path: &std::path::Path) -> Option<String> {
     record.get("id")?.as_str().map(ToOwned::to_owned)
 }
 
-fn append_run_mode_witness(cli: &cli::Cli, outcome: cli::exit::Outcome, output_bytes: &[u8]) {
+fn append_run_mode_witness(
+    cli: &cli::Cli,
+    normalized_jobs: usize,
+    outcome: cli::exit::Outcome,
+    output_bytes: &[u8],
+) {
     use progress::reporter::report_warning;
     use witness::ledger::{append, ledger_path};
     use witness::record::WitnessRecord;
@@ -196,6 +211,7 @@ fn append_run_mode_witness(cli: &cli::Cli, outcome: cli::exit::Outcome, output_b
         vec![describe_run_input(cli.input.as_deref())],
         serde_json::json!({
             "fingerprints": cli.fingerprints,
+            "jobs": normalized_jobs,
             "input": cli.input.as_ref().map(|path| path.display().to_string())
         }),
         match outcome {
@@ -237,6 +253,7 @@ fn append_run_mode_witness(cli: &cli::Cli, outcome: cli::exit::Outcome, output_b
 }
 
 fn emit_run_mode_refusal(cli: &cli::Cli, refusal: &refusal::codes::RefusalEnvelope) -> u8 {
+    let normalized_jobs = normalize_run_jobs(cli.jobs);
     let output_bytes = match serialize_refusal_envelope_bytes(refusal) {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -250,7 +267,12 @@ fn emit_run_mode_refusal(cli: &cli::Cli, refusal: &refusal::codes::RefusalEnvelo
         return 2;
     }
 
-    append_run_mode_witness(cli, cli::exit::Outcome::Refusal, &output_bytes);
+    append_run_mode_witness(
+        cli,
+        normalized_jobs,
+        cli::exit::Outcome::Refusal,
+        &output_bytes,
+    );
     2
 }
 
@@ -489,6 +511,7 @@ fn handle_witness_command(action: cli::WitnessAction) -> u8 {
 fn handle_run_mode(cli: cli::Cli) -> u8 {
     use cli::exit::Outcome;
     use pipeline::enricher::enrich_record_with_fingerprints;
+    use pipeline::parallel::process_parallel_for_each;
     use progress::reporter::{ProgressEvent, report_progress};
     use std::time::Instant;
 
@@ -523,41 +546,46 @@ fn handle_run_mode(cli: cli::Cli) -> u8 {
     };
 
     let _diagnose_guard = DiagnoseModeGuard::new(cli.diagnose);
+    let normalized_jobs = normalize_run_jobs(cli.jobs);
 
     // Process records through enrichment pipeline
     let total_records = u64::try_from(records.len()).unwrap_or(u64::MAX);
     let started_at = Instant::now();
     let mut enriched_records = Vec::with_capacity(records.len());
-    for (index, record) in records.into_iter().enumerate() {
-        let enriched = enrich_record_with_fingerprints(&record, &registry, &cli.fingerprints);
-        enriched_records.push(enriched);
-
-        if cli.progress {
-            let processed = u64::try_from(index + 1).unwrap_or(u64::MAX);
-            let percent = if total_records == 0 {
-                None
-            } else {
-                Some((processed as f64 / total_records as f64) * 100.0)
-            };
-            let elapsed_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-            report_progress(&ProgressEvent {
-                event_type: "progress".to_owned(),
-                tool: "fingerprint".to_owned(),
-                processed,
-                total: Some(total_records),
-                percent,
-                elapsed_ms,
-            });
-        }
-    }
-
-    // Determine outcome for exit code
     let mut outcome = Outcome::AllMatched;
-    for record in &enriched_records {
-        if record_requires_partial_outcome(record) {
-            outcome = Outcome::Partial;
-        }
-    }
+    let mut processed_records = 0u64;
+
+    process_parallel_for_each(
+        records,
+        normalized_jobs,
+        |record| enrich_record_with_fingerprints(&record, &registry, &cli.fingerprints),
+        |_index, enriched| {
+            if record_requires_partial_outcome(&enriched) {
+                outcome = Outcome::Partial;
+            }
+
+            enriched_records.push(enriched);
+            processed_records = processed_records.saturating_add(1);
+
+            if cli.progress {
+                let percent = if total_records == 0 {
+                    None
+                } else {
+                    Some((processed_records as f64 / total_records as f64) * 100.0)
+                };
+                let elapsed_ms =
+                    u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+                report_progress(&ProgressEvent {
+                    event_type: "progress".to_owned(),
+                    tool: "fingerprint".to_owned(),
+                    processed: processed_records,
+                    total: Some(total_records),
+                    percent,
+                    elapsed_ms,
+                });
+            }
+        },
+    );
 
     let output_bytes = match serialize_records_to_jsonl_bytes(&enriched_records) {
         Ok(bytes) => bytes,
@@ -572,7 +600,7 @@ fn handle_run_mode(cli: cli::Cli) -> u8 {
         return 2;
     }
 
-    append_run_mode_witness(&cli, outcome, &output_bytes);
+    append_run_mode_witness(&cli, normalized_jobs, outcome, &output_bytes);
 
     outcome.exit_code()
 }

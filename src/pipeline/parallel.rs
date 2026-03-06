@@ -13,13 +13,24 @@ pub fn process_parallel(
     process_parallel_with(records, jobs, |record| record)
 }
 
-fn process_parallel_with<F>(records: Vec<Value>, jobs: usize, process: F) -> Vec<Value>
+pub fn process_parallel_with<F>(records: Vec<Value>, jobs: usize, process: F) -> Vec<Value>
 where
     F: Fn(Value) -> Value + Sync,
 {
+    let mut ordered = Vec::with_capacity(records.len());
+    process_parallel_for_each(records, jobs, process, |_index, record| {
+        ordered.push(record)
+    });
+    ordered
+}
+
+pub fn process_parallel_for_each<F, E>(records: Vec<Value>, jobs: usize, process: F, mut emit: E)
+where
+    F: Fn(Value) -> Value + Sync,
+    E: FnMut(usize, Value),
+{
     let worker_count = jobs.max(1);
     let in_flight_limit = worker_count.saturating_mul(2).max(1);
-    let mut ordered = Vec::with_capacity(records.len());
     let mut indexed = records.into_iter().enumerate();
 
     while let Some(first) = indexed.next() {
@@ -32,10 +43,9 @@ where
                 break;
             }
         }
-
         if worker_count == 1 {
-            for (_index, record) in batch {
-                ordered.push(process(record));
+            for (index, record) in batch {
+                emit(index, process(record));
             }
             continue;
         }
@@ -57,17 +67,15 @@ where
         for (index, record) in result_rx {
             pending.insert(index, record);
         }
-        for (_, record) in pending {
-            ordered.push(record);
+        for (index, record) in pending {
+            emit(index, record);
         }
     }
-
-    ordered
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{process_parallel, process_parallel_with};
+    use super::{process_parallel, process_parallel_for_each, process_parallel_with};
     use crate::registry::FingerprintRegistry;
     use serde_json::{Value, json};
     use std::sync::{
@@ -141,5 +149,35 @@ mod tests {
         let registry = FingerprintRegistry::new();
         let output = process_parallel(Vec::new(), &registry, 4);
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn emits_processed_records_in_input_order() {
+        let records = sample_records(10);
+        let mut emitted = Vec::new();
+
+        process_parallel_for_each(
+            records,
+            3,
+            |record| {
+                let seq = record["seq"].as_u64().expect("u64 seq");
+                if seq % 2 == 0 {
+                    thread::sleep(Duration::from_millis(3));
+                } else {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                record
+            },
+            |index, record| {
+                emitted.push((index, record["seq"].as_u64().expect("u64 seq")));
+            },
+        );
+
+        assert_eq!(
+            emitted,
+            (0usize..10)
+                .map(|seq| (seq, u64::try_from(seq).expect("fits u64")))
+                .collect::<Vec<_>>()
+        );
     }
 }
