@@ -1,5 +1,6 @@
 use crate::document::{Document, dispatch::open_document_with_text_path};
 use crate::progress::reporter::{report_warning, report_warning_code};
+use crate::refusal::codes::{BadInputDetail, RefusalCode, RefusalDetail, build_envelope};
 use crate::registry::{FingerprintInfo, FingerprintRegistry, FingerprintResult};
 use serde_json::{Map, Value, json};
 use std::path::Path;
@@ -40,15 +41,15 @@ pub fn enrich_record_with_fingerprints(
     fingerprint_ids: &[String],
 ) -> Value {
     if !record.is_object() {
-        return create_error_record("E_BAD_INPUT", "Record is not a JSON object");
+        return create_bad_input_refusal(
+            0,
+            "Record is not a JSON object",
+            None,
+            Some("record must be a JSON object".to_owned()),
+        );
     }
 
     let upstream_skipped = is_skipped_record(record);
-    let validation_warning = if upstream_skipped {
-        None
-    } else {
-        validate_required_fields(record).err()
-    };
 
     let path_str = record.get("path").and_then(Value::as_str).unwrap_or("");
     let text_path = record
@@ -61,7 +62,12 @@ pub fn enrich_record_with_fingerprints(
     let enriched_obj = match enriched.as_object_mut() {
         Some(obj) => obj,
         None => {
-            return create_error_record("E_BAD_INPUT", "Record is not a JSON object");
+            return create_bad_input_refusal(
+                0,
+                "Record is not a JSON object",
+                None,
+                Some("record must be a JSON object".to_owned()),
+            );
         }
     };
 
@@ -75,8 +81,13 @@ pub fn enrich_record_with_fingerprints(
         return handle_skipped_passthrough(enriched_obj);
     }
 
-    if let Some(warning) = validation_warning {
-        return create_skipped_record_with_warning(enriched_obj, warning);
+    if let Err(missing_field) = validate_required_fields(record) {
+        return create_bad_input_refusal(
+            0,
+            "Missing required input field",
+            Some(missing_field),
+            None,
+        );
     }
 
     let document = match open_document_with_text_path(Path::new(path_str), &extension, text_path) {
@@ -282,25 +293,13 @@ fn handle_skipped_passthrough(enriched_obj: &mut Map<String, Value>) -> Value {
 }
 
 /// Validate that non-skipped records have required fields.
-fn validate_required_fields(record: &Value) -> Result<(), Warning> {
+fn validate_required_fields(record: &Value) -> Result<(), &'static str> {
     if !record.get("bytes_hash").is_some_and(Value::is_string) {
-        return Err(Warning::new(
-            "E_BAD_INPUT",
-            "Missing required field: bytes_hash",
-            json!({
-                "missing_field": "bytes_hash"
-            }),
-        ));
+        return Err("bytes_hash");
     }
 
     if !record.get("path").is_some_and(Value::is_string) {
-        return Err(Warning::new(
-            "E_BAD_INPUT",
-            "Missing required field: path",
-            json!({
-                "missing_field": "path"
-            }),
-        ));
+        return Err("path");
     }
 
     Ok(())
@@ -340,20 +339,24 @@ fn create_skipped_record_with_warning(
     Value::Object(enriched_obj.clone())
 }
 
-/// Create a basic error record for fundamental issues.
-fn create_error_record(code: &str, message: &str) -> Value {
-    json!({
-        "version": "fingerprint.v0",
-        "tool_versions": { "fingerprint": env!("CARGO_PKG_VERSION") },
-        "fingerprint": null,
-        "_skipped": true,
-        "_warnings": [{
-            "tool": "fingerprint",
-            "code": code,
-            "message": message,
-            "detail": {}
-        }]
-    })
+fn create_bad_input_refusal(
+    line: u64,
+    message: &str,
+    missing_field: Option<&str>,
+    error: Option<String>,
+) -> Value {
+    let refusal = build_envelope(
+        RefusalCode::BadInput,
+        message,
+        RefusalDetail::BadInput(BadInputDetail {
+            line,
+            error,
+            missing_field: missing_field.map(str::to_owned),
+            version: None,
+        }),
+        Some("Run `hash` first and provide valid JSONL input".to_owned()),
+    );
+    serde_json::to_value(refusal).expect("refusal serialization should never fail")
 }
 
 #[cfg(test)]
@@ -450,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_bytes_hash_creates_new_skipped_record_with_warning() {
+    fn missing_bytes_hash_returns_refusal_envelope() {
         let registry = FingerprintRegistry::new();
         let input = json!({
             "version": "hash.v0",
@@ -459,13 +462,9 @@ mod tests {
         });
 
         let output = enrich_record(&input, &registry);
-        assert_eq!(output["_skipped"], true);
-        assert_eq!(output["fingerprint"], Value::Null);
-        assert_eq!(output["_warnings"][0]["code"], "E_BAD_INPUT");
-        assert_eq!(
-            output["_warnings"][0]["detail"]["missing_field"],
-            "bytes_hash"
-        );
+        assert_eq!(output["outcome"], "REFUSAL");
+        assert_eq!(output["refusal"]["code"], "E_BAD_INPUT");
+        assert_eq!(output["refusal"]["detail"]["missing_field"], "bytes_hash");
     }
 
     #[test]

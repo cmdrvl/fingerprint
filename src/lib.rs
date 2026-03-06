@@ -297,6 +297,8 @@ fn handle_run_mode(cli: cli::Cli) -> u8 {
     use cli::exit::Outcome;
     use output::jsonl::write_jsonl;
     use pipeline::enricher::enrich_record_with_fingerprints;
+    use progress::reporter::{ProgressEvent, report_progress, report_warning};
+    use std::time::Instant;
     use witness::ledger::{append, ledger_path};
     use witness::record::{WitnessInput, WitnessRecord};
 
@@ -341,10 +343,31 @@ fn handle_run_mode(cli: cli::Cli) -> u8 {
     let _diagnose_guard = DiagnoseModeGuard::new(cli.diagnose);
 
     // Process records through enrichment pipeline
-    let enriched_records: Vec<serde_json::Value> = records
-        .into_iter()
-        .map(|record| enrich_record_with_fingerprints(&record, &registry, &cli.fingerprints))
-        .collect();
+    let total_records = u64::try_from(records.len()).unwrap_or(u64::MAX);
+    let started_at = Instant::now();
+    let mut enriched_records = Vec::with_capacity(records.len());
+    for (index, record) in records.into_iter().enumerate() {
+        let enriched = enrich_record_with_fingerprints(&record, &registry, &cli.fingerprints);
+        enriched_records.push(enriched);
+
+        if cli.progress {
+            let processed = u64::try_from(index + 1).unwrap_or(u64::MAX);
+            let percent = if total_records == 0 {
+                None
+            } else {
+                Some((processed as f64 / total_records as f64) * 100.0)
+            };
+            let elapsed_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+            report_progress(&ProgressEvent {
+                event_type: "progress".to_owned(),
+                tool: "fingerprint".to_owned(),
+                processed,
+                total: Some(total_records),
+                percent,
+                elapsed_ms,
+            });
+        }
+    }
 
     // Determine outcome for exit code
     let mut outcome = Outcome::AllMatched;
@@ -368,6 +391,7 @@ fn handle_run_mode(cli: cli::Cli) -> u8 {
             Outcome::Partial => "PARTIAL",
             Outcome::Refusal => "REFUSAL",
         };
+        let ledger_path = ledger_path();
         let witness_input_path = cli
             .input
             .as_ref()
@@ -394,13 +418,26 @@ fn handle_run_mode(cli: cli::Cli) -> u8 {
 
         match witness_record {
             Ok(record) => {
-                let ledger_path = ledger_path();
                 if let Err(error) = append(&ledger_path, &record) {
-                    eprintln!("Warning: Failed to record witness: {}", error);
+                    if cli.progress {
+                        report_warning(
+                            &ledger_path.display().to_string(),
+                            &format!("witness append failed: {error}"),
+                        );
+                    } else {
+                        eprintln!("Warning: Failed to record witness: {}", error);
+                    }
                 }
             }
             Err(error) => {
-                eprintln!("Warning: Failed to build witness record: {}", error);
+                if cli.progress {
+                    report_warning(
+                        &ledger_path.display().to_string(),
+                        &format!("failed to build witness record: {error}"),
+                    );
+                } else {
+                    eprintln!("Warning: Failed to build witness record: {}", error);
+                }
             }
         }
     }

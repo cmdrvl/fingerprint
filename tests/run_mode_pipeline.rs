@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, tempdir};
 
 fn repo_path(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
@@ -31,6 +31,68 @@ fn parse_jsonl(stdout: &[u8]) -> Vec<Value> {
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).expect("parse JSON line"))
         .collect()
+}
+
+#[test]
+fn run_mode_progress_flag_emits_structured_progress_events() {
+    let csv_path = repo_path("tests/fixtures/files/sample.csv");
+    let manifest = write_jsonl(&[json!({
+        "version": "hash.v0",
+        "path": csv_path.display().to_string(),
+        "extension": ".csv",
+        "bytes_hash": "blake3:csv",
+        "tool_versions": { "hash": "0.1.0" }
+    })]);
+
+    let output = run_fingerprint(
+        manifest.path(),
+        &["--fp", "csv.v0", "--progress", "--no-witness"],
+    );
+
+    assert_eq!(output.status.code(), Some(0));
+    let stderr_lines = parse_jsonl(&output.stderr);
+    assert!(
+        stderr_lines
+            .iter()
+            .any(|line| line["type"] == "progress" && line["tool"] == "fingerprint"),
+        "progress mode should emit structured progress events to stderr"
+    );
+}
+
+#[test]
+fn run_mode_progress_flag_keeps_witness_failures_structured() {
+    let csv_path = repo_path("tests/fixtures/files/sample.csv");
+    let manifest = write_jsonl(&[json!({
+        "version": "hash.v0",
+        "path": csv_path.display().to_string(),
+        "extension": ".csv",
+        "bytes_hash": "blake3:csv",
+        "tool_versions": { "hash": "0.1.0" }
+    })]);
+    let temp_dir = tempdir().expect("create tempdir");
+    let blocker = temp_dir.path().join("blocked-parent");
+    std::fs::write(&blocker, "not a directory").expect("create blocker file");
+    let witness_path = blocker.join("witness.jsonl");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_fingerprint"))
+        .arg(manifest.path())
+        .args(["--fp", "csv.v0", "--progress"])
+        .env("EPISTEMIC_WITNESS", &witness_path)
+        .output()
+        .expect("run fingerprint binary");
+
+    assert_eq!(output.status.code(), Some(0));
+    let stderr_lines = parse_jsonl(&output.stderr);
+    assert!(
+        stderr_lines.iter().any(|line| {
+            line["type"] == "warning"
+                && line["path"] == witness_path.display().to_string()
+                && line["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("witness append failed"))
+        }),
+        "witness append failures should stay structured in progress mode"
+    );
 }
 
 #[test]

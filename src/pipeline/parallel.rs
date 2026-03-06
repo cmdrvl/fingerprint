@@ -22,11 +22,7 @@ where
     let mut ordered = Vec::with_capacity(records.len());
     let mut indexed = records.into_iter().enumerate();
 
-    loop {
-        let Some(first) = indexed.next() else {
-            break;
-        };
-
+    while let Some(first) = indexed.next() {
         let mut batch = Vec::with_capacity(in_flight_limit);
         batch.push(first);
         for _ in 1..in_flight_limit {
