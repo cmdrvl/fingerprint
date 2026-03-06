@@ -6,7 +6,10 @@ pub mod raw;
 pub mod text;
 pub mod xlsx;
 
-pub use dispatch::{open_document, open_document_from_path, open_document_with_text_path};
+pub use dispatch::{
+    open_document, open_document_from_path, open_document_from_path_with_text_path,
+    open_document_with_text_path,
+};
 pub use markdown::MarkdownDocument;
 use std::path::{Path, PathBuf};
 pub use text::TextDocument;

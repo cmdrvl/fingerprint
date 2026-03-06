@@ -42,9 +42,17 @@ pub fn open_document_with_text_path(
 
 /// Open a document using format dispatch from file extension inference.
 pub fn open_document_from_path(path: &Path) -> Result<Document, String> {
+    open_document_from_path_with_text_path(path, None)
+}
+
+/// Open a document using format dispatch from file extension inference, with optional text_path.
+pub fn open_document_from_path_with_text_path(
+    path: &Path,
+    text_path: Option<&Path>,
+) -> Result<Document, String> {
     let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
 
-    open_document_with_text_path(path, extension, None)
+    open_document_with_text_path(path, extension, text_path)
 }
 
 #[cfg(test)]
@@ -215,6 +223,23 @@ mod tests {
         match doc {
             Document::Markdown(_) => {} // Expected
             _ => panic!("Expected Markdown document"),
+        }
+    }
+
+    #[test]
+    fn open_document_from_path_loads_pdf_text_path_when_provided() {
+        let pdf = make_temp_file_with_extension("%PDF-1.4\n", "pdf");
+        let markdown = make_temp_file_with_extension("# Extracted\n\nBody", "md");
+        let doc = open_document_from_path_with_text_path(pdf.path(), Some(markdown.path()))
+            .expect("open document from path");
+
+        match doc {
+            Document::Pdf(pdf) => {
+                let text = pdf.text.expect("pdf text should be loaded");
+                assert_eq!(text.path, markdown.path());
+                assert_eq!(text.headings[0].text, "Extracted");
+            }
+            _ => panic!("Expected Pdf document"),
         }
     }
 

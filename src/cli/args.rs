@@ -100,6 +100,10 @@ pub enum Command {
         #[arg(long)]
         doc: PathBuf,
 
+        /// Pre-extracted markdown/text for PDF content inference
+        #[arg(long = "text-path")]
+        text_path: Option<PathBuf>,
+
         /// Field definitions YAML
         #[arg(long)]
         fields: PathBuf,
@@ -266,6 +270,8 @@ mod tests {
             "infer-schema",
             "--doc",
             "appraisal.md",
+            "--text-path",
+            "appraisal.extracted.md",
             "--fields",
             "fields.yaml",
             "--id",
@@ -296,11 +302,13 @@ mod tests {
         match infer_schema.command {
             Some(Command::InferSchema {
                 doc,
+                text_path,
                 fields,
                 id,
                 out,
             }) => {
                 assert_eq!(doc, PathBuf::from("appraisal.md"));
+                assert_eq!(text_path, Some(PathBuf::from("appraisal.extracted.md")));
                 assert_eq!(fields, PathBuf::from("fields.yaml"));
                 assert_eq!(id.as_deref(), Some("cbre-appraisal.v1"));
                 assert_eq!(out, Some(PathBuf::from("cbre.fp.yaml")));

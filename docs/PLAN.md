@@ -196,7 +196,8 @@ fingerprint infer-schema --doc <FILE> --fields <YAML> [OPTIONS]
 
 ##### Flags
 
-- `--doc <FILE>`: Single example document (any supported format, including pre-extracted markdown/text).
+- `--doc <FILE>`: Single example document (markdown, text, or PDF).
+- `--text-path <FILE>`: Pre-extracted markdown/text companion for PDF inputs.
 - `--fields <YAML>`: YAML file mapping field names to example values found in the document.
 - `--id <ID>`: Fingerprint ID for the generated definition.
 - `--out <FILE>`: Output `.fp.yaml` path (default: stdout).

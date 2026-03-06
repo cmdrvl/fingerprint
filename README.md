@@ -56,7 +56,7 @@ Where `fields.yaml` is:
   value: "125,000 SF"
 ```
 
-Fingerprint locates each field value via hybrid search, finds the nearest stable anchor (heading, label, table header), and generates both the assertion and the extraction rule. One document in, production fingerprint out.
+Fingerprint locates each field value via hybrid search, finds the nearest stable anchor (heading, label, table header), and generates both the assertion and the extraction rule. One document in, production fingerprint out. For PDF inputs, pass pre-extracted markdown with `--text-path appraisal.md`.
 
 ### Chained fingerprints
 
@@ -369,7 +369,7 @@ fingerprint infer <DIR> --format <FORMAT> --id <ID> --out <FILE> \
   [--min-confidence <FLOAT>] [--no-extract]
 
 # Learn from one document + known field values
-fingerprint infer-schema --doc <FILE> --fields <YAML> --id <ID> --out <FILE>
+fingerprint infer-schema --doc <FILE> [--text-path <FILE>] --fields <YAML> --id <ID> --out <FILE>
 ```
 
 ### Exit codes

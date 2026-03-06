@@ -93,11 +93,13 @@ pub fn run() -> u8 {
         ),
         Some(Command::InferSchema {
             doc,
+            text_path,
             fields,
             id,
             out,
         }) => handle_infer_schema_command(
             &doc,
+            text_path.as_deref(),
             &fields,
             id.as_deref(),
             out.as_deref(),
@@ -813,12 +815,13 @@ fn handle_infer_command(
 /// Handle the infer-schema subcommand.
 fn handle_infer_schema_command(
     doc_path: &std::path::Path,
+    text_path: Option<&std::path::Path>,
     fields_path: &std::path::Path,
     id: Option<&str>,
     out_path: Option<&std::path::Path>,
     append_witness_record: bool,
 ) -> u8 {
-    use crate::document::open_document_from_path;
+    use crate::document::open_document_from_path_with_text_path;
     use crate::infer::schema;
     use std::fs;
     use witness::ledger::{append, ledger_path};
@@ -832,7 +835,7 @@ fn handle_infer_schema_command(
         }
     };
 
-    let document = match open_document_from_path(doc_path) {
+    let document = match open_document_from_path_with_text_path(doc_path, text_path) {
         Ok(document) => document,
         Err(error) => {
             eprintln!(
@@ -887,24 +890,31 @@ fn handle_infer_schema_command(
 
     if append_witness_record {
         let output_hash = format!("blake3:{}", blake3::hash(yaml.as_bytes()).to_hex());
+        let mut inputs = vec![WitnessInput {
+            path: doc_path.display().to_string(),
+            hash: None,
+            bytes: None,
+        }];
+        if let Some(path) = text_path {
+            inputs.push(WitnessInput {
+                path: path.display().to_string(),
+                hash: None,
+                bytes: None,
+            });
+        }
+        inputs.push(WitnessInput {
+            path: fields_path.display().to_string(),
+            hash: None,
+            bytes: None,
+        });
         let witness = WitnessRecord::new(
             env!("CARGO_PKG_VERSION").to_owned(),
             "blake3:unknown".to_owned(),
-            vec![
-                WitnessInput {
-                    path: doc_path.display().to_string(),
-                    hash: None,
-                    bytes: None,
-                },
-                WitnessInput {
-                    path: fields_path.display().to_string(),
-                    hash: None,
-                    bytes: None,
-                },
-            ],
+            inputs,
             serde_json::json!({
                 "mode": "infer-schema",
                 "id": fingerprint_id,
+                "text_path": text_path.map(|path| path.display().to_string()),
                 "located_fields": result.located_fields,
                 "missing_fields": result.missing_fields,
             }),
