@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -121,11 +121,65 @@ pub enum Command {
 #[derive(Debug, Subcommand)]
 pub enum WitnessAction {
     /// Query witness records
-    Query,
+    Query {
+        #[command(flatten)]
+        filters: WitnessFilters,
+
+        /// Emit a JSON array instead of JSONL
+        #[arg(long)]
+        json: bool,
+    },
     /// Show last witness record
-    Last,
+    Last {
+        #[command(flatten)]
+        filters: WitnessFilters,
+
+        /// Emit JSON output
+        #[arg(long)]
+        json: bool,
+    },
     /// Count witness records
-    Count,
+    Count {
+        #[command(flatten)]
+        filters: WitnessFilters,
+
+        /// Emit JSON output
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Args, Clone, Default, PartialEq, Eq)]
+pub struct WitnessFilters {
+    /// Restrict matches to a specific tool
+    #[arg(long)]
+    pub tool: Option<String>,
+
+    /// Only include records at or after this RFC3339 timestamp
+    #[arg(long)]
+    pub since: Option<String>,
+
+    /// Only include records at or before this RFC3339 timestamp
+    #[arg(long)]
+    pub until: Option<String>,
+
+    /// Only include records with this outcome
+    #[arg(long)]
+    pub outcome: Option<String>,
+
+    /// Only include records whose inputs include this hash
+    #[arg(long = "input-hash")]
+    pub input_hash: Option<String>,
+}
+
+impl WitnessFilters {
+    pub fn is_active(&self) -> bool {
+        self.tool.is_some()
+            || self.since.is_some()
+            || self.until.is_some()
+            || self.outcome.is_some()
+            || self.input_hash.is_some()
+    }
 }
 
 #[cfg(test)]
@@ -171,19 +225,19 @@ mod tests {
             "--check",
         ]);
 
-        match cli.command {
-            Some(Command::Compile {
-                yaml,
-                out,
-                check,
-                schema,
-            }) => {
-                assert_eq!(yaml, Some(PathBuf::from("argus-model.fp.yaml")));
-                assert_eq!(out, Some(PathBuf::from("out-dir")));
-                assert!(check);
-                assert!(!schema);
-            }
-            other => panic!("unexpected command: {other:?}"),
+        let command = cli.command;
+        assert!(matches!(command, Some(Command::Compile { .. })));
+        if let Some(Command::Compile {
+            yaml,
+            out,
+            check,
+            schema,
+        }) = command
+        {
+            assert_eq!(yaml, Some(PathBuf::from("argus-model.fp.yaml")));
+            assert_eq!(out, Some(PathBuf::from("out-dir")));
+            assert!(check);
+            assert!(!schema);
         }
     }
 
@@ -191,45 +245,103 @@ mod tests {
     fn parses_compile_schema_subcommand_without_yaml() {
         let cli = Cli::parse_from(["fingerprint", "compile", "--schema"]);
 
-        match cli.command {
-            Some(Command::Compile {
-                yaml,
-                out,
-                check,
-                schema,
-            }) => {
-                assert_eq!(yaml, None);
-                assert_eq!(out, None);
-                assert!(!check);
-                assert!(schema);
-            }
-            other => panic!("unexpected command: {other:?}"),
+        let command = cli.command;
+        assert!(matches!(command, Some(Command::Compile { .. })));
+        if let Some(Command::Compile {
+            yaml,
+            out,
+            check,
+            schema,
+        }) = command
+        {
+            assert_eq!(yaml, None);
+            assert_eq!(out, None);
+            assert!(!check);
+            assert!(schema);
         }
     }
 
     #[test]
     fn parses_witness_subcommands() {
-        let query = Cli::parse_from(["fingerprint", "witness", "query"]);
-        let last = Cli::parse_from(["fingerprint", "witness", "last"]);
-        let count = Cli::parse_from(["fingerprint", "witness", "count"]);
+        let query = Cli::parse_from([
+            "fingerprint",
+            "witness",
+            "query",
+            "--tool",
+            "fingerprint",
+            "--since",
+            "2026-01-01T00:00:00Z",
+            "--until",
+            "2026-01-31T23:59:59Z",
+            "--outcome",
+            "ALL_MATCHED",
+            "--input-hash",
+            "blake3:abc",
+            "--json",
+        ]);
+        let last = Cli::parse_from([
+            "fingerprint",
+            "witness",
+            "last",
+            "--tool",
+            "fingerprint",
+            "--json",
+        ]);
+        let count = Cli::parse_from([
+            "fingerprint",
+            "witness",
+            "count",
+            "--since",
+            "2026-02-01T00:00:00Z",
+        ]);
 
-        match query.command {
+        let query_command = query.command;
+        assert!(matches!(
+            query_command,
             Some(Command::Witness {
-                action: WitnessAction::Query,
-            }) => {}
-            other => panic!("unexpected witness query command: {other:?}"),
+                action: WitnessAction::Query { .. }
+            })
+        ));
+        if let Some(Command::Witness {
+            action: WitnessAction::Query { filters, json },
+        }) = query_command
+        {
+            assert_eq!(filters.tool.as_deref(), Some("fingerprint"));
+            assert_eq!(filters.since.as_deref(), Some("2026-01-01T00:00:00Z"));
+            assert_eq!(filters.until.as_deref(), Some("2026-01-31T23:59:59Z"));
+            assert_eq!(filters.outcome.as_deref(), Some("ALL_MATCHED"));
+            assert_eq!(filters.input_hash.as_deref(), Some("blake3:abc"));
+            assert!(json);
         }
-        match last.command {
+
+        let last_command = last.command;
+        assert!(matches!(
+            last_command,
             Some(Command::Witness {
-                action: WitnessAction::Last,
-            }) => {}
-            other => panic!("unexpected witness last command: {other:?}"),
+                action: WitnessAction::Last { .. }
+            })
+        ));
+        if let Some(Command::Witness {
+            action: WitnessAction::Last { filters, json },
+        }) = last_command
+        {
+            assert_eq!(filters.tool.as_deref(), Some("fingerprint"));
+            assert!(json);
         }
-        match count.command {
+
+        let count_command = count.command;
+        assert!(matches!(
+            count_command,
             Some(Command::Witness {
-                action: WitnessAction::Count,
-            }) => {}
-            other => panic!("unexpected witness count command: {other:?}"),
+                action: WitnessAction::Count { .. }
+            })
+        ));
+        if let Some(Command::Witness {
+            action: WitnessAction::Count { filters, json },
+        }) = count_command
+        {
+            assert_eq!(filters.since.as_deref(), Some("2026-02-01T00:00:00Z"));
+            assert!(!json);
         }
     }
 
@@ -280,40 +392,43 @@ mod tests {
             "cbre.fp.yaml",
         ]);
 
-        match infer.command {
-            Some(Command::Infer {
-                dir,
-                format,
-                id,
-                min_confidence,
-                no_extract,
-                out,
-            }) => {
-                assert_eq!(dir, PathBuf::from("fixtures"));
-                assert_eq!(format, "xlsx");
-                assert_eq!(id, "argus-model.v1");
-                assert_eq!(min_confidence, 0.95);
-                assert!(no_extract);
-                assert_eq!(out, Some(PathBuf::from("out.fp.yaml")));
-            }
-            other => panic!("unexpected infer command: {other:?}"),
+        let infer_command = infer.command;
+        assert!(matches!(infer_command, Some(Command::Infer { .. })));
+        if let Some(Command::Infer {
+            dir,
+            format,
+            id,
+            min_confidence,
+            no_extract,
+            out,
+        }) = infer_command
+        {
+            assert_eq!(dir, PathBuf::from("fixtures"));
+            assert_eq!(format, "xlsx");
+            assert_eq!(id, "argus-model.v1");
+            assert_eq!(min_confidence, 0.95);
+            assert!(no_extract);
+            assert_eq!(out, Some(PathBuf::from("out.fp.yaml")));
         }
 
-        match infer_schema.command {
-            Some(Command::InferSchema {
-                doc,
-                text_path,
-                fields,
-                id,
-                out,
-            }) => {
-                assert_eq!(doc, PathBuf::from("appraisal.md"));
-                assert_eq!(text_path, Some(PathBuf::from("appraisal.extracted.md")));
-                assert_eq!(fields, PathBuf::from("fields.yaml"));
-                assert_eq!(id.as_deref(), Some("cbre-appraisal.v1"));
-                assert_eq!(out, Some(PathBuf::from("cbre.fp.yaml")));
-            }
-            other => panic!("unexpected infer-schema command: {other:?}"),
+        let infer_schema_command = infer_schema.command;
+        assert!(matches!(
+            infer_schema_command,
+            Some(Command::InferSchema { .. })
+        ));
+        if let Some(Command::InferSchema {
+            doc,
+            text_path,
+            fields,
+            id,
+            out,
+        }) = infer_schema_command
+        {
+            assert_eq!(doc, PathBuf::from("appraisal.md"));
+            assert_eq!(text_path, Some(PathBuf::from("appraisal.extracted.md")));
+            assert_eq!(fields, PathBuf::from("fields.yaml"));
+            assert_eq!(id.as_deref(), Some("cbre-appraisal.v1"));
+            assert_eq!(out, Some(PathBuf::from("cbre.fp.yaml")));
         }
     }
 }

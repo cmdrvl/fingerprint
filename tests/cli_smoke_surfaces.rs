@@ -1,4 +1,4 @@
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -38,6 +38,16 @@ fn manifest_with_content(content: &str) -> NamedTempFile {
     let manifest = NamedTempFile::new().expect("create temp manifest");
     fs::write(manifest.path(), content).expect("write manifest");
     manifest
+}
+
+fn write_witness_ledger(witness_path: &Path, records: &[Value]) {
+    let mut contents = records
+        .iter()
+        .map(|record| serde_json::to_string(record).expect("serialize witness fixture"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    contents.push('\n');
+    fs::write(witness_path, contents).expect("write witness ledger");
 }
 
 #[test]
@@ -172,4 +182,168 @@ fn smoke_witness_query_last_count() {
         .expect("query should return at least one witness record");
     let query_json: Value = serde_json::from_str(first_line).expect("query line should be JSON");
     assert_eq!(query_json["tool"], "fingerprint");
+}
+
+#[test]
+fn smoke_witness_filters_and_exit_codes() {
+    let tempdir = tempfile::tempdir().expect("create tempdir");
+    let witness_path = tempdir.path().join("witness.jsonl");
+    write_witness_ledger(
+        &witness_path,
+        &[
+            json!({
+                "id": "blake3:one",
+                "tool": "fingerprint",
+                "version": "0.1.0",
+                "binary_hash": "blake3:binary",
+                "inputs": [{ "path": "stdin", "hash": "blake3:keep-1", "bytes": 10 }],
+                "params": { "fingerprints": ["csv.v0"] },
+                "outcome": "ALL_MATCHED",
+                "exit_code": 0,
+                "output_hash": "blake3:out-1",
+                "prev": null,
+                "ts": "2026-02-01T00:00:00Z"
+            }),
+            json!({
+                "id": "blake3:two",
+                "tool": "fingerprint",
+                "version": "0.1.0",
+                "binary_hash": "blake3:binary",
+                "inputs": [{ "path": "stdin", "hash": "blake3:keep-2", "bytes": 20 }],
+                "params": { "fingerprints": ["csv.v0"] },
+                "outcome": "PARTIAL",
+                "exit_code": 1,
+                "output_hash": "blake3:out-2",
+                "prev": "blake3:one",
+                "ts": "2026-02-02T00:00:00Z"
+            }),
+            json!({
+                "id": "blake3:three",
+                "tool": "hash",
+                "version": "0.1.0",
+                "binary_hash": "blake3:binary",
+                "inputs": [{ "path": "stdin", "hash": "blake3:keep-3", "bytes": 30 }],
+                "params": {},
+                "outcome": "ALL_HASHED",
+                "exit_code": 0,
+                "output_hash": "blake3:out-3",
+                "prev": "blake3:two",
+                "ts": "2026-02-03T00:00:00Z"
+            }),
+        ],
+    );
+
+    let query = run_fingerprint_with_witness(
+        &[
+            "witness",
+            "query",
+            "--tool",
+            "fingerprint",
+            "--outcome",
+            "PARTIAL",
+            "--json",
+        ],
+        &witness_path,
+    );
+    assert_eq!(query.status.code(), Some(0));
+    let query_json: Vec<Value> =
+        serde_json::from_slice(&query.stdout).expect("query output should be JSON");
+    assert_eq!(query_json.len(), 1);
+    assert_eq!(query_json[0]["id"], "blake3:two");
+
+    let last = run_fingerprint_with_witness(
+        &[
+            "witness",
+            "last",
+            "--tool",
+            "fingerprint",
+            "--since",
+            "2026-02-02T00:00:00Z",
+            "--json",
+        ],
+        &witness_path,
+    );
+    assert_eq!(last.status.code(), Some(0));
+    let last_json: Value =
+        serde_json::from_slice(&last.stdout).expect("last output should be JSON");
+    assert_eq!(last_json["id"], "blake3:two");
+
+    let count = run_fingerprint_with_witness(
+        &[
+            "witness",
+            "count",
+            "--tool",
+            "fingerprint",
+            "--input-hash",
+            "keep",
+            "--json",
+        ],
+        &witness_path,
+    );
+    assert_eq!(count.status.code(), Some(0));
+    let count_json: Value =
+        serde_json::from_slice(&count.stdout).expect("count output should be JSON");
+    assert_eq!(count_json["count"], 2);
+
+    let no_matches = run_fingerprint_with_witness(
+        &[
+            "witness",
+            "query",
+            "--tool",
+            "fingerprint",
+            "--since",
+            "2027-01-01T00:00:00Z",
+            "--json",
+        ],
+        &witness_path,
+    );
+    assert_eq!(no_matches.status.code(), Some(1));
+    let no_match_json: Vec<Value> =
+        serde_json::from_slice(&no_matches.stdout).expect("no-match query should be JSON");
+    assert!(no_match_json.is_empty());
+
+    let zero_count = run_fingerprint_with_witness(
+        &[
+            "witness",
+            "count",
+            "--tool",
+            "fingerprint",
+            "--since",
+            "2027-01-01T00:00:00Z",
+        ],
+        &witness_path,
+    );
+    assert_eq!(zero_count.status.code(), Some(1));
+    let zero_count_stdout = String::from_utf8(zero_count.stdout).expect("count output utf8");
+    assert_eq!(zero_count_stdout.trim(), "0");
+}
+
+#[test]
+fn smoke_witness_invalid_timestamp_filter_exits_two() {
+    let tempdir = tempfile::tempdir().expect("create tempdir");
+    let witness_path = tempdir.path().join("witness.jsonl");
+    write_witness_ledger(
+        &witness_path,
+        &[json!({
+            "id": "blake3:one",
+            "tool": "fingerprint",
+            "version": "0.1.0",
+            "binary_hash": "blake3:binary",
+            "inputs": [],
+            "params": {},
+            "outcome": "ALL_MATCHED",
+            "exit_code": 0,
+            "output_hash": "blake3:out-1",
+            "prev": null,
+            "ts": "2026-02-01T00:00:00Z"
+        })],
+    );
+
+    let query = run_fingerprint_with_witness(
+        &["witness", "query", "--since", "not-a-timestamp", "--json"],
+        &witness_path,
+    );
+    assert_eq!(query.status.code(), Some(2));
+    let stderr = String::from_utf8(query.stderr).expect("stderr utf8");
+    assert!(stderr.contains("invalid --since"));
 }

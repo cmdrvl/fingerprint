@@ -535,6 +535,8 @@ fingerprint witness last --json
 fingerprint witness count --since 2026-02-01
 ```
 
+`query`, `last`, and `count` accept the same optional witness filters: `--tool`, `--since`, `--until`, `--outcome`, and `--input-hash`.
+
 | Exit code | Meaning |
 |-----------|---------|
 | `0` | Matching records found |

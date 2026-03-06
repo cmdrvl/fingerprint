@@ -246,34 +246,79 @@ fn handle_list() -> u8 {
 /// Handle witness subcommands.
 fn handle_witness_command(action: cli::WitnessAction) -> u8 {
     use cli::WitnessAction;
+    use serde_json::json;
     use witness::{ledger::ledger_path, query};
 
     let ledger_path = ledger_path();
 
     match action {
-        WitnessAction::Query => match query::query(&ledger_path) {
+        WitnessAction::Query { filters, json } => match query::query(&ledger_path, &filters) {
             Ok(records) => {
-                for record in records {
-                    if let Ok(json) = serde_json::to_string(&record) {
-                        println!("{}", json);
+                if json {
+                    match serde_json::to_string(&records) {
+                        Ok(json_output) => println!("{}", json_output),
+                        Err(error) => {
+                            eprintln!("Error serializing witness records: {}", error);
+                            return 2;
+                        }
+                    }
+                } else {
+                    for record in &records {
+                        match serde_json::to_string(record) {
+                            Ok(record_json) => println!("{}", record_json),
+                            Err(error) => {
+                                eprintln!("Error serializing witness record: {}", error);
+                                return 2;
+                            }
+                        }
                     }
                 }
-                0
+
+                if records.is_empty() {
+                    if !json {
+                        eprintln!(
+                            "{}",
+                            if filters.is_active() {
+                                "No matching witness records found"
+                            } else {
+                                "No witness records found"
+                            }
+                        );
+                    }
+                    1
+                } else {
+                    0
+                }
             }
             Err(error) => {
                 eprintln!("Error querying witness: {}", error);
                 2
             }
         },
-        WitnessAction::Last => match query::last(&ledger_path) {
+        WitnessAction::Last { filters, json } => match query::last(&ledger_path, &filters) {
             Ok(Some(record)) => {
-                if let Ok(json) = serde_json::to_string(&record) {
-                    println!("{}", json);
+                match serde_json::to_string(&record) {
+                    Ok(record_json) => println!("{}", record_json),
+                    Err(error) => {
+                        eprintln!("Error serializing witness record: {}", error);
+                        return 2;
+                    }
                 }
                 0
             }
             Ok(None) => {
-                eprintln!("No witness records found");
+                if json {
+                    println!("null");
+                } else {
+                    eprintln!(
+                        "{}",
+                        if filters.is_active() {
+                            "No matching witness records found"
+                        } else {
+                            "No witness records found"
+                        }
+                    );
+                }
                 1
             }
             Err(error) => {
@@ -281,10 +326,14 @@ fn handle_witness_command(action: cli::WitnessAction) -> u8 {
                 2
             }
         },
-        WitnessAction::Count => match query::count(&ledger_path) {
+        WitnessAction::Count { filters, json } => match query::count(&ledger_path, &filters) {
             Ok(count) => {
-                println!("{}", count);
-                0
+                if json {
+                    println!("{}", json!({ "count": count }));
+                } else {
+                    println!("{}", count);
+                }
+                if count == 0 { 1 } else { 0 }
             }
             Err(error) => {
                 eprintln!("Error querying witness: {}", error);
