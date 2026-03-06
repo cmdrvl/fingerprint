@@ -33,6 +33,15 @@ fn parse_jsonl(stdout: &[u8]) -> Vec<Value> {
         .collect()
 }
 
+fn parse_witness_ledger(path: &Path) -> Vec<Value> {
+    let contents = std::fs::read_to_string(path).expect("read witness ledger");
+    contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("parse witness line"))
+        .collect()
+}
+
 #[test]
 fn run_mode_progress_flag_emits_structured_progress_events() {
     let csv_path = repo_path("tests/fixtures/files/sample.csv");
@@ -173,6 +182,100 @@ fn run_mode_parse_failure_creates_new_skipped_and_exit_one() {
     assert_eq!(lines[0]["_skipped"], true);
     assert_eq!(lines[0]["fingerprint"], Value::Null);
     assert_eq!(lines[0]["_warnings"][0]["code"], "E_PARSE");
+}
+
+#[test]
+fn run_mode_witness_records_exact_output_hash_and_prev_chain() {
+    let csv_path = repo_path("tests/fixtures/files/sample.csv");
+    let manifest = write_jsonl(&[json!({
+        "version": "hash.v0",
+        "path": csv_path.display().to_string(),
+        "extension": ".csv",
+        "bytes_hash": "blake3:csv",
+        "tool_versions": { "hash": "0.1.0" }
+    })]);
+    let witness_dir = tempdir().expect("create witness tempdir");
+    let witness_path = witness_dir.path().join("witness.jsonl");
+
+    let first = Command::new(env!("CARGO_BIN_EXE_fingerprint"))
+        .arg(manifest.path())
+        .args(["--fp", "csv.v0"])
+        .env("EPISTEMIC_WITNESS", &witness_path)
+        .output()
+        .expect("run fingerprint binary");
+    let second = Command::new(env!("CARGO_BIN_EXE_fingerprint"))
+        .arg(manifest.path())
+        .args(["--fp", "csv.v0"])
+        .env("EPISTEMIC_WITNESS", &witness_path)
+        .output()
+        .expect("run fingerprint binary");
+
+    assert_eq!(first.status.code(), Some(0));
+    assert_eq!(second.status.code(), Some(0));
+
+    let witness_rows = parse_witness_ledger(&witness_path);
+    assert_eq!(witness_rows.len(), 2);
+
+    let manifest_bytes = std::fs::read(manifest.path()).expect("read manifest bytes");
+    let expected_input_hash = format!("blake3:{}", blake3::hash(&manifest_bytes).to_hex());
+    let expected_first_output_hash = format!("blake3:{}", blake3::hash(&first.stdout).to_hex());
+    let expected_second_output_hash = format!("blake3:{}", blake3::hash(&second.stdout).to_hex());
+
+    assert_eq!(
+        witness_rows[0]["inputs"][0]["path"],
+        manifest.path().display().to_string()
+    );
+    assert_eq!(witness_rows[0]["inputs"][0]["hash"], expected_input_hash);
+    assert_eq!(
+        witness_rows[0]["inputs"][0]["bytes"],
+        u64::try_from(manifest_bytes.len()).expect("manifest length fits u64")
+    );
+    assert_eq!(witness_rows[0]["output_hash"], expected_first_output_hash);
+    assert!(
+        witness_rows[0]["binary_hash"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("blake3:"))
+    );
+    assert!(witness_rows[0]["prev"].is_null());
+    assert_eq!(witness_rows[1]["prev"], witness_rows[0]["id"]);
+    assert_eq!(witness_rows[1]["output_hash"], expected_second_output_hash);
+}
+
+#[test]
+fn run_mode_refusal_appends_witness_record() {
+    let mut manifest = NamedTempFile::new().expect("create malformed manifest");
+    writeln!(
+        manifest,
+        "{{\"version\":\"hash.v0\",\"path\":\"{}\",\"extension\":\".csv\",\"bytes_hash\":\"blake3:csv\"}}",
+        repo_path("tests/fixtures/files/sample.csv").display()
+    )
+    .expect("write first manifest line");
+    writeln!(manifest, "{{\"version\":\"hash.v0\",\"path\":").expect("write malformed line");
+    manifest.flush().expect("flush malformed manifest");
+
+    let witness_dir = tempdir().expect("create witness tempdir");
+    let witness_path = witness_dir.path().join("witness.jsonl");
+    let output = Command::new(env!("CARGO_BIN_EXE_fingerprint"))
+        .arg(manifest.path())
+        .args(["--fp", "csv.v0"])
+        .env("EPISTEMIC_WITNESS", &witness_path)
+        .output()
+        .expect("run fingerprint binary");
+
+    assert_eq!(output.status.code(), Some(2));
+
+    let witness_rows = parse_witness_ledger(&witness_path);
+    assert_eq!(witness_rows.len(), 1);
+    assert_eq!(witness_rows[0]["outcome"], "REFUSAL");
+    assert_eq!(witness_rows[0]["exit_code"], 2);
+    assert_eq!(
+        witness_rows[0]["output_hash"],
+        format!("blake3:{}", blake3::hash(&output.stdout).to_hex())
+    );
+    assert_eq!(
+        witness_rows[0]["inputs"][0]["path"],
+        manifest.path().display().to_string()
+    );
 }
 
 #[test]

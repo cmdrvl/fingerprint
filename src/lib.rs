@@ -112,6 +112,148 @@ pub fn run() -> u8 {
     }
 }
 
+fn serialize_records_to_jsonl_bytes(records: &[serde_json::Value]) -> Result<Vec<u8>, String> {
+    let mut output = Vec::new();
+    output::jsonl::write_jsonl(&mut output, records)?;
+    Ok(output)
+}
+
+fn serialize_refusal_envelope_bytes(
+    refusal: &refusal::codes::RefusalEnvelope,
+) -> Result<Vec<u8>, String> {
+    let mut output = serde_json::to_vec(refusal)
+        .map_err(|error| format!("failed to serialize refusal envelope: {error}"))?;
+    output.push(b'\n');
+    Ok(output)
+}
+
+fn write_stdout_bytes(bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+
+    let mut stdout = std::io::stdout();
+    stdout
+        .write_all(bytes)
+        .map_err(|error| format!("failed to write JSONL output: {error}"))?;
+    stdout
+        .flush()
+        .map_err(|error| format!("failed to flush JSONL output: {error}"))?;
+    Ok(())
+}
+
+fn current_binary_hash() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| std::fs::read(path).ok())
+        .map(|bytes| format!("blake3:{}", blake3::hash(&bytes).to_hex()))
+        .unwrap_or_else(|| "blake3:unknown".to_owned())
+}
+
+fn describe_run_input(input_path: Option<&std::path::Path>) -> witness::record::WitnessInput {
+    match input_path {
+        Some(path) => {
+            let (hash, bytes) = match std::fs::read(path) {
+                Ok(contents) => (
+                    Some(format!("blake3:{}", blake3::hash(&contents).to_hex())),
+                    Some(u64::try_from(contents.len()).unwrap_or(u64::MAX)),
+                ),
+                Err(_) => (None, None),
+            };
+
+            witness::record::WitnessInput {
+                path: path.display().to_string(),
+                hash,
+                bytes,
+            }
+        }
+        None => witness::record::WitnessInput {
+            path: "stdin".to_owned(),
+            hash: None,
+            bytes: None,
+        },
+    }
+}
+
+fn last_witness_id(ledger_path: &std::path::Path) -> Option<String> {
+    let content = std::fs::read_to_string(ledger_path).ok()?;
+    let line = content.lines().rev().find(|line| !line.trim().is_empty())?;
+    let record = serde_json::from_str::<serde_json::Value>(line).ok()?;
+    record.get("id")?.as_str().map(ToOwned::to_owned)
+}
+
+fn append_run_mode_witness(cli: &cli::Cli, outcome: cli::exit::Outcome, output_bytes: &[u8]) {
+    use progress::reporter::report_warning;
+    use witness::ledger::{append, ledger_path};
+    use witness::record::WitnessRecord;
+
+    if cli.no_witness {
+        return;
+    }
+
+    let ledger_path = ledger_path();
+    let witness_record = WitnessRecord::new(
+        env!("CARGO_PKG_VERSION").to_owned(),
+        current_binary_hash(),
+        vec![describe_run_input(cli.input.as_deref())],
+        serde_json::json!({
+            "fingerprints": cli.fingerprints,
+            "input": cli.input.as_ref().map(|path| path.display().to_string())
+        }),
+        match outcome {
+            cli::exit::Outcome::AllMatched => "ALL_MATCHED",
+            cli::exit::Outcome::Partial => "PARTIAL",
+            cli::exit::Outcome::Refusal => "REFUSAL",
+        }
+        .to_owned(),
+        outcome.exit_code(),
+        format!("blake3:{}", blake3::hash(output_bytes).to_hex()),
+        last_witness_id(&ledger_path),
+        chrono::Utc::now().to_rfc3339(),
+    );
+
+    match witness_record {
+        Ok(record) => {
+            if let Err(error) = append(&ledger_path, &record) {
+                if cli.progress {
+                    report_warning(
+                        &ledger_path.display().to_string(),
+                        &format!("witness append failed: {error}"),
+                    );
+                } else {
+                    eprintln!("Warning: Failed to record witness: {}", error);
+                }
+            }
+        }
+        Err(error) => {
+            if cli.progress {
+                report_warning(
+                    &ledger_path.display().to_string(),
+                    &format!("failed to build witness record: {error}"),
+                );
+            } else {
+                eprintln!("Warning: Failed to build witness record: {}", error);
+            }
+        }
+    }
+}
+
+fn emit_run_mode_refusal(cli: &cli::Cli, refusal: &refusal::codes::RefusalEnvelope) -> u8 {
+    let output_bytes = match serialize_refusal_envelope_bytes(refusal) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("Error serializing refusal output: {}", error);
+            return 2;
+        }
+    };
+
+    if let Err(error) = write_stdout_bytes(&output_bytes) {
+        eprintln!("Error writing refusal output: {}", error);
+        return 2;
+    }
+
+    append_run_mode_witness(cli, cli::exit::Outcome::Refusal, &output_bytes);
+    2
+}
+
 /// Handle the compile subcommand.
 #[allow(clippy::result_large_err)]
 fn handle_compile_command(
@@ -346,12 +488,9 @@ fn handle_witness_command(action: cli::WitnessAction) -> u8 {
 /// Handle default run mode (fingerprint processing).
 fn handle_run_mode(cli: cli::Cli) -> u8 {
     use cli::exit::Outcome;
-    use output::jsonl::write_jsonl;
     use pipeline::enricher::enrich_record_with_fingerprints;
-    use progress::reporter::{ProgressEvent, report_progress, report_warning};
+    use progress::reporter::{ProgressEvent, report_progress};
     use std::time::Instant;
-    use witness::ledger::{append, ledger_path};
-    use witness::record::{WitnessInput, WitnessRecord};
 
     // Validate fingerprint IDs provided
     if cli.fingerprints.is_empty() {
@@ -362,10 +501,7 @@ fn handle_run_mode(cli: cli::Cli) -> u8 {
     // Build registry
     let registry = match build_registry() {
         Ok(reg) => reg,
-        Err(refusal) => {
-            output_refusal_envelope(&refusal);
-            return 2;
-        }
+        Err(refusal) => return emit_run_mode_refusal(&cli, &refusal),
     };
 
     // Validate fingerprint IDs exist
@@ -373,22 +509,17 @@ fn handle_run_mode(cli: cli::Cli) -> u8 {
         if registry.get(fp_id).is_none() {
             let available: Vec<String> = registry.list().iter().map(|fp| fp.id.clone()).collect();
             let refusal = build_unknown_fp_refusal(fp_id, available);
-            output_refusal_envelope(&refusal);
-            return 2;
+            return emit_run_mode_refusal(&cli, &refusal);
         }
     }
     if let Err(refusal) = validate_orphan_children(&registry, &cli.fingerprints) {
-        output_refusal_envelope(&refusal);
-        return 2;
+        return emit_run_mode_refusal(&cli, &refusal);
     }
 
     // Read input records
     let records = match read_input_records(&cli.input) {
         Ok(recs) => recs,
-        Err(error) => {
-            output_refusal_envelope(&build_bad_input_refusal(error));
-            return 2;
-        }
+        Err(error) => return emit_run_mode_refusal(&cli, &build_bad_input_refusal(error)),
     };
 
     let _diagnose_guard = DiagnoseModeGuard::new(cli.diagnose);
@@ -428,70 +559,20 @@ fn handle_run_mode(cli: cli::Cli) -> u8 {
         }
     }
 
-    // Write output
-    let mut stdout = std::io::stdout();
-    if let Err(error) = write_jsonl(&mut stdout, &enriched_records) {
+    let output_bytes = match serialize_records_to_jsonl_bytes(&enriched_records) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("Error serializing output: {}", error);
+            return 2;
+        }
+    };
+
+    if let Err(error) = write_stdout_bytes(&output_bytes) {
         eprintln!("Error writing output: {}", error);
         return 2;
     }
 
-    // Append witness record (unless --no-witness)
-    if !cli.no_witness {
-        let outcome_text = match outcome {
-            Outcome::AllMatched => "ALL_MATCHED",
-            Outcome::Partial => "PARTIAL",
-            Outcome::Refusal => "REFUSAL",
-        };
-        let ledger_path = ledger_path();
-        let witness_input_path = cli
-            .input
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "stdin".to_owned());
-        let witness_record = WitnessRecord::new(
-            env!("CARGO_PKG_VERSION").to_owned(),
-            "blake3:unknown".to_owned(),
-            vec![WitnessInput {
-                path: witness_input_path,
-                hash: None,
-                bytes: None,
-            }],
-            serde_json::json!({
-                "fingerprints": cli.fingerprints,
-                "input": cli.input.as_ref().map(|path| path.display().to_string())
-            }),
-            outcome_text.to_owned(),
-            outcome.exit_code(),
-            "blake3:unknown".to_owned(),
-            None,
-            chrono::Utc::now().to_rfc3339(),
-        );
-
-        match witness_record {
-            Ok(record) => {
-                if let Err(error) = append(&ledger_path, &record) {
-                    if cli.progress {
-                        report_warning(
-                            &ledger_path.display().to_string(),
-                            &format!("witness append failed: {error}"),
-                        );
-                    } else {
-                        eprintln!("Warning: Failed to record witness: {}", error);
-                    }
-                }
-            }
-            Err(error) => {
-                if cli.progress {
-                    report_warning(
-                        &ledger_path.display().to_string(),
-                        &format!("failed to build witness record: {error}"),
-                    );
-                } else {
-                    eprintln!("Warning: Failed to build witness record: {}", error);
-                }
-            }
-        }
-    }
+    append_run_mode_witness(&cli, outcome, &output_bytes);
 
     outcome.exit_code()
 }
