@@ -87,6 +87,34 @@ fn smoke_describe_schema_and_list_exit_zero() {
 }
 
 #[test]
+fn smoke_display_flags_short_circuit_before_arg_validation() {
+    let describe = run_fingerprint(&["--describe", "--jobs", "nope"]);
+    assert_eq!(describe.status.code(), Some(0));
+    let describe_json: Value =
+        serde_json::from_slice(&describe.stdout).expect("describe should be valid JSON");
+    assert_eq!(describe_json["name"], "fingerprint");
+
+    let schema = run_fingerprint(&["--schema", "--jobs", "nope"]);
+    assert_eq!(schema.status.code(), Some(0));
+    let schema_json: Value =
+        serde_json::from_slice(&schema.stdout).expect("schema should be valid JSON");
+    assert!(schema_json.get("properties").is_some());
+
+    let list = run_fingerprint(&["--list", "--jobs", "nope"]);
+    assert_eq!(list.status.code(), Some(0));
+    let list_stdout = String::from_utf8(list.stdout).expect("list output utf8");
+    assert!(list_stdout.contains("csv.v0"));
+
+    let version = run_fingerprint(&["--version", "--jobs", "nope"]);
+    assert_eq!(version.status.code(), Some(0));
+    let version_stdout = String::from_utf8(version.stdout).expect("version output utf8");
+    assert!(
+        version_stdout.starts_with("fingerprint "),
+        "version output should still be the semver banner"
+    );
+}
+
+#[test]
 fn smoke_compile_invocation_and_check() {
     let dsl = r#"
 fingerprint_id: smoke-compile.v1
@@ -110,6 +138,15 @@ assertions:
     assert_eq!(compile.status.code(), Some(0));
     let compile_stdout = String::from_utf8(compile.stdout).expect("compile output utf8");
     assert!(compile_stdout.contains("GeneratedFingerprint"));
+
+    let compile_schema = run_fingerprint(&["compile", "--schema"]);
+    assert_eq!(compile_schema.status.code(), Some(0));
+    let compile_schema_json: Value =
+        serde_json::from_slice(&compile_schema.stdout).expect("compile schema should be JSON");
+    assert_eq!(
+        compile_schema_json["$schema"],
+        "https://json-schema.org/draft/2020-12/schema"
+    );
 }
 
 #[test]

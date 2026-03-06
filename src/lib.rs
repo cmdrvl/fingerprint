@@ -17,6 +17,8 @@ pub mod witness;
 pub use document::Document;
 pub use registry::{Fingerprint, FingerprintResult};
 
+use clap::{Parser, error::ErrorKind};
+
 struct DiagnoseModeGuard;
 
 impl DiagnoseModeGuard {
@@ -34,21 +36,35 @@ impl Drop for DiagnoseModeGuard {
 
 /// Run the fingerprint CLI. Returns an exit code (0, 1, or 2).
 pub fn run() -> u8 {
-    use clap::Parser;
     use cli::{Cli, Command};
 
-    // Parse CLI args (handles --version and --help via clap, then exits)
-    let cli = Cli::parse();
+    if let Some(display_mode) = detect_display_mode(std::env::args_os()) {
+        return handle_display_mode(display_mode);
+    }
+
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => {
+            let kind = error.kind();
+            if kind == ErrorKind::DisplayHelp || kind == ErrorKind::DisplayVersion {
+                print!("{error}");
+                return 0;
+            }
+
+            eprint!("{error}");
+            return 2;
+        }
+    };
 
     // Handle flags that cause immediate exit
     if cli.describe {
         return handle_describe();
     }
-    if cli.schema {
-        return handle_schema();
-    }
     if cli.list {
         return handle_list();
+    }
+    if cli.schema {
+        return handle_schema();
     }
 
     match cli.command {
@@ -109,6 +125,66 @@ pub fn run() -> u8 {
             // Default run mode (fingerprint processing)
             handle_run_mode(cli)
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DisplayMode {
+    Version,
+    Describe,
+    Schema,
+    List,
+}
+
+fn detect_display_mode<I, T>(args: I) -> Option<DisplayMode>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString>,
+{
+    let args = args
+        .into_iter()
+        .skip(1)
+        .map(Into::into)
+        .collect::<Vec<std::ffi::OsString>>();
+
+    for arg in args {
+        if is_subcommand_token(&arg) {
+            return None;
+        }
+
+        if arg == "--version" || arg == "-V" {
+            return Some(DisplayMode::Version);
+        }
+        if arg == "--describe" {
+            return Some(DisplayMode::Describe);
+        }
+        if arg == "--schema" {
+            return Some(DisplayMode::Schema);
+        }
+        if arg == "--list" {
+            return Some(DisplayMode::List);
+        }
+    }
+
+    None
+}
+
+fn is_subcommand_token(arg: &std::ffi::OsStr) -> bool {
+    matches!(
+        arg.to_str(),
+        Some("compile" | "witness" | "infer" | "infer-schema")
+    )
+}
+
+fn handle_display_mode(mode: DisplayMode) -> u8 {
+    match mode {
+        DisplayMode::Version => {
+            println!("fingerprint {}", env!("CARGO_PKG_VERSION"));
+            0
+        }
+        DisplayMode::Describe => handle_describe(),
+        DisplayMode::Schema => handle_schema(),
+        DisplayMode::List => handle_list(),
     }
 }
 
