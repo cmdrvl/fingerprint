@@ -38,7 +38,12 @@
     { "code": "E_BAD_INPUT", "message": "Invalid JSONL or missing hash fields", "action": "run_upstream", "tool": "hash" },
     { "code": "E_UNKNOWN_FP", "message": "Fingerprint ID not found", "action": "escalate" },
     { "code": "E_DUPLICATE_FP_ID", "message": "Duplicate fingerprint ID across providers", "action": "escalate" },
-    { "code": "E_UNTRUSTED_FP", "message": "Fingerprint provider not allowlisted", "action": "escalate" }
+    { "code": "E_UNTRUSTED_FP", "message": "Fingerprint provider not allowlisted", "action": "escalate" },
+    { "code": "E_ORPHAN_CHILD", "message": "Child record references unknown parent", "action": "escalate" },
+    { "code": "E_INVALID_YAML", "message": "Fingerprint definition YAML parse error or schema violation", "action": "escalate" },
+    { "code": "E_UNKNOWN_ASSERTION", "message": "Assertion type not recognized in fingerprint definition", "action": "escalate" },
+    { "code": "E_MISSING_FIELD", "message": "Required field missing from fingerprint definition", "action": "escalate" },
+    { "code": "E_PARSE", "message": "Cannot parse document content (warning, non-fatal)", "action": "escalate" }
   ],
 
   "capabilities": {
