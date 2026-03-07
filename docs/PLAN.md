@@ -1122,7 +1122,6 @@ fingerprint appends a witness record for every **run mode** invocation (success 
   "outcome": "ALL_MATCHED",
   "exit_code": 0,
   "output_hash": "blake3:...",
-  "prev": "blake3:...",
   "ts": "2026-02-24T10:00:00Z"
 }
 ```

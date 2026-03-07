@@ -88,7 +88,6 @@ mod tests {
             "ALL_MATCHED",
             0,
             "blake3:output",
-            None,
             "2026-02-24T10:00:00Z",
         )
         .expect("build witness record")

@@ -194,7 +194,6 @@ mod tests {
             "outcome": outcome,
             "exit_code": if outcome == "PARTIAL" { 1 } else { 0 },
             "output_hash": format!("blake3:out:{id}"),
-            "prev": null,
             "ts": ts
         })
         .to_string()

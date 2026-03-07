@@ -259,13 +259,6 @@ fn describe_run_input(input_path: Option<&std::path::Path>) -> witness::record::
     }
 }
 
-fn last_witness_id(ledger_path: &std::path::Path) -> Option<String> {
-    let content = std::fs::read_to_string(ledger_path).ok()?;
-    let line = content.lines().rev().find(|line| !line.trim().is_empty())?;
-    let record = serde_json::from_str::<serde_json::Value>(line).ok()?;
-    record.get("id")?.as_str().map(ToOwned::to_owned)
-}
-
 fn append_run_mode_witness(
     cli: &cli::Cli,
     normalized_jobs: usize,
@@ -298,7 +291,6 @@ fn append_run_mode_witness(
         .to_owned(),
         outcome.exit_code(),
         format!("blake3:{}", blake3::hash(output_bytes).to_hex()),
-        last_witness_id(&ledger_path),
         chrono::Utc::now().to_rfc3339(),
     );
 
@@ -1026,7 +1018,6 @@ fn handle_infer_command(
             "INFERRED".to_owned(),
             0,
             output_hash,
-            None,
             chrono::Utc::now().to_rfc3339(),
         );
 
@@ -1159,7 +1150,6 @@ fn handle_infer_schema_command(
                 1
             },
             output_hash,
-            None,
             chrono::Utc::now().to_rfc3339(),
         );
 

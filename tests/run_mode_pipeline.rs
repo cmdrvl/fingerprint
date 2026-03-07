@@ -185,7 +185,7 @@ fn run_mode_parse_failure_creates_new_skipped_and_exit_one() {
 }
 
 #[test]
-fn run_mode_witness_records_exact_output_hash_and_prev_chain() {
+fn run_mode_witness_records_exact_output_hash_and_append_receipts() {
     let csv_path = repo_path("tests/fixtures/files/sample.csv");
     let manifest = write_jsonl(&[json!({
         "version": "hash.v0",
@@ -237,8 +237,7 @@ fn run_mode_witness_records_exact_output_hash_and_prev_chain() {
             .as_str()
             .is_some_and(|value| value.starts_with("blake3:"))
     );
-    assert!(witness_rows[0]["prev"].is_null());
-    assert_eq!(witness_rows[1]["prev"], witness_rows[0]["id"]);
+    assert_ne!(witness_rows[1]["id"], witness_rows[0]["id"]);
     assert_eq!(witness_rows[1]["params"]["jobs"], 4);
     assert_eq!(witness_rows[1]["output_hash"], expected_second_output_hash);
 }

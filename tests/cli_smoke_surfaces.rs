@@ -238,7 +238,6 @@ fn smoke_witness_filters_and_exit_codes() {
                 "outcome": "ALL_MATCHED",
                 "exit_code": 0,
                 "output_hash": "blake3:out-1",
-                "prev": null,
                 "ts": "2026-02-01T00:00:00Z"
             }),
             json!({
@@ -251,7 +250,6 @@ fn smoke_witness_filters_and_exit_codes() {
                 "outcome": "PARTIAL",
                 "exit_code": 1,
                 "output_hash": "blake3:out-2",
-                "prev": "blake3:one",
                 "ts": "2026-02-02T00:00:00Z"
             }),
             json!({
@@ -264,7 +262,6 @@ fn smoke_witness_filters_and_exit_codes() {
                 "outcome": "ALL_HASHED",
                 "exit_code": 0,
                 "output_hash": "blake3:out-3",
-                "prev": "blake3:two",
                 "ts": "2026-02-03T00:00:00Z"
             }),
         ],
@@ -371,7 +368,6 @@ fn smoke_witness_invalid_timestamp_filter_exits_two() {
             "outcome": "ALL_MATCHED",
             "exit_code": 0,
             "output_hash": "blake3:out-1",
-            "prev": null,
             "ts": "2026-02-01T00:00:00Z"
         })],
     );

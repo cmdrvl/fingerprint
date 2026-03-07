@@ -14,7 +14,6 @@ pub struct WitnessRecord {
     pub outcome: String,
     pub exit_code: u8,
     pub output_hash: String,
-    pub prev: Option<String>,
     pub ts: String,
 }
 
@@ -36,7 +35,6 @@ impl WitnessRecord {
         outcome: impl Into<String>,
         exit_code: u8,
         output_hash: impl Into<String>,
-        prev: Option<String>,
         ts: impl Into<String>,
     ) -> Result<Self, String> {
         let tool = "fingerprint".to_owned();
@@ -55,7 +53,6 @@ impl WitnessRecord {
             &outcome,
             exit_code,
             &output_hash,
-            prev.as_deref(),
             &ts,
         )?;
 
@@ -69,7 +66,6 @@ impl WitnessRecord {
             outcome,
             exit_code,
             output_hash,
-            prev,
             ts,
         })
     }
@@ -91,8 +87,6 @@ struct WitnessRecordIdPayload<'a> {
     outcome: &'a str,
     exit_code: u8,
     output_hash: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    prev: Option<&'a str>,
     ts: &'a str,
 }
 
@@ -106,7 +100,6 @@ fn compute_record_id(
     outcome: &str,
     exit_code: u8,
     output_hash: &str,
-    prev: Option<&str>,
     ts: &str,
 ) -> Result<String, String> {
     let payload = WitnessRecordIdPayload {
@@ -118,7 +111,6 @@ fn compute_record_id(
         outcome,
         exit_code,
         output_hash,
-        prev,
         ts,
     };
     let encoded = serde_json::to_vec(&payload)
@@ -147,7 +139,6 @@ mod tests {
             "ALL_MATCHED",
             0,
             "blake3:output",
-            Some("blake3:prev".to_owned()),
             "2026-02-24T10:00:00Z",
         )
         .expect("construct witness record")
@@ -189,7 +180,6 @@ mod tests {
             "ALL_MATCHED",
             0,
             "blake3:output",
-            Some("blake3:prev".to_owned()),
             "2026-02-24T10:00:00Z",
         )
         .expect("construct witness record");
@@ -211,7 +201,6 @@ mod tests {
         assert_eq!(value["outcome"], "ALL_MATCHED");
         assert_eq!(value["exit_code"], 0);
         assert_eq!(value["output_hash"], "blake3:output");
-        assert_eq!(value["prev"], "blake3:prev");
         assert_eq!(value["ts"], "2026-02-24T10:00:00Z");
         assert_eq!(
             value["inputs"],

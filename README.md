@@ -252,7 +252,7 @@ vacuum /data/dec/ | hash | fingerprint --fp csv.v0 \
 pack seal dec.lock.json --note "December delivery" --output evidence/dec/
 ```
 
-Every run is recorded in the ambient witness ledger (`~/.epistemic/witness.jsonl`) — content-addressed, hash-chained, auditable without explicit action.
+Every run is recorded in the ambient witness ledger (`~/.epistemic/witness.jsonl`) as an append-only, content-addressed local receipt.
 
 ---
 
