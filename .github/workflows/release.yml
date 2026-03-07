@@ -324,6 +324,15 @@ jobs:
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
           name: ${{ needs.prepare.outputs.tag }}
+          body: |
+            This release packages `${{ needs.prepare.outputs.tag }}` for all supported targets.
+
+            ## Verification
+
+            ```bash
+            sha256sum -c SHA256SUMS
+            ```
+          generate_release_notes: true
           files: |
             dist/fingerprint-*.tar.gz
             dist/fingerprint-*.zip
