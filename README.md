@@ -119,6 +119,8 @@ vacuum /data | hash | fingerprint --fp cbre-appraisal.v1 --diagnose
 
 The `context` field shows every heading in the document and the closest match to what you were looking for. Your regex said `rent roll` but the document says `RENT ROLL SUMMARY` — now you know exactly what to fix. With `--diagnose`, all assertions are evaluated even if earlier ones fail, so you see the full diagnostic picture in one pass.
 
+In run mode, `--diagnose` also adds a `fingerprint.diagnostics` block when there was a near-miss or first-match short-circuit. That block records attempted fingerprint IDs in evaluation order, the first failed assertion summary for each failed attempt, and `short_circuited_fingerprint_ids` when a winning match prevented later compatible fingerprints from running.
+
 ### Run YAML directly — no compile step
 
 Drop a `.fp.yaml` file into the definitions directory and fingerprint runs it immediately:

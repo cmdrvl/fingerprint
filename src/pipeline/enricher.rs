@@ -1,7 +1,8 @@
 use crate::document::{Document, dispatch::open_document_with_text_path};
+use crate::dsl::assertions::diagnose_mode;
 use crate::progress::reporter::{report_warning, report_warning_code};
 use crate::refusal::codes::{BadInputDetail, RefusalCode, RefusalDetail, build_envelope};
-use crate::registry::{FingerprintInfo, FingerprintRegistry, FingerprintResult};
+use crate::registry::{AssertionResult, FingerprintInfo, FingerprintRegistry, FingerprintResult};
 use serde_json::{Map, Value, json};
 use std::path::Path;
 
@@ -23,6 +24,32 @@ impl Warning {
             detail,
         }
     }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct FingerprintDiagnostics {
+    attempts: Vec<DiagnosticAttempt>,
+    all_candidates_failed: bool,
+    short_circuited_fingerprint_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct DiagnosticAttempt {
+    fingerprint_id: String,
+    matched: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    first_failed_assertion: Option<FailedAssertionDiagnostic>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct FailedAssertionDiagnostic {
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<Value>,
 }
 
 /// Enrich a single JSONL record with fingerprint results.
@@ -136,9 +163,11 @@ fn evaluate_fingerprints(
     registry: &FingerprintRegistry,
     fingerprint_ids: &[String],
 ) -> Option<Value> {
+    let diagnose = diagnose_mode();
     let mut last_attempt: Option<Value> = None;
+    let mut attempts = Vec::new();
 
-    for fingerprint_id in fingerprint_ids {
+    for (index, fingerprint_id) in fingerprint_ids.iter().enumerate() {
         let Some(fingerprint_info) = registry.info_for(fingerprint_id) else {
             continue;
         };
@@ -154,10 +183,21 @@ fn evaluate_fingerprints(
         }
 
         let result = fingerprint.fingerprint(document);
+        if diagnose {
+            attempts.push(build_diagnostic_attempt(fingerprint.id(), &result));
+        }
         let mut payload =
             build_fingerprint_payload(fingerprint.id(), Some(fingerprint_info), &result);
 
         if result.matched {
+            if diagnose {
+                attach_run_diagnostics(
+                    &mut payload,
+                    &attempts,
+                    false,
+                    remaining_root_candidate_ids(document, registry, fingerprint_ids, index + 1),
+                );
+            }
             let children = evaluate_children(document, registry, fingerprint_ids, fingerprint.id());
             if !children.is_empty()
                 && let Some(parent_payload) = payload.as_object_mut()
@@ -167,6 +207,10 @@ fn evaluate_fingerprints(
             return Some(payload);
         }
         last_attempt = Some(payload);
+    }
+
+    if diagnose && let Some(payload) = last_attempt.as_mut() {
+        attach_run_diagnostics(payload, &attempts, true, Vec::new());
     }
 
     last_attempt
@@ -247,6 +291,70 @@ fn build_fingerprint_payload(
         "extracted": result.extracted,
         "content_hash": result.content_hash,
     })
+}
+
+fn build_diagnostic_attempt(fingerprint_id: &str, result: &FingerprintResult) -> DiagnosticAttempt {
+    DiagnosticAttempt {
+        fingerprint_id: fingerprint_id.to_owned(),
+        matched: result.matched,
+        reason: result.reason.clone(),
+        first_failed_assertion: first_failed_assertion(&result.assertions),
+    }
+}
+
+fn first_failed_assertion(assertions: &[AssertionResult]) -> Option<FailedAssertionDiagnostic> {
+    assertions
+        .iter()
+        .find(|assertion| !assertion.passed)
+        .map(|assertion| FailedAssertionDiagnostic {
+            name: assertion.name.clone(),
+            detail: assertion.detail.clone(),
+            context: assertion.context.clone(),
+        })
+}
+
+fn attach_run_diagnostics(
+    payload: &mut Value,
+    attempts: &[DiagnosticAttempt],
+    all_candidates_failed: bool,
+    short_circuited_fingerprint_ids: Vec<String>,
+) {
+    let has_failed_attempts = attempts.iter().any(|attempt| !attempt.matched);
+    if !has_failed_attempts && short_circuited_fingerprint_ids.is_empty() {
+        return;
+    }
+
+    let diagnostics = serde_json::to_value(FingerprintDiagnostics {
+        attempts: attempts.to_vec(),
+        all_candidates_failed,
+        short_circuited_fingerprint_ids,
+    })
+    .expect("fingerprint diagnostics should serialize");
+
+    if let Some(payload_obj) = payload.as_object_mut() {
+        payload_obj.insert("diagnostics".to_owned(), diagnostics);
+    }
+}
+
+fn remaining_root_candidate_ids(
+    document: &Document,
+    registry: &FingerprintRegistry,
+    fingerprint_ids: &[String],
+    start_index: usize,
+) -> Vec<String> {
+    fingerprint_ids
+        .iter()
+        .skip(start_index)
+        .filter_map(|fingerprint_id| {
+            let info = registry.info_for(fingerprint_id)?;
+            if info.parent.is_some() {
+                return None;
+            }
+
+            let fingerprint = registry.get(fingerprint_id)?;
+            format_matches(fingerprint.format(), document).then(|| fingerprint.id().to_owned())
+        })
+        .collect()
 }
 
 fn maybe_emit_sparse_text_warning(path: &str, document: &Document) {
@@ -363,6 +471,7 @@ fn create_bad_input_refusal(
 mod tests {
     use super::{enrich_record, enrich_record_with_fingerprints, sparse_text_warning_message};
     use crate::document::Document;
+    use crate::dsl::assertions::set_diagnose_mode;
     use crate::registry::{
         AssertionResult, Fingerprint, FingerprintInfo, FingerprintRegistry, FingerprintResult,
     };
@@ -381,6 +490,7 @@ mod tests {
         parent: Option<&'static str>,
         matched: bool,
         calls: Option<Arc<AtomicUsize>>,
+        failure_context: Option<Value>,
     }
 
     impl Fingerprint for TestFingerprint {
@@ -411,8 +521,10 @@ mod tests {
                 assertions: vec![AssertionResult {
                     name: "format_match".to_owned(),
                     passed: self.matched,
-                    detail: None,
-                    context: None,
+                    detail: (!self.matched).then_some("assertion failed".to_owned()),
+                    context: (!self.matched)
+                        .then(|| self.failure_context.clone())
+                        .flatten(),
                 }],
                 extracted: self
                     .matched
@@ -430,6 +542,21 @@ mod tests {
             registry.register_with_info(Box::new(fingerprint), info);
         }
         registry
+    }
+
+    struct DiagnoseModeReset;
+
+    impl DiagnoseModeReset {
+        fn enable() -> Self {
+            set_diagnose_mode(true);
+            Self
+        }
+    }
+
+    impl Drop for DiagnoseModeReset {
+        fn drop(&mut self) {
+            set_diagnose_mode(false);
+        }
     }
 
     #[test]
@@ -497,6 +624,7 @@ mod tests {
                     parent: None,
                     matched: true,
                     calls: None,
+                    failure_context: None,
                 },
                 FingerprintInfo {
                     id: "first.v0".to_owned(),
@@ -514,6 +642,7 @@ mod tests {
                     parent: None,
                     matched: true,
                     calls: None,
+                    failure_context: None,
                 },
                 FingerprintInfo {
                     id: "second.v0".to_owned(),
@@ -553,6 +682,7 @@ mod tests {
                     parent: None,
                     matched: false,
                     calls: None,
+                    failure_context: None,
                 },
                 FingerprintInfo {
                     id: "first.v0".to_owned(),
@@ -570,6 +700,7 @@ mod tests {
                     parent: None,
                     matched: false,
                     calls: None,
+                    failure_context: None,
                 },
                 FingerprintInfo {
                     id: "last.v0".to_owned(),
@@ -613,6 +744,7 @@ mod tests {
                     parent: None,
                     matched: true,
                     calls: Some(parent_calls.clone()),
+                    failure_context: None,
                 },
                 FingerprintInfo {
                     id: "parent.v1".to_owned(),
@@ -630,6 +762,7 @@ mod tests {
                     parent: Some("parent.v1"),
                     matched: true,
                     calls: Some(child_a_calls.clone()),
+                    failure_context: None,
                 },
                 FingerprintInfo {
                     id: "parent.v1/child-a.v1".to_owned(),
@@ -647,6 +780,7 @@ mod tests {
                     parent: Some("parent.v1"),
                     matched: false,
                     calls: Some(child_b_calls.clone()),
+                    failure_context: None,
                 },
                 FingerprintInfo {
                     id: "parent.v1/child-b.v1".to_owned(),
@@ -704,6 +838,7 @@ mod tests {
                     parent: None,
                     matched: false,
                     calls: None,
+                    failure_context: None,
                 },
                 FingerprintInfo {
                     id: "parent.v1".to_owned(),
@@ -721,6 +856,7 @@ mod tests {
                     parent: Some("parent.v1"),
                     matched: true,
                     calls: Some(child_calls.clone()),
+                    failure_context: None,
                 },
                 FingerprintInfo {
                     id: "parent.v1/child-a.v1".to_owned(),
@@ -747,6 +883,195 @@ mod tests {
         assert_eq!(output["fingerprint"]["matched"], false);
         assert!(output["fingerprint"].get("children").is_none());
         assert_eq!(child_calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn diagnose_run_mode_records_attempt_history_and_short_circuit() {
+        let _diagnose = DiagnoseModeReset::enable();
+        let temp_file = NamedTempFile::with_suffix(".txt").expect("create text temp file");
+        fs::write(temp_file.path(), "hello world").expect("write text file");
+        let path = temp_file.path().display().to_string();
+
+        let registry = registry_with_fingerprints(vec![
+            (
+                TestFingerprint {
+                    id: "near-miss.v0",
+                    format: "text",
+                    parent: None,
+                    matched: false,
+                    calls: None,
+                    failure_context: Some(json!({ "nearest_match": "hello world" })),
+                },
+                FingerprintInfo {
+                    id: "near-miss.v0".to_owned(),
+                    crate_name: "fingerprint-near-miss".to_owned(),
+                    version: "0.1.0".to_owned(),
+                    source: "dsl:near-miss".to_owned(),
+                    format: "text".to_owned(),
+                    parent: None,
+                },
+            ),
+            (
+                TestFingerprint {
+                    id: "winner.v0",
+                    format: "text",
+                    parent: None,
+                    matched: true,
+                    calls: None,
+                    failure_context: None,
+                },
+                FingerprintInfo {
+                    id: "winner.v0".to_owned(),
+                    crate_name: "fingerprint-winner".to_owned(),
+                    version: "0.1.0".to_owned(),
+                    source: "dsl:winner".to_owned(),
+                    format: "text".to_owned(),
+                    parent: None,
+                },
+            ),
+            (
+                TestFingerprint {
+                    id: "later.v0",
+                    format: "text",
+                    parent: None,
+                    matched: true,
+                    calls: None,
+                    failure_context: None,
+                },
+                FingerprintInfo {
+                    id: "later.v0".to_owned(),
+                    crate_name: "fingerprint-later".to_owned(),
+                    version: "0.1.0".to_owned(),
+                    source: "dsl:later".to_owned(),
+                    format: "text".to_owned(),
+                    parent: None,
+                },
+            ),
+        ]);
+
+        let input = json!({
+            "version": "hash.v0",
+            "path": path,
+            "extension": ".txt",
+            "bytes_hash": "blake3:abc",
+            "tool_versions": { "hash": "0.1.0" }
+        });
+        let output = enrich_record_with_fingerprints(
+            &input,
+            &registry,
+            &[
+                "near-miss.v0".to_owned(),
+                "winner.v0".to_owned(),
+                "later.v0".to_owned(),
+            ],
+        );
+
+        assert_eq!(output["fingerprint"]["fingerprint_id"], "winner.v0");
+        assert_eq!(output["fingerprint"]["matched"], true);
+        assert_eq!(
+            output["fingerprint"]["diagnostics"]["short_circuited_fingerprint_ids"],
+            json!(["later.v0"])
+        );
+        assert_eq!(
+            output["fingerprint"]["diagnostics"]["all_candidates_failed"],
+            false
+        );
+        assert_eq!(
+            output["fingerprint"]["diagnostics"]["attempts"][0]["fingerprint_id"],
+            "near-miss.v0"
+        );
+        assert_eq!(
+            output["fingerprint"]["diagnostics"]["attempts"][0]["first_failed_assertion"]["name"],
+            "format_match"
+        );
+        assert_eq!(
+            output["fingerprint"]["diagnostics"]["attempts"][0]["first_failed_assertion"]["context"]
+                ["nearest_match"],
+            "hello world"
+        );
+        assert_eq!(
+            output["fingerprint"]["diagnostics"]["attempts"][1]["fingerprint_id"],
+            "winner.v0"
+        );
+    }
+
+    #[test]
+    fn diagnose_run_mode_marks_when_all_candidates_fail() {
+        let _diagnose = DiagnoseModeReset::enable();
+        let temp_file = NamedTempFile::with_suffix(".txt").expect("create text temp file");
+        fs::write(temp_file.path(), "hello world").expect("write text file");
+        let path = temp_file.path().display().to_string();
+
+        let registry = registry_with_fingerprints(vec![
+            (
+                TestFingerprint {
+                    id: "first.v0",
+                    format: "text",
+                    parent: None,
+                    matched: false,
+                    calls: None,
+                    failure_context: Some(json!({ "nearest_match": "hello world" })),
+                },
+                FingerprintInfo {
+                    id: "first.v0".to_owned(),
+                    crate_name: "fingerprint-first".to_owned(),
+                    version: "0.1.0".to_owned(),
+                    source: "dsl:first".to_owned(),
+                    format: "text".to_owned(),
+                    parent: None,
+                },
+            ),
+            (
+                TestFingerprint {
+                    id: "last.v0",
+                    format: "text",
+                    parent: None,
+                    matched: false,
+                    calls: None,
+                    failure_context: None,
+                },
+                FingerprintInfo {
+                    id: "last.v0".to_owned(),
+                    crate_name: "fingerprint-last".to_owned(),
+                    version: "0.2.0".to_owned(),
+                    source: "dsl:last".to_owned(),
+                    format: "text".to_owned(),
+                    parent: None,
+                },
+            ),
+        ]);
+
+        let input = json!({
+            "version": "hash.v0",
+            "path": path,
+            "extension": ".txt",
+            "bytes_hash": "blake3:abc",
+            "tool_versions": { "hash": "0.1.0" }
+        });
+        let output = enrich_record_with_fingerprints(
+            &input,
+            &registry,
+            &["first.v0".to_owned(), "last.v0".to_owned()],
+        );
+
+        assert_eq!(output["fingerprint"]["fingerprint_id"], "last.v0");
+        assert_eq!(output["fingerprint"]["matched"], false);
+        assert_eq!(
+            output["fingerprint"]["diagnostics"]["all_candidates_failed"],
+            true
+        );
+        assert_eq!(
+            output["fingerprint"]["diagnostics"]["attempts"][0]["fingerprint_id"],
+            "first.v0"
+        );
+        assert_eq!(
+            output["fingerprint"]["diagnostics"]["attempts"][1]["fingerprint_id"],
+            "last.v0"
+        );
+        assert_eq!(
+            output["fingerprint"]["diagnostics"]["short_circuited_fingerprint_ids"],
+            json!([])
+        );
     }
 
     #[test]

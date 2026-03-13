@@ -15,6 +15,18 @@ fn run_fingerprint(manifest_path: &Path, extra_args: &[&str]) -> Output {
     command.output().expect("run fingerprint binary")
 }
 
+fn run_fingerprint_with_definitions(
+    manifest_path: &Path,
+    extra_args: &[&str],
+    definitions_dir: &Path,
+) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fingerprint"));
+    command.arg(manifest_path);
+    command.args(extra_args);
+    command.env("FINGERPRINT_DEFINITIONS", definitions_dir);
+    command.output().expect("run fingerprint binary")
+}
+
 fn write_jsonl(records: &[Value]) -> NamedTempFile {
     let mut file = NamedTempFile::new().expect("create temp manifest");
     for record in records {
@@ -182,6 +194,101 @@ fn run_mode_parse_failure_creates_new_skipped_and_exit_one() {
     assert_eq!(lines[0]["_skipped"], true);
     assert_eq!(lines[0]["fingerprint"], Value::Null);
     assert_eq!(lines[0]["_warnings"][0]["code"], "E_PARSE");
+}
+
+#[test]
+fn run_mode_diagnose_surfaces_attempt_history_and_nearest_match_context() {
+    let definitions_dir = tempdir().expect("create definitions tempdir");
+    std::fs::write(
+        definitions_dir.path().join("near-miss.fp.yaml"),
+        r#"
+fingerprint_id: near-miss.v1
+format: markdown
+assertions:
+  - name: rent_roll_detail_heading
+    heading_regex:
+      pattern: "(?i)rent roll detail"
+"#,
+    )
+    .expect("write near-miss definition");
+    std::fs::write(
+        definitions_dir.path().join("winner.fp.yaml"),
+        r#"
+fingerprint_id: winner.v1
+format: markdown
+assertions:
+  - name: rent_roll_summary_heading
+    heading_regex:
+      pattern: "(?i)rent roll summary"
+"#,
+    )
+    .expect("write winner definition");
+    std::fs::write(
+        definitions_dir.path().join("later.fp.yaml"),
+        r#"
+fingerprint_id: later.v1
+format: markdown
+assertions:
+  - name: property_description_heading
+    heading_regex:
+      pattern: "(?i)property description"
+"#,
+    )
+    .expect("write later definition");
+
+    let markdown_path = repo_path("tests/fixtures/test_files/cbre_appraisal.md");
+    let manifest = write_jsonl(&[json!({
+        "version": "hash.v0",
+        "path": markdown_path.display().to_string(),
+        "extension": ".md",
+        "bytes_hash": "blake3:cbre",
+        "tool_versions": { "hash": "0.1.0" }
+    })]);
+
+    let output = run_fingerprint_with_definitions(
+        manifest.path(),
+        &[
+            "--diagnose",
+            "--no-witness",
+            "--fp",
+            "near-miss.v1",
+            "--fp",
+            "winner.v1",
+            "--fp",
+            "later.v1",
+        ],
+        definitions_dir.path(),
+    );
+
+    assert_eq!(output.status.code(), Some(0));
+    let lines = parse_jsonl(&output.stdout);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["fingerprint"]["fingerprint_id"], "winner.v1");
+    assert_eq!(
+        lines[0]["fingerprint"]["diagnostics"]["attempts"][0]["fingerprint_id"],
+        "near-miss.v1"
+    );
+    assert_eq!(
+        lines[0]["fingerprint"]["diagnostics"]["attempts"][0]["first_failed_assertion"]["name"],
+        "rent_roll_detail_heading"
+    );
+    assert_eq!(
+        lines[0]["fingerprint"]["diagnostics"]["attempts"][0]["first_failed_assertion"]["context"]
+            ["nearest_match"],
+        "RENT ROLL SUMMARY"
+    );
+    assert_eq!(
+        lines[0]["fingerprint"]["diagnostics"]["attempts"][1]["fingerprint_id"],
+        "winner.v1"
+    );
+    assert_eq!(
+        lines[0]["fingerprint"]["diagnostics"]["short_circuited_fingerprint_ids"],
+        json!(["later.v1"])
+    );
+    assert_eq!(
+        lines[0]["fingerprint"]["diagnostics"]["all_candidates_failed"],
+        false
+    );
 }
 
 #[test]

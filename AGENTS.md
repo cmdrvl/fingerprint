@@ -65,6 +65,7 @@ fingerprint compile argus-model.fp.yaml --out fingerprint-argus-model-v1/
 - Normal path emits enriched JSONL records to stdout (one per input record).
 - Refusal path emits one refusal JSON envelope to stdout.
 - No human-report mode on stdout — pure JSONL only.
+- `--diagnose` may add `fingerprint.diagnostics` with attempted fingerprint IDs, first failed assertion summaries, nearest-match context, and first-match short-circuit metadata. Normal run mode stays schema-stable without it.
 
 | Exit | Meaning |
 |------|---------|
