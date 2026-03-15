@@ -113,6 +113,21 @@ pub struct RefusalBody {
     pub next_command: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CompileRefusalEnvelope {
+    pub version: String,
+    pub outcome: String,
+    pub refusal: CompileRefusalBody,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CompileRefusalBody {
+    pub code: CompileRefusalCode,
+    pub message: String,
+    pub detail: Value,
+    pub next_command: Option<String>,
+}
+
 pub fn build_envelope(
     code: RefusalCode,
     message: impl Into<String>,
@@ -127,6 +142,25 @@ pub fn build_envelope(
             message: message.into(),
             detail: serde_json::to_value(detail)
                 .expect("refusal detail serialization should never fail"),
+            next_command,
+        },
+    }
+}
+
+pub fn build_compile_envelope(
+    code: CompileRefusalCode,
+    message: impl Into<String>,
+    detail: BadInputDetail,
+    next_command: Option<String>,
+) -> CompileRefusalEnvelope {
+    CompileRefusalEnvelope {
+        version: "fingerprint.v0".to_owned(),
+        outcome: "REFUSAL".to_owned(),
+        refusal: CompileRefusalBody {
+            code,
+            message: message.into(),
+            detail: serde_json::to_value(detail)
+                .expect("compile refusal detail serialization should never fail"),
             next_command,
         },
     }
@@ -175,6 +209,25 @@ mod tests {
             serde_json::to_value(CompileRefusalCode::MissingField).expect("serialize code"),
             json!("E_MISSING_FIELD")
         );
+    }
+
+    #[test]
+    fn build_compile_envelope_serializes_compile_codes() {
+        let envelope = build_compile_envelope(
+            CompileRefusalCode::UnknownAssertion,
+            "Unsupported assertion in fingerprint definition",
+            BadInputDetail {
+                line: 4,
+                error: Some("no variant of enum Assertion found".to_owned()),
+                missing_field: None,
+                version: None,
+            },
+            Some("Check supported assertion types above".to_owned()),
+        );
+
+        let value = serde_json::to_value(envelope).expect("serialize compile envelope");
+        assert_eq!(value["refusal"]["code"], json!("E_UNKNOWN_ASSERTION"));
+        assert_eq!(value["refusal"]["detail"]["line"], json!(4));
     }
 
     #[test]

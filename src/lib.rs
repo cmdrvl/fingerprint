@@ -81,7 +81,7 @@ pub fn run() -> u8 {
                 match handle_compile_command(yaml_path, out.as_deref(), check) {
                     Ok(()) => 0, // Success
                     Err(refusal) => {
-                        output_refusal_envelope(&refusal);
+                        output_compile_command_refusal(&refusal);
                         2 // Refusal
                     }
                 }
@@ -194,9 +194,7 @@ fn serialize_records_to_jsonl_bytes(records: &[serde_json::Value]) -> Result<Vec
     Ok(output)
 }
 
-fn serialize_refusal_envelope_bytes(
-    refusal: &refusal::codes::RefusalEnvelope,
-) -> Result<Vec<u8>, String> {
+fn serialize_refusal_envelope_bytes<T: serde::Serialize>(refusal: &T) -> Result<Vec<u8>, String> {
     let mut output = serde_json::to_vec(refusal)
         .map_err(|error| format!("failed to serialize refusal envelope: {error}"))?;
     output.push(b'\n');
@@ -344,70 +342,160 @@ fn emit_run_mode_refusal(cli: &cli::Cli, refusal: &refusal::codes::RefusalEnvelo
     2
 }
 
+enum CompileCommandRefusal {
+    Compile(refusal::codes::CompileRefusalEnvelope),
+    Run(refusal::codes::RefusalEnvelope),
+}
+
+fn output_compile_command_refusal(refusal: &CompileCommandRefusal) {
+    match refusal {
+        CompileCommandRefusal::Compile(refusal) => output_refusal_envelope(refusal),
+        CompileCommandRefusal::Run(refusal) => output_refusal_envelope(refusal),
+    }
+}
+
+fn extract_compile_line_number(error: &str) -> u64 {
+    let Some((_, suffix)) = error.rsplit_once(" line ") else {
+        return 1;
+    };
+    let digits: String = suffix
+        .chars()
+        .take_while(|character| character.is_ascii_digit())
+        .collect();
+    digits.parse::<u64>().unwrap_or(1)
+}
+
+fn extract_compile_missing_field(error: &str) -> Option<String> {
+    let marker = "missing field `";
+    let (_, suffix) = error.split_once(marker)?;
+    let (field, _) = suffix.split_once('`')?;
+    Some(field.to_owned())
+}
+
+fn compile_parse_refusal(error: String) -> refusal::codes::CompileRefusalEnvelope {
+    use refusal::codes::{BadInputDetail, CompileRefusalCode, build_compile_envelope};
+
+    let line = extract_compile_line_number(&error);
+    if let Some(missing_field) = extract_compile_missing_field(&error) {
+        return build_compile_envelope(
+            CompileRefusalCode::MissingField,
+            "Missing required field in fingerprint definition",
+            BadInputDetail {
+                line,
+                error: Some(error),
+                missing_field: Some(missing_field),
+                version: None,
+            },
+            Some("Add the required field and rerun fingerprint compile".to_owned()),
+        );
+    }
+
+    let code =
+        if error.contains("no variant of enum Assertion") || error.contains("unknown variant") {
+            CompileRefusalCode::UnknownAssertion
+        } else {
+            CompileRefusalCode::InvalidYaml
+        };
+    let message = match code {
+        CompileRefusalCode::UnknownAssertion => "Unsupported assertion in fingerprint definition",
+        CompileRefusalCode::InvalidYaml => "Failed to parse fingerprint definition",
+        CompileRefusalCode::MissingField => unreachable!("handled above"),
+    };
+    let next_command = match code {
+        CompileRefusalCode::UnknownAssertion => {
+            Some("Check supported assertion types above".to_owned())
+        }
+        CompileRefusalCode::InvalidYaml => Some("Check YAML syntax and schema".to_owned()),
+        CompileRefusalCode::MissingField => unreachable!("handled above"),
+    };
+
+    build_compile_envelope(
+        code,
+        message,
+        BadInputDetail {
+            line,
+            error: Some(error),
+            missing_field: None,
+            version: None,
+        },
+        next_command,
+    )
+}
+
+fn compile_validation_refusal(error: String) -> refusal::codes::CompileRefusalEnvelope {
+    use refusal::codes::{BadInputDetail, CompileRefusalCode, build_compile_envelope};
+
+    build_compile_envelope(
+        CompileRefusalCode::InvalidYaml,
+        "Fingerprint definition failed validation",
+        BadInputDetail {
+            line: 1,
+            error: Some(error),
+            missing_field: None,
+            version: None,
+        },
+        Some("Fix the fingerprint definition and rerun fingerprint compile".to_owned()),
+    )
+}
+
 /// Handle the compile subcommand.
 #[allow(clippy::result_large_err)]
 fn handle_compile_command(
     yaml_path: &std::path::Path,
     out_dir: Option<&std::path::Path>,
     check: bool,
-) -> Result<(), refusal::codes::RefusalEnvelope> {
+) -> Result<(), CompileCommandRefusal> {
     use compile::crate_gen::generate_crate;
+    use compile::validate::validate_definition;
     use dsl::parser::parse;
     use refusal::codes::{BadInputDetail, RefusalCode, RefusalDetail, build_envelope};
 
-    // Parse the DSL definition
-    let def = parse(yaml_path).map_err(|error| {
-        build_envelope(
-            RefusalCode::BadInput,
-            "Failed to parse fingerprint definition",
-            RefusalDetail::BadInput(BadInputDetail {
-                line: 1, // TODO: Extract line number from parse error
-                error: Some(error),
-                missing_field: None,
-                version: None,
-            }),
-            Some("Check YAML syntax and schema".to_owned()),
-        )
-    })?;
+    let def = parse(yaml_path)
+        .map_err(compile_parse_refusal)
+        .map_err(CompileCommandRefusal::Compile)?;
+    validate_definition(&def)
+        .map_err(compile_validation_refusal)
+        .map_err(CompileCommandRefusal::Compile)?;
 
     if check {
-        // Check mode: just validate and exit
         println!("✓ {} is valid", yaml_path.display());
         return Ok(());
     }
 
-    // Generate crate
     if let Some(out_dir) = out_dir {
-        generate_crate(&def, out_dir).map_err(|error| {
-            build_envelope(
-                RefusalCode::BadInput,
-                "Failed to generate crate",
-                RefusalDetail::BadInput(BadInputDetail {
-                    line: 0,
-                    error: Some(error),
-                    missing_field: None,
-                    version: None,
-                }),
-                Some("Check output directory permissions".to_owned()),
-            )
-        })?;
+        generate_crate(&def, out_dir)
+            .map_err(|error| {
+                build_envelope(
+                    RefusalCode::BadInput,
+                    "Failed to generate crate",
+                    RefusalDetail::BadInput(BadInputDetail {
+                        line: 0,
+                        error: Some(error),
+                        missing_field: None,
+                        version: None,
+                    }),
+                    Some("Check output directory permissions".to_owned()),
+                )
+            })
+            .map_err(CompileCommandRefusal::Run)?;
 
         println!("✓ Generated crate in {}", out_dir.display());
     } else {
-        // Output to stdout (just the Rust source)
-        let rust_source = compile::codegen::generate_rust(&def).map_err(|error| {
-            build_envelope(
-                RefusalCode::BadInput,
-                "Failed to generate Rust source",
-                RefusalDetail::BadInput(BadInputDetail {
-                    line: 0,
-                    error: Some(error),
-                    missing_field: None,
-                    version: None,
-                }),
-                Some("Check fingerprint definition".to_owned()),
-            )
-        })?;
+        let rust_source = compile::codegen::generate_rust(&def)
+            .map_err(|error| {
+                build_envelope(
+                    RefusalCode::BadInput,
+                    "Failed to generate Rust source",
+                    RefusalDetail::BadInput(BadInputDetail {
+                        line: 0,
+                        error: Some(error),
+                        missing_field: None,
+                        version: None,
+                    }),
+                    Some("Check fingerprint definition".to_owned()),
+                )
+            })
+            .map_err(CompileCommandRefusal::Run)?;
 
         println!("{}", rust_source);
     }
@@ -910,7 +998,7 @@ fn build_bad_input_refusal(error: impl Into<String>) -> refusal::codes::RefusalE
 }
 
 /// Output a refusal envelope to stdout.
-fn output_refusal_envelope(refusal: &refusal::codes::RefusalEnvelope) {
+fn output_refusal_envelope<T: serde::Serialize>(refusal: &T) {
     if let Ok(json) = serde_json::to_string(refusal) {
         println!("{}", json);
     }

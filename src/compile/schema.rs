@@ -13,7 +13,7 @@ pub fn dsl_json_schema() -> String {
             },
             "format": {
                 "type": "string",
-                "enum": ["xlsx", "csv", "pdf", "markdown", "text"],
+                "enum": ["xlsx", "csv", "pdf", "markdown", "text", "html"],
             },
             "valid_from": {
                 "type": "string",
@@ -67,6 +67,10 @@ pub fn dsl_json_schema() -> String {
                     { "$ref": "#/$defs/assertion_table_columns" },
                     { "$ref": "#/$defs/assertion_table_shape" },
                     { "$ref": "#/$defs/assertion_table_min_rows" },
+                    { "$ref": "#/$defs/assertion_header_token_search" },
+                    { "$ref": "#/$defs/assertion_dominant_column_count" },
+                    { "$ref": "#/$defs/assertion_full_width_row" },
+                    { "$ref": "#/$defs/assertion_page_section_count" },
                     { "$ref": "#/$defs/assertion_page_count" },
                     { "$ref": "#/$defs/assertion_metadata_regex" },
                 ],
@@ -494,6 +498,85 @@ pub fn dsl_json_schema() -> String {
                     },
                 },
             },
+            "assertion_header_token_search": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["header_token_search"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "header_token_search": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["tokens", "min_matches"],
+                        "properties": {
+                            "page": { "type": "integer", "minimum": 1 },
+                            "index": { "type": "integer", "minimum": 0 },
+                            "tokens": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": { "type": "string", "minLength": 1 }
+                            },
+                            "min_matches": { "type": "integer", "minimum": 0 },
+                            "max_matches": { "type": "integer", "minimum": 0 },
+                        },
+                    },
+                },
+            },
+            "assertion_dominant_column_count": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["dominant_column_count"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "dominant_column_count": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["count", "tolerance"],
+                        "properties": {
+                            "count": { "type": "integer", "minimum": 1 },
+                            "tolerance": { "type": "integer", "minimum": 0 },
+                            "sample_pages": { "type": "integer", "minimum": 1 },
+                        },
+                    },
+                },
+            },
+            "assertion_full_width_row": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["full_width_row"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "full_width_row": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["pattern", "min_cells"],
+                        "properties": {
+                            "pattern": { "type": "string", "minLength": 1 },
+                            "min_cells": { "type": "integer", "minimum": 1 },
+                        },
+                    },
+                },
+            },
+            "assertion_page_section_count": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["page_section_count"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "page_section_count": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "min": { "type": "integer", "minimum": 0 },
+                            "max": { "type": "integer", "minimum": 0 },
+                        },
+                        "anyOf": [
+                            { "required": ["min"] },
+                            { "required": ["max"] },
+                        ],
+                    },
+                },
+            },
             "assertion_page_count": {
                 "type": "object",
                 "additionalProperties": false,
@@ -634,6 +717,10 @@ mod tests {
             "assertion_header_row_match",
             "assertion_filename_regex",
             "assertion_sheet_name_regex",
+            "assertion_header_token_search",
+            "assertion_dominant_column_count",
+            "assertion_full_width_row",
+            "assertion_page_section_count",
         ] {
             assert!(defs.contains_key(key), "missing definition: {key}");
         }
@@ -666,6 +753,60 @@ mod tests {
     #[test]
     fn schema_output_is_deterministic() {
         assert_eq!(dsl_json_schema(), dsl_json_schema());
+    }
+
+    #[test]
+    fn schema_supports_html_format_and_html_specific_assertions() {
+        let parsed: Value =
+            serde_json::from_str(&dsl_json_schema()).expect("schema should be valid JSON");
+        let format_enum = parsed["properties"]["format"]["enum"]
+            .as_array()
+            .expect("format enum should be an array");
+        assert!(format_enum.contains(&Value::String("html".to_owned())));
+
+        let sample = r#"
+fingerprint_id: bdc-soi-html.v1
+format: html
+assertions:
+  - header_token_search:
+      page: 2
+      tokens:
+        - "(?i)portfolio\\s+company"
+        - "(?i)coupon"
+      min_matches: 1
+  - dominant_column_count:
+      count: 6
+      tolerance: 1
+  - full_width_row:
+      pattern: "(?i)^software$"
+      min_cells: 6
+  - page_section_count:
+      min: 2
+"#;
+
+        let supported_assertions = named_assertion_keys(&parsed);
+        let sample_yaml: serde_yaml::Value =
+            serde_yaml::from_str(sample).expect("sample yaml should parse");
+        let sample_json =
+            serde_json::to_value(sample_yaml).expect("yaml value should convert to json");
+        let assertions = sample_json["assertions"]
+            .as_array()
+            .expect("sample assertions should be an array");
+
+        for assertion in assertions {
+            let object = assertion
+                .as_object()
+                .expect("sample assertion should be an object");
+            let assertion_key = object
+                .keys()
+                .find(|key| key.as_str() != "name")
+                .expect("assertion should contain an assertion key");
+            assert!(
+                supported_assertions.contains(assertion_key),
+                "schema missing html assertion key '{}'",
+                assertion_key
+            );
+        }
     }
 
     #[test]
