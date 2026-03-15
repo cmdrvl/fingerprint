@@ -1,0 +1,42 @@
+fingerprint_id: bdc-soi-pennant.v1
+parent: bdc-soi.v1
+format: html
+
+assertions:
+  - name: compact_layout
+    dominant_column_count:
+      count: 5
+      tolerance: 0
+      sample_pages: 4
+  - name: industry_security_headers
+    header_token_search:
+      tokens:
+        - "(?i)^industry$"
+        - "(?i)^security$"
+      min_matches: 2
+  - name: asset_class_heading_rows
+    full_width_row:
+      pattern: "(?i)^(first\\s+lien(\\s+debt)?\\s+investments|second\\s+lien\\s+investments|subordinated\\s+debt\\s+investments|unsecured\\s+debt\\s+investments|equity\\s+investments|preferred\\s+equity|common\\s+equity|warrants?)$"
+      min_cells: 5
+  - name: no_business_description
+    header_token_search:
+      tokens:
+        - "(?i)business\\s+description"
+      min_matches: 0
+      max_matches: 0
+
+extract:
+  - name: asset_class_schedule
+    type: table
+    anchor_heading: "(?i)^asset classes$"
+    index: 0
+  - name: additional_asset_class_schedule
+    type: table
+    anchor_heading: "(?i)^additional asset classes$"
+    index: 0
+
+content_hash:
+  algorithm: blake3
+  over:
+    - asset_class_schedule
+    - additional_asset_class_schedule

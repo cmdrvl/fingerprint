@@ -1,0 +1,20 @@
+fingerprint_id: bdc-soi.v1
+format: html
+
+assertions:
+  - name: schedule_heading
+    heading_exists: "Schedule of Investments"
+  - name: bdc_width_band
+    dominant_column_count:
+      count: 5
+      tolerance: 1
+      sample_pages: 4
+  - name: valuation_headers
+    header_token_search:
+      tokens:
+        - "(?i)cost"
+        - "(?i)fair\\s+value"
+      min_matches: 2
+  - name: multi_page_schedule
+    page_section_count:
+      min: 2

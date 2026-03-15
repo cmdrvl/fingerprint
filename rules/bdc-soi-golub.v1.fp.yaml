@@ -1,0 +1,45 @@
+fingerprint_id: bdc-soi-golub.v1
+parent: bdc-soi.v1
+format: html
+
+assertions:
+  - name: compact_layout
+    dominant_column_count:
+      count: 5
+      tolerance: 0
+      sample_pages: 4
+  - name: company_spread_maturity_headers
+    header_token_search:
+      tokens:
+        - "(?i)^company$"
+        - "(?i)^spread$"
+        - "(?i)^maturity$"
+      min_matches: 3
+  - name: no_explicit_industry_or_business_description
+    header_token_search:
+      tokens:
+        - "(?i)^industry$"
+        - "(?i)business\\s+description"
+        - "(?i)^instrument$"
+      min_matches: 0
+      max_matches: 0
+  - name: industry_heading_rows
+    full_width_row:
+      pattern: "(?i)^(software|healthcare|technology|industrial|consumer|financial\\s+services)$"
+      min_cells: 5
+
+extract:
+  - name: portfolio_details_schedule
+    type: table
+    anchor_heading: "(?i)^portfolio details$"
+    index: 0
+  - name: additional_portfolio_details_schedule
+    type: table
+    anchor_heading: "(?i)^additional portfolio details$"
+    index: 0
+
+content_hash:
+  algorithm: blake3
+  over:
+    - portfolio_details_schedule
+    - additional_portfolio_details_schedule

@@ -1,0 +1,43 @@
+fingerprint_id: bdc-soi-bxsl.v1
+parent: bdc-soi.v1
+format: html
+
+assertions:
+  - name: wide_layout
+    dominant_column_count:
+      count: 6
+      tolerance: 0
+      sample_pages: 4
+  - name: industry_rate_maturity_headers
+    header_token_search:
+      tokens:
+        - "(?i)^industry$"
+        - "(?i)^interest\\s+rate$"
+        - "(?i)^maturity$"
+      min_matches: 3
+  - name: no_business_description
+    header_token_search:
+      tokens:
+        - "(?i)business\\s+description"
+      min_matches: 0
+      max_matches: 0
+  - name: first_lien_section
+    heading_exists: "First Lien Investments"
+  - name: equity_section
+    heading_exists: "Equity Investments"
+
+extract:
+  - name: first_lien_schedule
+    type: table
+    anchor_heading: "(?i)^first lien investments$"
+    index: 0
+  - name: equity_schedule
+    type: table
+    anchor_heading: "(?i)^equity investments$"
+    index: 0
+
+content_hash:
+  algorithm: blake3
+  over:
+    - first_lien_schedule
+    - equity_schedule

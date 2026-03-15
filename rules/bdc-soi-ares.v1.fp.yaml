@@ -1,0 +1,37 @@
+fingerprint_id: bdc-soi-ares.v1
+parent: bdc-soi.v1
+format: html
+
+assertions:
+  - name: wide_layout
+    dominant_column_count:
+      count: 6
+      tolerance: 0
+      sample_pages: 4
+  - name: investment_business_coupon_headers
+    header_token_search:
+      tokens:
+        - "(?i)^investment$"
+        - "(?i)business\\s+description"
+        - "(?i)^coupon$"
+      min_matches: 3
+  - name: industry_heading_rows
+    full_width_row:
+      pattern: "(?i)^(software|healthcare|technology|industrial|consumer|financial\\s+services)$"
+      min_cells: 6
+
+extract:
+  - name: opening_schedule
+    type: table
+    anchor_heading: "(?i)^schedule of investments$"
+    index: 0
+  - name: continuation_schedule
+    type: table
+    anchor_heading: "(?i)^portfolio companies$"
+    index: 0
+
+content_hash:
+  algorithm: blake3
+  over:
+    - opening_schedule
+    - continuation_schedule
