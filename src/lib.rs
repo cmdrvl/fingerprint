@@ -972,12 +972,16 @@ fn record_requires_partial_outcome(record: &serde_json::Value) -> bool {
         .get("children")
         .and_then(serde_json::Value::as_array)
         .is_some_and(|children| {
-            children.iter().any(|child| {
-                !child
-                    .get("matched")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false)
-            })
+            let matched_children = children
+                .iter()
+                .filter(|child| {
+                    child
+                        .get("matched")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                })
+                .count();
+            matched_children != 1
         })
 }
 
@@ -1391,7 +1395,7 @@ mod tests {
     }
 
     #[test]
-    fn record_partial_outcome_detects_failed_child() {
+    fn record_partial_outcome_accepts_single_matched_child_with_unmatched_siblings() {
         let record = json!({
             "fingerprint": {
                 "matched": true,
@@ -1402,11 +1406,26 @@ mod tests {
             }
         });
 
+        assert!(!record_requires_partial_outcome(&record));
+    }
+
+    #[test]
+    fn record_partial_outcome_detects_zero_matched_children() {
+        let record = json!({
+            "fingerprint": {
+                "matched": true,
+                "children": [
+                    { "fingerprint_id": "parent.v1/child-a.v1", "matched": false },
+                    { "fingerprint_id": "parent.v1/child-b.v1", "matched": false }
+                ]
+            }
+        });
+
         assert!(record_requires_partial_outcome(&record));
     }
 
     #[test]
-    fn record_partial_outcome_keeps_all_matched_when_children_match() {
+    fn record_partial_outcome_detects_ambiguous_child_match() {
         let record = json!({
             "fingerprint": {
                 "matched": true,
@@ -1417,6 +1436,6 @@ mod tests {
             }
         });
 
-        assert!(!record_requires_partial_outcome(&record));
+        assert!(record_requires_partial_outcome(&record));
     }
 }

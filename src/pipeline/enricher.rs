@@ -34,6 +34,30 @@ struct FingerprintDiagnostics {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+struct ChildRoutingSummary {
+    evaluated_child_count: usize,
+    matched_child_count: usize,
+    matched_child_fingerprint_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selected_child_fingerprint_id: Option<String>,
+    status: ChildRoutingStatus,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ChildRoutingStatus {
+    Selected,
+    NoChildMatch,
+    Ambiguous,
+}
+
+#[derive(Debug, Clone)]
+struct ChildEvaluation {
+    children: Vec<Value>,
+    routing: Option<ChildRoutingSummary>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 struct DiagnosticAttempt {
     fingerprint_id: String,
     matched: bool,
@@ -198,11 +222,22 @@ fn evaluate_fingerprints(
                     remaining_root_candidate_ids(document, registry, fingerprint_ids, index + 1),
                 );
             }
-            let children = evaluate_children(document, registry, fingerprint_ids, fingerprint.id());
-            if !children.is_empty()
-                && let Some(parent_payload) = payload.as_object_mut()
-            {
-                parent_payload.insert("children".to_owned(), Value::Array(children));
+            let child_evaluation =
+                evaluate_children(document, registry, fingerprint_ids, fingerprint.id());
+            if let Some(parent_payload) = payload.as_object_mut() {
+                if !child_evaluation.children.is_empty() {
+                    parent_payload.insert(
+                        "children".to_owned(),
+                        Value::Array(child_evaluation.children),
+                    );
+                }
+                if let Some(routing) = child_evaluation.routing {
+                    parent_payload.insert(
+                        "child_routing".to_owned(),
+                        serde_json::to_value(routing)
+                            .expect("child routing summary should serialize"),
+                    );
+                }
             }
             return Some(payload);
         }
@@ -221,8 +256,9 @@ fn evaluate_children(
     registry: &FingerprintRegistry,
     fingerprint_ids: &[String],
     parent_id: &str,
-) -> Vec<Value> {
+) -> ChildEvaluation {
     let mut children = Vec::new();
+    let mut matched_child_ids = Vec::new();
 
     for child_id in fingerprint_ids {
         let Some(child_info) = registry.info_for(child_id) else {
@@ -240,12 +276,33 @@ fn evaluate_children(
         }
 
         let child_result = child_fingerprint.fingerprint(document);
+        if child_result.matched {
+            matched_child_ids.push(child_fingerprint.id().to_owned());
+        }
         let child_payload =
             build_fingerprint_payload(child_fingerprint.id(), Some(child_info), &child_result);
         children.push(child_payload);
     }
 
-    children
+    let routing = if children.is_empty() {
+        None
+    } else {
+        let status = match matched_child_ids.len() {
+            1 => ChildRoutingStatus::Selected,
+            0 => ChildRoutingStatus::NoChildMatch,
+            _ => ChildRoutingStatus::Ambiguous,
+        };
+        Some(ChildRoutingSummary {
+            evaluated_child_count: children.len(),
+            matched_child_count: matched_child_ids.len(),
+            selected_child_fingerprint_id: (matched_child_ids.len() == 1)
+                .then(|| matched_child_ids[0].clone()),
+            matched_child_fingerprint_ids: matched_child_ids,
+            status,
+        })
+    };
+
+    ChildEvaluation { children, routing }
 }
 
 fn format_matches(fingerprint_format: &str, document: &Document) -> bool {
@@ -728,7 +785,7 @@ mod tests {
     }
 
     #[test]
-    fn parent_match_evaluates_children_and_attaches_results() {
+    fn parent_match_selects_single_child_route_and_attaches_results() {
         let temp_file = NamedTempFile::with_suffix(".txt").expect("create text temp file");
         fs::write(temp_file.path(), "hello world").expect("write text file");
         let path = temp_file.path().display().to_string();
@@ -818,10 +875,114 @@ mod tests {
         assert_eq!(children[0]["matched"], true);
         assert_eq!(children[1]["fingerprint_id"], "parent.v1/child-b.v1");
         assert_eq!(children[1]["matched"], false);
+        assert_eq!(
+            output["fingerprint"]["child_routing"]["status"],
+            json!("selected")
+        );
+        assert_eq!(
+            output["fingerprint"]["child_routing"]["matched_child_count"],
+            json!(1)
+        );
+        assert_eq!(
+            output["fingerprint"]["child_routing"]["selected_child_fingerprint_id"],
+            "parent.v1/child-a.v1"
+        );
 
         assert_eq!(parent_calls.load(Ordering::Relaxed), 1);
         assert_eq!(child_a_calls.load(Ordering::Relaxed), 1);
         assert_eq!(child_b_calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn parent_match_with_multiple_matching_children_marks_ambiguous_route() {
+        let temp_file = NamedTempFile::with_suffix(".txt").expect("create text temp file");
+        fs::write(temp_file.path(), "hello world").expect("write text file");
+        let path = temp_file.path().display().to_string();
+
+        let registry = registry_with_fingerprints(vec![
+            (
+                TestFingerprint {
+                    id: "parent.v1",
+                    format: "text",
+                    parent: None,
+                    matched: true,
+                    calls: None,
+                    failure_context: None,
+                },
+                FingerprintInfo {
+                    id: "parent.v1".to_owned(),
+                    crate_name: "fingerprint-parent".to_owned(),
+                    version: "1.0.0".to_owned(),
+                    source: "dsl:parent".to_owned(),
+                    format: "text".to_owned(),
+                    parent: None,
+                },
+            ),
+            (
+                TestFingerprint {
+                    id: "parent.v1/child-a.v1",
+                    format: "text",
+                    parent: Some("parent.v1"),
+                    matched: true,
+                    calls: None,
+                    failure_context: None,
+                },
+                FingerprintInfo {
+                    id: "parent.v1/child-a.v1".to_owned(),
+                    crate_name: "fingerprint-child-a".to_owned(),
+                    version: "1.0.0".to_owned(),
+                    source: "dsl:child-a".to_owned(),
+                    format: "text".to_owned(),
+                    parent: Some("parent.v1".to_owned()),
+                },
+            ),
+            (
+                TestFingerprint {
+                    id: "parent.v1/child-b.v1",
+                    format: "text",
+                    parent: Some("parent.v1"),
+                    matched: true,
+                    calls: None,
+                    failure_context: None,
+                },
+                FingerprintInfo {
+                    id: "parent.v1/child-b.v1".to_owned(),
+                    crate_name: "fingerprint-child-b".to_owned(),
+                    version: "1.0.0".to_owned(),
+                    source: "dsl:child-b".to_owned(),
+                    format: "text".to_owned(),
+                    parent: Some("parent.v1".to_owned()),
+                },
+            ),
+        ]);
+
+        let input = json!({
+            "version": "hash.v0",
+            "path": path,
+            "extension": ".txt",
+            "bytes_hash": "blake3:abc",
+            "tool_versions": { "hash": "0.1.0" }
+        });
+        let selected = vec![
+            "parent.v1".to_owned(),
+            "parent.v1/child-a.v1".to_owned(),
+            "parent.v1/child-b.v1".to_owned(),
+        ];
+        let output = enrich_record_with_fingerprints(&input, &registry, &selected);
+
+        assert_eq!(output["fingerprint"]["matched"], true);
+        assert_eq!(
+            output["fingerprint"]["child_routing"]["status"],
+            json!("ambiguous")
+        );
+        assert_eq!(
+            output["fingerprint"]["child_routing"]["matched_child_count"],
+            json!(2)
+        );
+        assert_eq!(
+            output["fingerprint"]["child_routing"]["selected_child_fingerprint_id"],
+            Value::Null
+        );
     }
 
     #[test]

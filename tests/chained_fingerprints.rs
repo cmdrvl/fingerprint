@@ -232,26 +232,27 @@ fn expected_exit_code(record: &Value) -> u8 {
         return 1;
     }
 
-    if fingerprint
+    match fingerprint
         .get("children")
         .and_then(Value::as_array)
-        .is_some_and(|children| {
-            children.iter().any(|child| {
-                !child
-                    .get("matched")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-            })
-        })
-    {
-        1
-    } else {
-        0
+        .map(|children| {
+            children
+                .iter()
+                .filter(|child| {
+                    child
+                        .get("matched")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                })
+                .count()
+        }) {
+        Some(1) | None => 0,
+        Some(_) => 1,
     }
 }
 
 #[test]
-fn parent_match_all_children_match_exit_zero_with_children_payload() {
+fn parent_match_all_children_match_yields_partial_ambiguity() {
     let file = NamedTempFile::with_suffix(".txt").expect("create temp text file");
     fs::write(file.path(), "alpha beta").expect("write text fixture");
 
@@ -321,11 +322,23 @@ fn parent_match_all_children_match_exit_zero_with_children_payload() {
     assert!(children.iter().all(|child| child["matched"] == true));
     assert_eq!(children[1]["extracted"]["token"], "beta");
     assert_eq!(children[1]["content_hash"], "blake3:child-token-hash");
-    assert_eq!(expected_exit_code(&output), 0);
+    assert_eq!(
+        output["fingerprint"]["child_routing"]["status"],
+        "ambiguous"
+    );
+    assert_eq!(
+        output["fingerprint"]["child_routing"]["matched_child_count"],
+        2
+    );
+    assert_eq!(
+        output["fingerprint"]["child_routing"]["selected_child_fingerprint_id"],
+        Value::Null
+    );
+    assert_eq!(expected_exit_code(&output), 1);
 }
 
 #[test]
-fn parent_match_child_failure_yields_partial_exit_one() {
+fn parent_match_single_child_route_exits_zero() {
     let file = NamedTempFile::with_suffix(".txt").expect("create temp text file");
     fs::write(file.path(), "alpha only").expect("write text fixture");
 
@@ -391,8 +404,18 @@ fn parent_match_child_failure_yields_partial_exit_one() {
         .as_array()
         .expect("children array");
     assert_eq!(children.len(), 2);
+    assert_eq!(children[0]["matched"], true);
     assert_eq!(children[1]["matched"], false);
-    assert_eq!(expected_exit_code(&output), 1);
+    assert_eq!(output["fingerprint"]["child_routing"]["status"], "selected");
+    assert_eq!(
+        output["fingerprint"]["child_routing"]["selected_child_fingerprint_id"],
+        "parent.v1/child-a.v1"
+    );
+    assert_eq!(
+        output["fingerprint"]["child_routing"]["matched_child_fingerprint_ids"],
+        json!(["parent.v1/child-a.v1"])
+    );
+    assert_eq!(expected_exit_code(&output), 0);
 }
 
 #[test]
@@ -487,6 +510,14 @@ fn structural_parent_matches_without_text_path_and_content_child_fails_e_no_text
         .expect("children array");
     assert_eq!(children.len(), 1);
     assert_eq!(children[0]["matched"], false);
+    assert_eq!(
+        output["fingerprint"]["child_routing"]["status"],
+        "no_child_match"
+    );
+    assert_eq!(
+        output["fingerprint"]["child_routing"]["matched_child_count"],
+        0
+    );
     let child_assertions = children[0]["assertions"]
         .as_array()
         .expect("child assertions");

@@ -253,8 +253,14 @@ def build_fixture_rows(
                     "categories": [],
                     "path": None,
                     "matched": False,
+                    "route_resolved": False,
                     "skipped": False,
                     "fingerprint_id": None,
+                    "resolved_fingerprint_id": None,
+                    "selected_child_fingerprint_id": None,
+                    "matched_child_fingerprint_ids": [],
+                    "matched_child_count": 0,
+                    "child_routing_status": None,
                     "reason": None,
                     "content_hash": None,
                     "diagnostics_present": False,
@@ -268,6 +274,33 @@ def build_fixture_rows(
         fixture = inventory_by_abs_path.get(absolute_path, synthetic_fixture(absolute_path))
         fingerprint = record.get("fingerprint")
         matched = bool(isinstance(fingerprint, dict) and fingerprint.get("matched") is True)
+        child_routing = fingerprint.get("child_routing") if isinstance(fingerprint, dict) else None
+        selected_child_fingerprint_id = None
+        matched_child_fingerprint_ids: list[str] = []
+        matched_child_count = 0
+        child_routing_status = None
+        route_resolved = matched
+        resolved_fingerprint_id = fingerprint.get("fingerprint_id") if isinstance(fingerprint, dict) else None
+
+        if isinstance(child_routing, dict):
+            child_routing_status = child_routing.get("status")
+            selected_child_fingerprint_id = child_routing.get("selected_child_fingerprint_id")
+            matched_child_fingerprint_ids = [
+                child_id
+                for child_id in child_routing.get("matched_child_fingerprint_ids", [])
+                if isinstance(child_id, str)
+            ]
+            raw_matched_child_count = child_routing.get("matched_child_count")
+            matched_child_count = (
+                int(raw_matched_child_count)
+                if isinstance(raw_matched_child_count, int)
+                else len(matched_child_fingerprint_ids)
+            )
+            route_resolved = matched and isinstance(selected_child_fingerprint_id, str)
+            resolved_fingerprint_id = (
+                selected_child_fingerprint_id if route_resolved else None
+            )
+
         skipped = bool(record.get("_skipped", False))
         reason = fingerprint.get("reason") if isinstance(fingerprint, dict) else None
         diagnostics = fingerprint.get("diagnostics") if isinstance(fingerprint, dict) else None
@@ -285,8 +318,14 @@ def build_fixture_rows(
             "categories": fixture.get("categories", []),
             "path": absolute_path,
             "matched": matched,
+            "route_resolved": route_resolved,
             "skipped": skipped,
             "fingerprint_id": fingerprint.get("fingerprint_id") if isinstance(fingerprint, dict) else None,
+            "resolved_fingerprint_id": resolved_fingerprint_id,
+            "selected_child_fingerprint_id": selected_child_fingerprint_id,
+            "matched_child_fingerprint_ids": matched_child_fingerprint_ids,
+            "matched_child_count": matched_child_count,
+            "child_routing_status": child_routing_status,
             "reason": reason,
             "content_hash": fingerprint.get("content_hash") if isinstance(fingerprint, dict) else None,
             "diagnostics_present": diagnostics is not None,
@@ -321,6 +360,7 @@ def build_family_summary(fixture_rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "records": 0,
                 "matched_records": 0,
                 "unmatched_records": 0,
+                "ambiguous_child_records": 0,
                 "skipped_records": 0,
                 "refusal_records": 0,
                 "matched_fingerprint_counts": {},
@@ -338,13 +378,17 @@ def build_family_summary(fixture_rows: list[dict[str, Any]]) -> dict[str, Any]:
             by_fingerprint["_skipped"] = by_fingerprint.get("_skipped", 0) + 1
             continue
 
-        if row["matched"]:
+        if row["route_resolved"]:
             family_entry["matched_records"] += 1
-            matched_id = row["fingerprint_id"] or "_matched_unknown"
+            matched_id = row["resolved_fingerprint_id"] or "_matched_unknown"
             matched_counts = family_entry["matched_fingerprint_counts"]
             matched_counts[matched_id] = matched_counts.get(matched_id, 0) + 1
             by_fingerprint[matched_id] = by_fingerprint.get(matched_id, 0) + 1
             continue
+
+        if row["child_routing_status"] == "ambiguous":
+            family_entry["ambiguous_child_records"] += 1
+            by_fingerprint["_ambiguous_child"] = by_fingerprint.get("_ambiguous_child", 0) + 1
 
         family_entry["unmatched_records"] += 1
         by_fingerprint["_unmatched"] = by_fingerprint.get("_unmatched", 0) + 1
@@ -382,14 +426,16 @@ def build_run_summary(
     refusal_codes: list[str],
     diagnostic_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    matched_count = sum(1 for row in fixture_rows if row["matched"])
+    matched_count = sum(1 for row in fixture_rows if row["route_resolved"])
     skipped_count = sum(1 for row in fixture_rows if row["skipped"])
     refusal_count = sum(1 for row in fixture_rows if row["refusal_code"] is not None)
     unmatched_count = sum(
         1
         for row in fixture_rows
-        if not row["matched"] and not row["skipped"] and row["refusal_code"] is None
+        if not row["route_resolved"] and not row["skipped"] and row["refusal_code"] is None
     )
+    ambiguous_route_count = sum(1 for row in fixture_rows if row["child_routing_status"] == "ambiguous")
+    selected_child_count = sum(1 for row in fixture_rows if row["selected_child_fingerprint_id"] is not None)
     progress_event_count = sum(1 for event in stderr_events if event.get("type") == "progress")
     warning_event_count = sum(1 for event in stderr_events if event.get("type") == "warning")
 
@@ -411,6 +457,8 @@ def build_run_summary(
         "stdout_record_count": len(fixture_rows),
         "matched_count": matched_count,
         "unmatched_count": unmatched_count,
+        "ambiguous_route_count": ambiguous_route_count,
+        "selected_child_count": selected_child_count,
         "skipped_count": skipped_count,
         "refusal_count": refusal_count,
         "refusal_codes": refusal_codes,

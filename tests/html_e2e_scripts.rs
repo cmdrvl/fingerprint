@@ -151,6 +151,68 @@ assertions:
     .trim()
 }
 
+fn routed_parent_rule() -> &'static str {
+    r#"
+fingerprint_id: routed-parent.v1
+format: html
+assertions:
+  - heading_exists: "Schedule of Investments"
+  - header_token_search:
+      tokens:
+        - "(?i)fair\\s+value"
+      min_matches: 1
+"#
+    .trim()
+}
+
+fn routed_ares_rule() -> &'static str {
+    r#"
+fingerprint_id: routed-parent.v1/ares.v1
+parent: routed-parent.v1
+format: html
+assertions:
+  - header_token_search:
+      tokens:
+        - "(?i)business\\s+description"
+        - "(?i)coupon"
+      min_matches: 2
+"#
+    .trim()
+}
+
+fn routed_pennant_rule() -> &'static str {
+    r#"
+fingerprint_id: routed-parent.v1/pennant.v1
+parent: routed-parent.v1
+format: html
+assertions:
+  - header_token_search:
+      tokens:
+        - "(?i)^industry$"
+        - "(?i)^security$"
+      min_matches: 2
+"#
+    .trim()
+}
+
+fn routed_ares_duplicate_rule() -> &'static str {
+    r#"
+fingerprint_id: routed-parent.v1/ares-duplicate.v1
+parent: routed-parent.v1
+format: html
+assertions:
+  - dominant_column_count:
+      count: 6
+      tolerance: 0
+      sample_pages: 3
+  - header_token_search:
+      tokens:
+        - "(?i)coupon"
+      min_matches: 1
+"#
+    .trim()
+}
+
 #[test]
 fn html_smoke_script_happy_path_and_layout_are_stable() {
     let definitions = TempDir::new().expect("create definitions dir");
@@ -427,4 +489,150 @@ fn html_smoke_script_refusal_path_writes_summary_artifacts() {
         stdout_records["records"][0]["refusal"]["code"],
         "E_UNKNOWN_FP"
     );
+}
+
+#[test]
+fn html_family_matrix_reports_selected_child_route_for_chained_fingerprints() {
+    let definitions = TempDir::new().expect("create definitions dir");
+    write_definition(
+        definitions.path(),
+        "routed-parent.fp.yaml",
+        routed_parent_rule(),
+    );
+    write_definition(
+        definitions.path(),
+        "routed-ares.fp.yaml",
+        routed_ares_rule(),
+    );
+    write_definition(
+        definitions.path(),
+        "routed-pennant.fp.yaml",
+        routed_pennant_rule(),
+    );
+
+    let artifacts = TempDir::new().expect("create artifacts dir");
+    let output = run_script(
+        "html_family_matrix.sh",
+        &[
+            "--definitions-dir",
+            &definitions.path().display().to_string(),
+            "--fp",
+            "routed-parent.v1",
+            "--fp",
+            "routed-parent.v1/ares.v1",
+            "--fp",
+            "routed-parent.v1/pennant.v1",
+            "--fixture-id",
+            "bdc_soi_ares_like",
+            "--artifact-root",
+            &artifacts.path().join("artifacts").display().to_string(),
+            "--label",
+            "matrix-chained-selected",
+        ],
+    );
+    assert_success(&output, "html family matrix chained selected child");
+
+    let dir = artifact_dir(
+        &artifacts.path().join("artifacts"),
+        "matrix",
+        "matrix-chained-selected",
+    );
+    let fixture_rows = read_jsonl(&dir.join("fixture.summary.jsonl"));
+    assert_eq!(fixture_rows.len(), 1);
+    assert_eq!(fixture_rows[0]["fingerprint_id"], "routed-parent.v1");
+    assert_eq!(fixture_rows[0]["route_resolved"], Value::Bool(true));
+    assert_eq!(
+        fixture_rows[0]["resolved_fingerprint_id"],
+        "routed-parent.v1/ares.v1"
+    );
+    assert_eq!(
+        fixture_rows[0]["selected_child_fingerprint_id"],
+        "routed-parent.v1/ares.v1"
+    );
+    assert_eq!(fixture_rows[0]["child_routing_status"], "selected");
+    assert_eq!(fixture_rows[0]["matched_child_count"], 1);
+
+    let family_summary = read_json(&dir.join("family.summary.json"));
+    assert_eq!(
+        family_summary["matched_fingerprint_counts"]["routed-parent.v1/ares.v1"],
+        1
+    );
+
+    let summary = read_json(&dir.join("run.summary.json"));
+    assert_eq!(summary["matched_count"], 1);
+    assert_eq!(summary["selected_child_count"], 1);
+    assert_eq!(summary["ambiguous_route_count"], 0);
+}
+
+#[test]
+fn html_family_matrix_reports_ambiguous_child_routes() {
+    let definitions = TempDir::new().expect("create definitions dir");
+    write_definition(
+        definitions.path(),
+        "routed-parent.fp.yaml",
+        routed_parent_rule(),
+    );
+    write_definition(
+        definitions.path(),
+        "routed-ares.fp.yaml",
+        routed_ares_rule(),
+    );
+    write_definition(
+        definitions.path(),
+        "routed-ares-duplicate.fp.yaml",
+        routed_ares_duplicate_rule(),
+    );
+
+    let artifacts = TempDir::new().expect("create artifacts dir");
+    let output = run_script(
+        "html_family_matrix.sh",
+        &[
+            "--definitions-dir",
+            &definitions.path().display().to_string(),
+            "--fp",
+            "routed-parent.v1",
+            "--fp",
+            "routed-parent.v1/ares.v1",
+            "--fp",
+            "routed-parent.v1/ares-duplicate.v1",
+            "--fixture-id",
+            "bdc_soi_ares_like",
+            "--artifact-root",
+            &artifacts.path().join("artifacts").display().to_string(),
+            "--label",
+            "matrix-chained-ambiguous",
+        ],
+    );
+    assert_failure(&output, "html family matrix ambiguous child route", 1);
+
+    let dir = artifact_dir(
+        &artifacts.path().join("artifacts"),
+        "matrix",
+        "matrix-chained-ambiguous",
+    );
+    let fixture_rows = read_jsonl(&dir.join("fixture.summary.jsonl"));
+    assert_eq!(fixture_rows.len(), 1);
+    assert_eq!(fixture_rows[0]["matched"], Value::Bool(true));
+    assert_eq!(fixture_rows[0]["route_resolved"], Value::Bool(false));
+    assert_eq!(fixture_rows[0]["child_routing_status"], "ambiguous");
+    assert_eq!(fixture_rows[0]["matched_child_count"], 2);
+    assert_eq!(
+        fixture_rows[0]["selected_child_fingerprint_id"],
+        Value::Null
+    );
+
+    let family_summary = read_json(&dir.join("family.summary.json"));
+    let families = family_summary["families"]
+        .as_array()
+        .expect("family summary should contain families");
+    assert_eq!(families[0]["ambiguous_child_records"], 1);
+    assert_eq!(
+        family_summary["matched_fingerprint_counts"]["_ambiguous_child"],
+        1
+    );
+
+    let summary = read_json(&dir.join("run.summary.json"));
+    assert_eq!(summary["matched_count"], 0);
+    assert_eq!(summary["ambiguous_route_count"], 1);
+    assert_eq!(summary["unmatched_count"], 1);
 }
