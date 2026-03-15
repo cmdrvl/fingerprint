@@ -92,8 +92,9 @@ fn normalize_format(format: &str) -> Result<&'static str, String> {
         "xlsx" => Ok("xlsx"),
         "csv" => Ok("csv"),
         "pdf" => Ok("pdf"),
+        "html" => Ok("html"),
         other => Err(format!(
-            "unsupported --format '{other}' (expected xlsx|csv|pdf)"
+            "unsupported --format '{other}' (expected xlsx|csv|pdf|html)"
         )),
     }
 }
@@ -140,6 +141,7 @@ fn extension_matches_format(extension: &str, format: &str) -> bool {
         "xlsx" => extension.eq_ignore_ascii_case("xlsx") || extension.eq_ignore_ascii_case("xls"),
         "csv" => extension.eq_ignore_ascii_case("csv"),
         "pdf" => extension.eq_ignore_ascii_case("pdf"),
+        "html" => extension.eq_ignore_ascii_case("html") || extension.eq_ignore_ascii_case("htm"),
         _ => false,
     }
 }
@@ -164,15 +166,29 @@ fn observation_search_text(observation: &Observation) -> String {
     ];
 
     tokens.extend(observation.sheet_names.iter().cloned());
+    tokens.extend(observation.headings.iter().cloned());
     tokens.extend(observation.csv_headers.iter().cloned());
     tokens.extend(observation.cell_values.values().cloned());
     tokens.extend(observation.pdf_metadata.values().cloned());
+    for table in &observation.html_tables {
+        tokens.extend(table.headers.iter().cloned());
+        tokens.extend(table.full_width_rows.iter().cloned());
+        if table.columns > 0 {
+            tokens.push(format!("html-columns:{}", table.columns));
+        }
+        if let Some(page) = table.page {
+            tokens.push(format!("html-page:{page}"));
+        }
+    }
 
     if let Some(row_count) = observation.csv_row_count {
         tokens.push(format!("rows:{row_count}"));
     }
     if let Some(page_count) = observation.pdf_page_count {
         tokens.push(format!("pages:{page_count}"));
+    }
+    if let Some(page_sections) = observation.html_page_section_count {
+        tokens.push(format!("html-page-sections:{page_sections}"));
     }
 
     tokens.join(" ")
@@ -218,5 +234,28 @@ mod tests {
         let first = emit_profile("test-inferred.v1", &first_profile).expect("emit first");
         let second = emit_profile("test-inferred.v1", &second_profile).expect("emit second");
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn infers_html_profile_from_fixture_dir() {
+        let tempdir = tempfile::tempdir().expect("create tempdir");
+        std::fs::copy(
+            fixture("tests/fixtures/html/bdc_soi_ares_like.html"),
+            tempdir.path().join("ares.html"),
+        )
+        .expect("copy html fixture");
+
+        let (profile, corpus_size) =
+            infer_from_dir(tempdir.path(), "html", 0.0, true).expect("infer html");
+
+        assert_eq!(corpus_size, 1);
+        assert_eq!(profile.format, "html");
+        assert!(profile.assertions.iter().any(|entry| {
+            matches!(
+                entry.assertion.assertion,
+                crate::dsl::assertions::Assertion::HeaderTokenSearch { .. }
+            )
+        }));
+        assert!(!profile.extract.is_empty());
     }
 }

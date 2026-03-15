@@ -348,6 +348,7 @@ Cap Rate
             format: "csv".to_owned(),
             extension: "csv".to_owned(),
             filename: "a.csv".to_owned(),
+            headings: Vec::new(),
             sheet_names: vec!["Sheet1".to_owned()],
             row_counts: HashMap::new(),
             cell_values: HashMap::new(),
@@ -355,11 +356,14 @@ Cap Rate
             csv_row_count: Some(2),
             pdf_page_count: None,
             pdf_metadata: HashMap::new(),
+            html_page_section_count: None,
+            html_tables: Vec::new(),
         };
         let second = Observation {
             format: "csv".to_owned(),
             extension: "csv".to_owned(),
             filename: "b.csv".to_owned(),
+            headings: Vec::new(),
             sheet_names: vec!["Sheet1".to_owned()],
             row_counts: HashMap::new(),
             cell_values: HashMap::new(),
@@ -367,6 +371,8 @@ Cap Rate
             csv_row_count: Some(2),
             pdf_page_count: None,
             pdf_metadata: HashMap::new(),
+            html_page_section_count: None,
+            html_tables: Vec::new(),
         };
 
         let one = rank_observation_indices(&[first.clone(), second.clone()]).expect("rank one");

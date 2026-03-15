@@ -183,7 +183,16 @@ fn build_text_context(document: &Document) -> Result<TextContext, String> {
                     .collect(),
             })
         }
-        _ => Err("infer-schema supports markdown, text, and pdf(+text_path) only".to_owned()),
+        Document::Html(html) => Ok(TextContext {
+            format: "html".to_owned(),
+            text: html.normalized.clone(),
+            headings: html
+                .headings
+                .iter()
+                .map(|heading| (heading.text.clone(), heading.line))
+                .collect(),
+        }),
+        _ => Err("infer-schema supports markdown, text, html, and pdf(+text_path) only".to_owned()),
     }
 }
 
@@ -279,7 +288,8 @@ fn line_number_for_index(content: &str, index: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{SchemaField, infer_schema, parse_fields_str};
-    use crate::document::{Document, MarkdownDocument};
+    use crate::document::{Document, HtmlDocument, MarkdownDocument};
+    use crate::dsl::assertions::Assertion;
     use std::path::Path;
 
     fn fixture(path: &str) -> std::path::PathBuf {
@@ -353,5 +363,36 @@ mod tests {
         assert_eq!(result.definition.assertions.len(), 2);
         assert_eq!(result.definition.extract.len(), 2);
         assert!(result.definition.content_hash.is_some());
+    }
+
+    #[test]
+    fn infer_schema_locates_fields_in_html_document() {
+        let path = fixture("tests/fixtures/html/generic_page_sections_schedule.html");
+        let html = HtmlDocument::open(&path).expect("open html");
+        let document = Document::Html(html);
+        let fields = vec![
+            SchemaField {
+                name: "as_of_date".to_owned(),
+                value: "December 31, 2025".to_owned(),
+            },
+            SchemaField {
+                name: "issuer".to_owned(),
+                value: "Alpha Lending LLC".to_owned(),
+            },
+        ];
+
+        let result = infer_schema(&document, &fields, "html-schedule.inferred.v1")
+            .expect("infer schema from html");
+
+        assert_eq!(result.located_fields, 2);
+        assert!(result.missing_fields.is_empty());
+        assert_eq!(result.definition.format, "html");
+        assert!(result.definition.assertions.iter().all(|assertion| {
+            matches!(
+                assertion.assertion,
+                Assertion::TextNear { .. } | Assertion::TextContains(_)
+            )
+        }));
+        assert_eq!(result.definition.extract.len(), 2);
     }
 }

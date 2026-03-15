@@ -54,9 +54,10 @@ pub fn aggregate(
         "xlsx" => aggregate_xlsx(observations),
         "csv" => aggregate_csv(observations),
         "pdf" => aggregate_pdf(observations),
+        "html" => aggregate_html(observations),
         _ => {
             return Err(format!(
-                "unsupported infer format '{normalized_format}' (expected xlsx|csv|pdf)"
+                "unsupported infer format '{normalized_format}' (expected xlsx|csv|pdf|html)"
             ));
         }
     };
@@ -87,6 +88,19 @@ pub fn aggregate(
         return Err(format!(
             "no assertions met confidence threshold {min_confidence:.2}"
         ));
+    }
+    if normalized_format == "html"
+        && assertions.iter().all(|entry| {
+            matches!(
+                entry.assertion.assertion,
+                Assertion::FilenameRegex { .. } | Assertion::HeadingExists(_)
+            )
+        })
+    {
+        return Err(
+            "html corpus did not expose stable structural signals; need page sections, table headers, or full-width rows"
+                .to_owned(),
+        );
     }
 
     let (extract, content_hash) = if include_extract {
@@ -266,6 +280,277 @@ fn aggregate_pdf(observations: &[Observation]) -> Vec<CandidateAssertion> {
     candidates
 }
 
+fn aggregate_html(observations: &[Observation]) -> Vec<CandidateAssertion> {
+    let mut candidates = vec![CandidateAssertion {
+        assertion: Assertion::FilenameRegex {
+            pattern: "(?i).*\\.html?$".to_owned(),
+        },
+        support: observations.len(),
+    }];
+
+    if let Some((heading, support)) = common_first_heading(observations) {
+        candidates.push(CandidateAssertion {
+            assertion: Assertion::HeadingExists(heading),
+            support,
+        });
+    }
+
+    let page_section_counts = observations
+        .iter()
+        .filter_map(|observation| observation.html_page_section_count)
+        .filter(|count| *count > 0)
+        .collect::<Vec<_>>();
+    if !page_section_counts.is_empty() {
+        candidates.push(CandidateAssertion {
+            assertion: Assertion::PageSectionCount {
+                min: page_section_counts.iter().copied().min(),
+                max: page_section_counts.iter().copied().max(),
+            },
+            support: page_section_counts.len(),
+        });
+    }
+
+    let dominant_counts = observations
+        .iter()
+        .filter_map(dominant_column_count_for_observation)
+        .collect::<Vec<_>>();
+    if !dominant_counts.is_empty() {
+        let count = dominant_mode_usize(&dominant_counts);
+        let tolerance = dominant_counts
+            .iter()
+            .map(|observed| observed.abs_diff(count))
+            .max()
+            .unwrap_or(0);
+        candidates.push(CandidateAssertion {
+            assertion: Assertion::DominantColumnCount {
+                count,
+                tolerance,
+                sample_pages: max_sample_pages(observations),
+            },
+            support: dominant_counts.len(),
+        });
+    }
+
+    if let Some((page, index, tokens, support)) = header_token_search_candidate(observations) {
+        candidates.push(CandidateAssertion {
+            assertion: Assertion::HeaderTokenSearch {
+                page,
+                index: Some(index),
+                min_matches: tokens.len() as u64,
+                max_matches: None,
+                tokens,
+            },
+            support,
+        });
+    }
+
+    if let Some((pattern, min_cells, support)) = full_width_row_candidate(observations) {
+        candidates.push(CandidateAssertion {
+            assertion: Assertion::FullWidthRow { pattern, min_cells },
+            support,
+        });
+    }
+
+    candidates
+}
+
+fn common_first_heading(observations: &[Observation]) -> Option<(String, usize)> {
+    let mut support = BTreeMap::new();
+    for observation in observations {
+        if let Some(heading) = observation.headings.first() {
+            *support.entry(heading.clone()).or_insert(0usize) += 1;
+        }
+    }
+    support
+        .into_iter()
+        .max_by(|left, right| left.1.cmp(&right.1).then(left.0.cmp(&right.0).reverse()))
+}
+
+fn dominant_column_count_for_observation(observation: &Observation) -> Option<usize> {
+    let counts = observation
+        .html_tables
+        .iter()
+        .map(|table| table.columns)
+        .filter(|columns| *columns > 0)
+        .collect::<Vec<_>>();
+    (!counts.is_empty()).then(|| dominant_mode_usize(&counts))
+}
+
+fn dominant_mode_usize(values: &[usize]) -> usize {
+    let mut support = BTreeMap::new();
+    for value in values {
+        *support.entry(*value).or_insert(0usize) += 1;
+    }
+    support
+        .into_iter()
+        .max_by(|left, right| left.1.cmp(&right.1).then(left.0.cmp(&right.0)))
+        .map(|(value, _)| value)
+        .unwrap_or(0)
+}
+
+fn max_sample_pages(observations: &[Observation]) -> u32 {
+    observations
+        .iter()
+        .filter_map(|observation| {
+            observation
+                .html_page_section_count
+                .and_then(|count| u32::try_from(count).ok())
+        })
+        .max()
+        .unwrap_or(1)
+}
+
+const GENERIC_HTML_HEADERS: &[&str] = &[
+    "amount",
+    "cost",
+    "fair value",
+    "issuer",
+    "metric",
+    "portfolio company",
+    "security",
+];
+
+#[derive(Debug)]
+struct HeaderTokenCandidate {
+    page: Option<u32>,
+    index: usize,
+    tokens: Vec<String>,
+}
+
+fn header_token_search_candidate(
+    observations: &[Observation],
+) -> Option<(Option<u32>, usize, Vec<String>, usize)> {
+    let candidates = observations
+        .iter()
+        .filter_map(best_header_candidate)
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let mut placement_support = BTreeMap::new();
+    for candidate in &candidates {
+        *placement_support
+            .entry((candidate.page, candidate.index))
+            .or_insert(0usize) += 1;
+    }
+    let ((page, index), support) = placement_support
+        .into_iter()
+        .max_by(|left, right| left.1.cmp(&right.1).then(left.0.cmp(&right.0)))
+        .unwrap_or(((None, 0usize), 0usize));
+    if support == 0 {
+        return None;
+    }
+
+    let matching = candidates
+        .iter()
+        .filter(|candidate| candidate.page == page && candidate.index == index)
+        .collect::<Vec<_>>();
+    let exemplar = matching.first()?;
+
+    let mut token_support = BTreeMap::new();
+    for candidate in &matching {
+        for token in candidate.tokens.iter().cloned().collect::<BTreeSet<_>>() {
+            *token_support.entry(token).or_insert(0usize) += 1;
+        }
+    }
+    let max_token_support = token_support.values().copied().max().unwrap_or(0);
+    let tokens = exemplar
+        .tokens
+        .iter()
+        .filter(|token| token_support.get(*token).copied().unwrap_or(0) == max_token_support)
+        .take(2)
+        .map(|token| format!("(?i){}", regex::escape(token)))
+        .collect::<Vec<_>>();
+    if tokens.is_empty() {
+        return None;
+    }
+
+    Some((page, index, tokens, matching.len()))
+}
+
+fn best_header_candidate(observation: &Observation) -> Option<HeaderTokenCandidate> {
+    observation
+        .html_tables
+        .iter()
+        .filter_map(|table| {
+            let tokens = table
+                .headers
+                .iter()
+                .filter(|header| !is_generic_html_header(header))
+                .cloned()
+                .collect::<Vec<_>>();
+            (!tokens.is_empty()).then_some((table, tokens))
+        })
+        .max_by(|left, right| {
+            left.1
+                .len()
+                .cmp(&right.1.len())
+                .then(left.0.page.cmp(&right.0.page))
+                .then(left.0.columns.cmp(&right.0.columns))
+                .then(right.0.page_index.cmp(&left.0.page_index))
+        })
+        .map(|(table, tokens)| HeaderTokenCandidate {
+            page: table.page,
+            index: table.page_index,
+            tokens,
+        })
+}
+
+fn is_generic_html_header(header: &str) -> bool {
+    let normalized = header.trim().to_ascii_lowercase();
+    GENERIC_HTML_HEADERS
+        .iter()
+        .any(|value| *value == normalized)
+}
+
+fn full_width_row_candidate(observations: &[Observation]) -> Option<(String, usize, usize)> {
+    let mut support = BTreeMap::new();
+    let mut first_seen = Vec::new();
+    let mut min_cells = 0usize;
+
+    for observation in observations {
+        let mut seen_in_observation = BTreeSet::new();
+        for table in &observation.html_tables {
+            min_cells = min_cells.max(table.columns);
+            for row in &table.full_width_rows {
+                if seen_in_observation.insert(row.clone()) {
+                    *support.entry(row.clone()).or_insert(0usize) += 1;
+                    if !first_seen.iter().any(|existing| existing == row) {
+                        first_seen.push(row.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let max_support = support.values().copied().max().unwrap_or(0);
+    if max_support == 0 || min_cells == 0 {
+        return None;
+    }
+
+    let rows = first_seen
+        .into_iter()
+        .filter(|row| support.get(row).copied().unwrap_or(0) == max_support)
+        .take(2)
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        return None;
+    }
+
+    Some((
+        format!(
+            "(?i)^({})$",
+            rows.iter()
+                .map(|row| regex::escape(row))
+                .collect::<Vec<_>>()
+                .join("|")
+        ),
+        min_cells,
+        max_support,
+    ))
+}
+
 fn suggested_extract(
     format: &str,
     observations: &[Observation],
@@ -304,6 +589,34 @@ fn suggested_extract(
             sheet: Some("Sheet1".to_owned()),
             range: Some("A1:D20".to_owned()),
         });
+    } else if format == "html"
+        && let Some(heading) = observations
+            .iter()
+            .find_map(|observation| observation.headings.first().cloned())
+    {
+        let anchor_heading = format!("(?i){}", regex::escape(&heading));
+        sections.push(ExtractSection {
+            name: "primary_table".to_owned(),
+            r#type: "table".to_owned(),
+            anchor_heading: Some(anchor_heading.clone()),
+            index: Some(0),
+            anchor: None,
+            pattern: None,
+            within_chars: None,
+            sheet: None,
+            range: None,
+        });
+        sections.push(ExtractSection {
+            name: "primary_section".to_owned(),
+            r#type: "section".to_owned(),
+            anchor_heading: Some(anchor_heading),
+            index: None,
+            anchor: None,
+            pattern: None,
+            within_chars: None,
+            sheet: None,
+            range: None,
+        });
     }
 
     let content_hash = if sections.is_empty() {
@@ -329,8 +642,26 @@ fn assertion_sort_key(assertion: &Assertion) -> String {
             format!("11_sheet_min_rows:{sheet}:{min_rows}")
         }
         Assertion::CellEq { sheet, cell, value } => format!("12_cell_eq:{sheet}:{cell}:{value}"),
+        Assertion::HeadingExists(text) => format!("13_heading_exists:{text}"),
         Assertion::PageCount { min, max } => format!("20_page_count:{min:?}:{max:?}"),
-        Assertion::MetadataRegex { key, pattern } => format!("21_metadata_regex:{key}:{pattern}"),
+        Assertion::HeaderTokenSearch {
+            page,
+            index,
+            tokens,
+            ..
+        } => format!("21_header_token_search:{page:?}:{index:?}:{tokens:?}"),
+        Assertion::DominantColumnCount {
+            count,
+            tolerance,
+            sample_pages,
+        } => format!("22_dominant_column_count:{count}:{tolerance}:{sample_pages}"),
+        Assertion::FullWidthRow { pattern, min_cells } => {
+            format!("23_full_width_row:{pattern}:{min_cells}")
+        }
+        Assertion::PageSectionCount { min, max } => {
+            format!("24_page_section_count:{min:?}:{max:?}")
+        }
+        Assertion::MetadataRegex { key, pattern } => format!("30_metadata_regex:{key}:{pattern}"),
         other => format!("99_other:{other:?}"),
     }
 }
@@ -364,6 +695,15 @@ fn assertion_support_query(assertion: &Assertion) -> Option<String> {
         Assertion::SheetExists(sheet) => Some(sheet.clone()),
         Assertion::SheetMinRows { sheet, .. } => Some(sheet.clone()),
         Assertion::CellEq { value, .. } => Some(value.clone()),
+        Assertion::HeadingExists(text) => Some(text.clone()),
+        Assertion::HeaderTokenSearch { tokens, .. } => Some(
+            tokens
+                .iter()
+                .map(|token| regex_literal(token))
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
+        Assertion::FullWidthRow { pattern, .. } => Some(regex_literal(pattern)),
         Assertion::MetadataRegex { pattern, .. } => Some(regex_literal(pattern)),
         _ => None,
     }
@@ -394,7 +734,7 @@ fn to_cell_ref(row: usize, col: usize) -> String {
 mod tests {
     use super::aggregate;
     use crate::dsl::assertions::Assertion;
-    use crate::infer::observer::Observation;
+    use crate::infer::observer::{HtmlTableObservation, Observation};
     use std::collections::HashMap;
 
     fn xlsx_observation(
@@ -406,6 +746,7 @@ mod tests {
             format: "xlsx".to_owned(),
             extension: "xlsx".to_owned(),
             filename: "fixture.xlsx".to_owned(),
+            headings: Vec::new(),
             sheet_names: sheets.iter().map(ToString::to_string).collect(),
             row_counts: sheet_rows
                 .iter()
@@ -419,6 +760,30 @@ mod tests {
             csv_row_count: None,
             pdf_page_count: None,
             pdf_metadata: HashMap::new(),
+            html_page_section_count: None,
+            html_tables: Vec::new(),
+        }
+    }
+
+    fn html_observation(
+        headings: &[&str],
+        page_sections: u64,
+        tables: &[HtmlTableObservation],
+    ) -> Observation {
+        Observation {
+            format: "html".to_owned(),
+            extension: "html".to_owned(),
+            filename: "fixture.html".to_owned(),
+            headings: headings.iter().map(ToString::to_string).collect(),
+            sheet_names: Vec::new(),
+            row_counts: HashMap::new(),
+            cell_values: HashMap::new(),
+            csv_headers: Vec::new(),
+            csv_row_count: None,
+            pdf_page_count: None,
+            pdf_metadata: HashMap::new(),
+            html_page_section_count: Some(page_sections),
+            html_tables: tables.to_vec(),
         }
     }
 
@@ -474,5 +839,75 @@ mod tests {
 
         assert!(profile.extract.is_empty());
         assert!(profile.content_hash.is_none());
+    }
+
+    #[test]
+    fn aggregate_html_emits_html_specific_assertions_and_extracts() {
+        let observations = vec![html_observation(
+            &["Schedule of Investments"],
+            3,
+            &[
+                HtmlTableObservation {
+                    page: Some(1),
+                    page_index: 0,
+                    columns: 6,
+                    headers: vec![
+                        "Portfolio Company".to_owned(),
+                        "Business Description".to_owned(),
+                        "Coupon".to_owned(),
+                        "Cash Interest".to_owned(),
+                        "PIK".to_owned(),
+                        "Fair Value".to_owned(),
+                    ],
+                    full_width_rows: vec!["Software".to_owned(), "Healthcare".to_owned()],
+                },
+                HtmlTableObservation {
+                    page: Some(2),
+                    page_index: 0,
+                    columns: 6,
+                    headers: vec![
+                        "Portfolio Company".to_owned(),
+                        "Business Description".to_owned(),
+                        "Coupon".to_owned(),
+                        "Cash Interest".to_owned(),
+                        "PIK".to_owned(),
+                        "Fair Value".to_owned(),
+                    ],
+                    full_width_rows: vec!["Software".to_owned()],
+                },
+            ],
+        )];
+
+        let profile = aggregate(&observations, "html", "html-test.v1", 0.0, true, None)
+            .expect("aggregate html");
+
+        assert!(profile.assertions.iter().any(|entry| {
+            matches!(
+                entry.assertion.assertion,
+                Assertion::HeaderTokenSearch { .. }
+            )
+        }));
+        assert!(profile.assertions.iter().any(|entry| {
+            matches!(
+                entry.assertion.assertion,
+                Assertion::DominantColumnCount { count: 6, .. }
+            )
+        }));
+        assert!(
+            profile.assertions.iter().any(|entry| {
+                matches!(entry.assertion.assertion, Assertion::FullWidthRow { .. })
+            })
+        );
+        assert!(profile.assertions.iter().any(|entry| {
+            matches!(
+                entry.assertion.assertion,
+                Assertion::PageSectionCount {
+                    min: Some(3),
+                    max: Some(3)
+                }
+            )
+        }));
+        assert_eq!(profile.extract.len(), 2);
+        assert!(profile.content_hash.is_some());
     }
 }

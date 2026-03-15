@@ -1,4 +1,4 @@
-use fingerprint::dsl::FingerprintDefinition;
+use fingerprint::dsl::{Assertion, FingerprintDefinition};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -154,4 +154,44 @@ fn infer_schema_accepts_pdf_with_text_path() {
             .iter()
             .any(|assertion| assertion.name.as_deref() == Some("field_cap_rate"))
     );
+}
+
+#[test]
+fn infer_schema_accepts_html_documents() {
+    let html = fixture("html/generic_page_sections_schedule.html");
+    let fields = temp_file(
+        r#"
+- name: as_of_date
+  value: "December 31, 2025"
+- name: issuer
+  value: "Alpha Lending LLC"
+"#,
+        ".yaml",
+    );
+
+    let output = run_fingerprint(&[
+        "--no-witness",
+        "infer-schema",
+        "--doc",
+        html.to_str().expect("html str"),
+        "--fields",
+        fields.path().to_str().expect("fields str"),
+        "--id",
+        "html-schema.v1",
+    ]);
+
+    assert_eq!(output.status.code(), Some(0));
+    let yaml = String::from_utf8(output.stdout).expect("stdout utf8");
+    let definition: FingerprintDefinition = serde_yaml::from_str(&yaml).expect("parse yaml");
+
+    assert_eq!(definition.fingerprint_id, "html-schema.v1");
+    assert_eq!(definition.format, "html");
+    assert_eq!(definition.assertions.len(), 2);
+    assert_eq!(definition.extract.len(), 2);
+    assert!(definition.assertions.iter().all(|assertion| {
+        matches!(
+            assertion.assertion,
+            Assertion::TextNear { .. } | Assertion::TextContains(_)
+        )
+    }));
 }
