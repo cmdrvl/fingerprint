@@ -1,11 +1,11 @@
 [package]
 name = "fingerprint"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2024"
 authors = ["CMD+RVL Inc. <engineering@cmd.com>"]
 description = "Content fingerprinting and document recognition system with DSL-based assertion engine"
 license = "MIT"
-repository = "https://github.com/SaltIO/fingerprint"
+repository = "https://github.com/cmdrvl/fingerprint"
 readme = "README.md"
 keywords = ["document", "recognition", "content", "fingerprint", "assertion"]
 categories = ["command-line-utilities", "text-processing", "parsing"]

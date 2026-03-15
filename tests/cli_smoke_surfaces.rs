@@ -58,6 +58,11 @@ fn smoke_describe_schema_and_list_exit_zero() {
         serde_json::from_slice(&describe.stdout).expect("describe should be valid JSON");
     assert_eq!(describe_json["name"], "fingerprint");
     assert_eq!(
+        describe_json["version"],
+        env!("CARGO_PKG_VERSION"),
+        "--describe version should stay aligned with Cargo.toml"
+    );
+    assert_eq!(
         describe_json["schema_version"], "operator.v0",
         "--describe must emit operator.v0 schema"
     );
@@ -77,6 +82,13 @@ fn smoke_describe_schema_and_list_exit_zero() {
         describe_json["capabilities"]["formats"],
         json!(["csv", "xlsx", "pdf", "html", "markdown", "text"]),
         "--describe must advertise every supported runtime format, including html"
+    );
+    let options = describe_json["options"]
+        .as_array()
+        .expect("--describe options should be an array");
+    assert!(
+        options.iter().any(|option| option["flag"] == "--diagnose"),
+        "--describe must advertise the --diagnose flag"
     );
 
     let schema = run_fingerprint(&["--schema"]);
@@ -152,6 +164,24 @@ assertions:
         compile_schema_json["$schema"],
         "https://json-schema.org/draft/2020-12/schema"
     );
+    let format_enum = compile_schema_json["properties"]["format"]["enum"]
+        .as_array()
+        .expect("compile schema format enum");
+    assert!(
+        format_enum.contains(&Value::String("html".to_owned())),
+        "compile schema must advertise html format"
+    );
+    for key in [
+        "assertion_header_token_search",
+        "assertion_dominant_column_count",
+        "assertion_full_width_row",
+        "assertion_page_section_count",
+    ] {
+        assert!(
+            compile_schema_json["$defs"].get(key).is_some(),
+            "compile schema missing html assertion key '{key}'"
+        );
+    }
 }
 
 #[test]

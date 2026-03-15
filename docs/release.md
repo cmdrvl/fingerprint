@@ -17,6 +17,7 @@ The `fingerprint` release process involves:
 - [ ] All tests pass locally: `cargo test --all-features`
 - [ ] Integration tests pass: `cargo test --tests`
 - [ ] Smoke tests pass with built binary
+- [ ] HTML verification surface passes: `bash scripts/html_verify.sh`
 - [ ] Golden output determinism tests pass
 - [ ] No failing or ignored tests without documented justification
 - [ ] Code coverage meets minimum thresholds
@@ -24,8 +25,11 @@ The `fingerprint` release process involves:
 - [ ] Formatting is correct: `cargo fmt --all -- --check`
 
 ### Documentation & Compatibility
-- [ ] CHANGELOG.md updated with release notes for this version
+- [ ] Release notes prepared for this version (CHANGELOG.md or GitHub release body)
 - [ ] README.md updated if CLI interface or major features changed
+- [ ] `operator.json`, `fingerprint --describe`, and `fingerprint compile --schema` agree on the shipped HTML/diagnose surface
+- [ ] `docs/HTML_VERIFICATION.md` reflects the current harness commands and artifact layout
+- [ ] Compatibility note for pre-v0.5.0 binaries rejecting `format: html` / new assertion keys is present
 - [ ] All public APIs documented
 - [ ] Breaking changes clearly documented with migration guide
 - [ ] Compatibility matrix updated if platform support changed
@@ -57,13 +61,14 @@ Follow [Semantic Versioning](https://semver.org/):
 ### Update Version Numbers
 - [ ] Update version in `Cargo.toml`
 - [ ] Update version in `Cargo.lock`: `cargo update -p fingerprint`
+- [ ] Update versioned machine-readable surfaces such as `operator.json`
 - [ ] Update version in installation scripts if referenced
 - [ ] Update version in documentation if hardcoded
 
 ### Create Release Commit
 ```bash
-# Update CHANGELOG.md with final release notes
-git add Cargo.toml Cargo.lock CHANGELOG.md
+# Stage the version bump and the release-surface docs you actually changed
+git add Cargo.toml Cargo.lock operator.json README.md docs/HTML_VERIFICATION.md docs/release.md
 git commit -m "release: v{VERSION}"
 git tag -a v{VERSION} -m "Release v{VERSION}"
 ```
@@ -73,6 +78,7 @@ git tag -a v{VERSION} -m "Release v{VERSION}"
 ### Pre-Push Validation
 - [ ] Local build succeeds: `cargo build --release`
 - [ ] Local test suite passes: `cargo test --release`
+- [ ] HTML verification command passes: `bash scripts/html_verify.sh`
 - [ ] Binary size is reasonable (check against previous releases)
 - [ ] Built binary works with smoke test: `./target/release/fingerprint --version`
 
@@ -96,20 +102,40 @@ Monitor CI pipeline:
 - [ ] **Performance Regression**: No significant performance degradation
 - [ ] **Documentation**: Docs build and deploy successfully
 
+## HTML Release Validation
+
+Use this checklist for the `v0.5.0` HTML support line and any later release that
+changes routed family behavior or the shared harness.
+
+```bash
+bash scripts/html_verify.sh
+bash scripts/html_parity_audit.sh \
+  --definitions-dir rules \
+  --legacy-results /tmp/legacy-routes.jsonl \
+  --artifact-root artifacts/html-e2e \
+  --label release-candidate \
+  --diagnose-mismatches
+```
+
+- [ ] `run.summary.json` reports `exit_code: 0` and the expected `selected_child_count`
+- [ ] `parity.summary.json` reports zero mismatches for the validated corpus
+- [ ] Any mismatch triage includes `stderr.events.json`, `diagnostics.json`, and `fixture.summary.jsonl`
+- [ ] `fingerprint --describe` reports the same version as `Cargo.toml` and still advertises `html` plus `--diagnose`
+
 ## Homebrew Tap Verification
 
 ### Automatic Tap Update
 The Homebrew tap should update automatically via CI:
 - [ ] Homebrew formula updated with new version and SHA256
 - [ ] Formula syntax validated
-- [ ] Test installation works: `brew install cmd-rvl/tap/fingerprint`
+- [ ] Test installation works: `brew install cmdrvl/tap/fingerprint`
 - [ ] Smoke test from Homebrew installation works
 
 ### Manual Verification (if needed)
 ```bash
 # Test Homebrew installation
 brew uninstall fingerprint  # if previously installed
-brew install cmd-rvl/tap/fingerprint
+brew install cmdrvl/tap/fingerprint
 fingerprint --version  # should show new version
 fingerprint infer tests/fixtures/files --format xlsx --id test  # smoke test
 ```
@@ -150,7 +176,7 @@ cargo publish            # actual publish
 
 ### Installation Testing
 Test installation from each distribution channel:
-- [ ] **Homebrew**: `brew install cmd-rvl/tap/fingerprint`
+- [ ] **Homebrew**: `brew install cmdrvl/tap/fingerprint`
 - [ ] **Cargo**: `cargo install fingerprint --version {VERSION}`
 - [ ] **GitHub Releases**: Download and extract binary
 - [ ] **Docker**: `docker run fingerprint:v{VERSION} --version`

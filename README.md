@@ -58,44 +58,70 @@ Where `fields.yaml` is:
 
 Fingerprint locates each field value via hybrid search, finds the nearest stable anchor (heading, label, table header), and generates both the assertion and the extraction rule. One document in, production fingerprint out. For PDF inputs, pass pre-extracted markdown with `--text-path appraisal.md`.
 
-### Chained fingerprints
+### Chained fingerprints and routed families
 
-Real documents have layers. A CBRE appraisal is one document type, but inside it there's a rent roll, an income capitalization section, and a sales comparison grid — each independently versioned, each with its own content hash for change detection.
+The shipped HTML rollout uses chaining to resolve mutually exclusive document families under one structural parent. A BDC filing's schedule of investments is always "a schedule of investments", but the family-specific layout still matters for extraction, content hashing, and downstream routing.
 
 Chained fingerprints model this directly:
 
 ```yaml
-# Parent: identifies the document type
-fingerprint_id: cbre-appraisal.v1
-format: pdf
+# Parent: identifies the shared schedule family
+fingerprint_id: bdc-soi.v1
+format: html
 assertions:
-  - page_count: { min: 50, max: 500 }
-  - text_contains: "CBRE Valuation & Advisory Services"
+  - heading_exists: "Schedule of Investments"
+  - dominant_column_count: { count: 5, tolerance: 1 }
+  - header_token_search:
+      tokens: ["(?i)cost", "(?i)fair value"]
+      min_matches: 1
 
 ---
-# Child: extracts the rent roll
-fingerprint_id: cbre-appraisal.v1/rent-roll.v1
-parent: cbre-appraisal.v1
+# Child: Ares-like schedule family
+fingerprint_id: bdc-soi-ares.v1
+parent: bdc-soi.v1
+format: html
 assertions:
-  - table_exists: { heading: "(?i)rent roll" }
+  - dominant_column_count: { count: 6, tolerance: 1 }
+  - header_token_search:
+      tokens: ["(?i)investment", "(?i)business description", "(?i)coupon"]
+      min_matches: 2
 extract:
-  - name: rent_roll_table
+  - name: opening_schedule
     type: table
-    anchor_heading: "(?i)rent roll"
+    anchor_heading: "(?i)schedule of investments"
 content_hash:
   algorithm: blake3
-  over: [rent_roll_table]
+  over: [opening_schedule]
 
 ---
-# Child: extracts the income cap approach
-fingerprint_id: cbre-appraisal.v1/income-cap.v1
-parent: cbre-appraisal.v1
+# Child: BlackRock-like schedule family
+fingerprint_id: bdc-soi-blackrock.v1
+parent: bdc-soi.v1
+format: html
 assertions:
-  - heading_regex: { pattern: "(?i)income capitalization" }
-  - table_exists: { heading: "(?i)income capitalization" }
+  - dominant_column_count: { count: 6, tolerance: 1 }
+  - header_token_search:
+      tokens: ["(?i)issuer", "(?i)instrument", "(?i)amortized cost"]
+      min_matches: 2
 ```
 
-Parent match triggers child evaluation. Each child produces its own content hash. Add new children without touching the parent. Version each independently. The output includes a `children` array with independent match results — if the rent roll section disappeared in a new version, you'd see it immediately.
+```bash
+# Parent first, then routed children in deterministic order
+printf '%s\n' '{"version":"hash.v0","path":"tests/fixtures/html/bdc_soi_ares_like.html","extension":".html","bytes_hash":"blake3:test","tool_versions":{"hash":"0.1.0"}}' \
+  | FINGERPRINT_DEFINITIONS=rules fingerprint --no-witness \
+      --fp bdc-soi.v1 \
+      --fp bdc-soi-ares.v1 \
+      --fp bdc-soi-blackrock.v1 \
+      --fp bdc-soi-bxsl.v1 \
+      --fp bdc-soi-pennant.v1 \
+      --fp bdc-soi-golub.v1
+```
+
+Run mode still applies **first-match-wins** at the root fingerprint level in CLI order. For routed HTML families, put the shared parent first and then list all children in a stable order so `--diagnose` output and family-matrix artifacts stay deterministic. Child order does **not** break ties: if multiple children match, the record is marked `child_routing.status = "ambiguous"` and the process returns exit `1` so routing drift is visible instead of silently picking a winner.
+
+Every evaluated child still appears in the `children` array. The parent payload also includes a `child_routing` summary with `selected`, `no_child_match`, or `ambiguous`, plus `matched_child_fingerprint_ids` and `selected_child_fingerprint_id` when exactly one family route wins.
+
+HTML support and the four HTML-only assertions land in the `v0.5.0` release line. Older binaries reject these definitions during compile/validation instead of silently falling back. In this repository's current compile surface, unknown assertion keys return `E_UNKNOWN_ASSERTION`; unsupported or too-old format support validates as `E_INVALID_YAML`.
 
 ### It tells you what went wrong
 
@@ -151,9 +177,9 @@ For cases the DSL can't express, write Rust directly against the `Fingerprint` t
 
 ---
 
-## 26 assertion types across every document structure
+## 30 assertion types across every document structure
 
-Fingerprint doesn't just check filenames and magic bytes. It understands the internal structure of spreadsheets, PDFs, markdown, and plain text.
+Fingerprint doesn't just check filenames and magic bytes. It understands the internal structure of spreadsheets, HTML, PDFs, markdown, and plain text.
 
 ### Spreadsheet assertions (XLSX, CSV)
 
@@ -171,7 +197,7 @@ Fingerprint doesn't just check filenames and magic bytes. It understands the int
 | `sum_eq` | Sum of range equals expected value or cell reference |
 | `within_tolerance` | Numeric value within declared bounds |
 
-### Content assertions (PDF, Markdown, Text)
+### Structured content assertions (HTML, PDF, Markdown, Text)
 
 | Assertion | What it checks |
 |-----------|---------------|
@@ -189,6 +215,15 @@ Fingerprint doesn't just check filenames and magic bytes. It understands the int
 | `table_min_rows` | Table has minimum data rows |
 | `page_count` | PDF has expected page range (structural, no OCR) |
 | `metadata_regex` | PDF metadata field (author, title, creator) matches pattern |
+
+### HTML-specific structural assertions
+
+| Assertion | What it checks |
+|-----------|---------------|
+| `header_token_search` | HTML table header rows contain the expected token regexes, with optional page/index targeting |
+| `dominant_column_count` | The dominant HTML table width across early pages matches the expected layout |
+| `full_width_row` | HTML tables contain full-span classification rows such as industry or asset-class separators |
+| `page_section_count` | `<section data-page-number>` or equivalent page partitions stay within expected bounds |
 
 ### Universal
 
@@ -423,7 +458,24 @@ Every refusal includes a concrete `next_command` when mechanical recovery is pos
     },
     "content_hash": "blake3:9f2a..."
   },
-  "tool_versions": { "vacuum": "0.1.0", "hash": "0.1.0", "fingerprint": "0.2.0" }
+  "tool_versions": { "vacuum": "0.1.0", "hash": "0.1.0", "fingerprint": "0.5.0" }
+}
+```
+
+### Routed child summary
+
+```json
+{
+  "fingerprint": {
+    "fingerprint_id": "bdc-soi.v1",
+    "matched": true,
+    "child_routing": {
+      "status": "selected",
+      "matched_child_count": 1,
+      "matched_child_fingerprint_ids": ["bdc-soi-ares.v1"],
+      "selected_child_fingerprint_id": "bdc-soi-ares.v1"
+    }
+  }
 }
 ```
 
@@ -508,8 +560,10 @@ For the full toolchain guide, see the [Agent Operator Guide](https://github.com/
 
 ```bash
 # Self-describing contract
-fingerprint --describe | jq '.refusals[] | select(.action == "retry_with_flag")'
+fingerprint --describe | jq '.capabilities.formats'
+fingerprint --describe | jq '.options[] | select(.flag == "--diagnose")'
 fingerprint --schema | jq '.properties.fingerprint'
+fingerprint compile --schema | jq '.properties.format.enum'
 
 # Programmatic workflow
 vacuum /data | hash | fingerprint --fp argus-model.v1 --fp csv.v0 > fp.jsonl
@@ -554,6 +608,16 @@ Ledger location: `~/.epistemic/witness.jsonl` (override with `EPISTEMIC_WITNESS`
 ## Spec and development
 
 The full specification is [`docs/PLAN.md`](./docs/PLAN.md). Benchmarks in [`docs/BENCHMARK_BASELINE.md`](./docs/BENCHMARK_BASELINE.md).
+
+### HTML verification surface
+
+The HTML rollout ships with non-interactive verification entrypoints and detailed artifacts:
+
+- `bash scripts/html_verify.sh` runs the local repository verification surface.
+- `bash scripts/html_smoke.sh ...`, `bash scripts/html_diagnose.sh ...`, and `bash scripts/html_family_matrix.sh ...` write per-run artifacts under `artifacts/html-e2e/`.
+- `bash scripts/html_parity_audit.sh ...` compares routed family results against a legacy route source and writes mismatch diagnostics under `artifacts/html-e2e/parity/`.
+
+See [`docs/HTML_VERIFICATION.md`](./docs/HTML_VERIFICATION.md) for the command matrix and artifact layout. The shared harness writes parsed `--progress` events to `stderr.events.json`, `fingerprint.diagnostics` aggregates to `diagnostics.json`, and per-document routing outcomes land in `fixture.summary.jsonl` and `run.summary.json` with fields such as `child_routing_status`, `selected_child_fingerprint_id`, and `ambiguous_route_count`.
 
 ### CI gate
 

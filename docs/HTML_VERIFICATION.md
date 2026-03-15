@@ -58,3 +58,19 @@ bash scripts/html_parity_audit.sh \
 - `parity/<label>/parity.summary.json` — overall parity counts and artifact pointers
 - `parity/<label>/parity.mismatches.jsonl` — file-level mismatches with observed family, legacy family, child-routing status, and diagnose artifact paths
 - `parity/<label>/legacy.routes.jsonl` — normalized legacy routing records used for the comparison
+
+## Reading progress and diagnose artifacts
+
+- `stderr.events.json` — parsed `--progress` stream from `fingerprint`; inspect this when a run appears to stall or when warning counts increase unexpectedly.
+- `diagnostics.json` — normalized `fingerprint.diagnostics` payloads for each stdout record, including attempted fingerprints, first failed assertions, near misses, and short-circuit context.
+- `fixture.summary.jsonl` — one row per document with `route_resolved`, `child_routing_status`, `selected_child_fingerprint_id`, `matched_child_fingerprint_ids`, refusal codes, and skip status.
+- `family.summary.json` — aggregated routed-family counts keyed by expected family and selected fingerprint ID.
+- `run.summary.json` — top-level counters such as `ambiguous_route_count`, `selected_child_count`, `progress_event_count`, `warning_event_count`, and the artifact file manifest for the run.
+
+For mismatch triage, start with `parity.summary.json`, open the corresponding rows in
+`parity.mismatches.jsonl`, then follow any `diagnose_artifact_dir` pointer into the
+shared harness artifacts. The quickest signal is usually:
+
+1. `fixture.summary.jsonl` to see whether the route failed, skipped, or became ambiguous.
+2. `diagnostics.json` to identify which child assertion lost the route.
+3. `stderr.events.json` to confirm whether parser warnings or progress anomalies happened during the run.
