@@ -187,6 +187,98 @@ content_hash:
 }
 
 #[test]
+fn run_mode_html_specific_assertions_keep_content_hash_stable_and_null_on_no_match() {
+    let definitions_dir = tempdir().expect("create definitions dir");
+    let html_fp = r#"
+fingerprint_id: pennant-html.v1
+format: html
+assertions:
+  - page_section_count:
+      min: 2
+      max: 2
+  - dominant_column_count:
+      count: 5
+      tolerance: 0
+      sample_pages: 2
+  - header_token_search:
+      tokens:
+        - "(?i)^industry$"
+      min_matches: 1
+  - full_width_row:
+      pattern: "(?i)^(first lien debt investments|equity investments)$"
+      min_cells: 5
+extract:
+  - name: schedule_table
+    type: table
+    anchor_heading: "(?i)schedule of investments"
+    index: 0
+content_hash:
+  algorithm: blake3
+  over:
+    - schedule_table
+"#
+    .trim();
+    std::fs::write(definitions_dir.path().join("pennant-html.fp.yaml"), html_fp)
+        .expect("write html fingerprint definition");
+
+    let pennant_path = repo_path("tests/fixtures/html/bdc_soi_pennant_like.html");
+    let blackrock_path = repo_path("tests/fixtures/html/bdc_soi_blackrock_like.html");
+    let manifest = write_jsonl(&[
+        json!({
+            "version": "hash.v0",
+            "path": pennant_path.display().to_string(),
+            "extension": ".html",
+            "bytes_hash": "blake3:pennant-one",
+            "tool_versions": { "hash": "0.1.0" }
+        }),
+        json!({
+            "version": "hash.v0",
+            "path": pennant_path.display().to_string(),
+            "extension": ".html",
+            "bytes_hash": "blake3:pennant-two",
+            "tool_versions": { "hash": "0.1.0" }
+        }),
+        json!({
+            "version": "hash.v0",
+            "path": blackrock_path.display().to_string(),
+            "extension": ".html",
+            "bytes_hash": "blake3:blackrock",
+            "tool_versions": { "hash": "0.1.0" }
+        }),
+    ]);
+
+    let output = run_fingerprint_with_definitions(
+        manifest.path(),
+        &["--fp", "pennant-html.v1", "--no-witness"],
+        definitions_dir.path(),
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    let lines = parse_jsonl(&output.stdout);
+    assert_eq!(lines.len(), 3);
+
+    let first_hash = lines[0]["fingerprint"]["content_hash"]
+        .as_str()
+        .expect("first matched content hash");
+    let second_hash = lines[1]["fingerprint"]["content_hash"]
+        .as_str()
+        .expect("second matched content hash");
+    assert_eq!(lines[0]["fingerprint"]["matched"], true);
+    assert_eq!(lines[1]["fingerprint"]["matched"], true);
+    assert_eq!(
+        first_hash, second_hash,
+        "matched HTML records with the same extracted content should produce stable hashes"
+    );
+
+    assert_eq!(lines[2]["fingerprint"]["matched"], false);
+    assert_eq!(
+        lines[2]["fingerprint"]["content_hash"],
+        Value::Null,
+        "unmatched HTML records must keep content_hash null"
+    );
+}
+
+#[test]
 fn run_mode_progress_flag_keeps_witness_failures_structured() {
     let csv_path = repo_path("tests/fixtures/files/sample.csv");
     let manifest = write_jsonl(&[json!({

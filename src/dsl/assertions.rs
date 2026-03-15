@@ -1,4 +1,4 @@
-use crate::document::{Document, StructuredDocument};
+use crate::document::{Document, HtmlDocument, StructuredDocument, Table};
 use crate::registry::AssertionResult;
 use calamine::{Reader, open_workbook_auto};
 use chrono::NaiveDate;
@@ -131,6 +131,28 @@ pub enum Assertion {
         index: Option<usize>,
         min_rows: u64,
     },
+    HeaderTokenSearch {
+        page: Option<u32>,
+        index: Option<usize>,
+        tokens: Vec<String>,
+        min_matches: u64,
+        #[serde(default)]
+        max_matches: Option<u64>,
+    },
+    DominantColumnCount {
+        count: usize,
+        tolerance: usize,
+        #[serde(default = "default_sample_pages")]
+        sample_pages: u32,
+    },
+    FullWidthRow {
+        pattern: String,
+        min_cells: usize,
+    },
+    PageSectionCount {
+        min: Option<u64>,
+        max: Option<u64>,
+    },
     PageCount {
         min: Option<u64>,
         max: Option<u64>,
@@ -157,6 +179,10 @@ pub struct NamedAssertion {
     pub name: Option<String>,
     #[serde(flatten)]
     pub assertion: Assertion,
+}
+
+fn default_sample_pages() -> u32 {
+    4
 }
 
 /// Evaluate a named assertion and preserve its DSL-level name in output.
@@ -382,6 +408,31 @@ fn diagnostic_context(
         Assertion::SectionNonEmpty { heading } | Assertion::SectionMinLines { heading, .. } => {
             section_diagnostic_context(doc, heading)
         }
+        Assertion::HeaderTokenSearch {
+            page,
+            index,
+            tokens,
+            min_matches,
+            max_matches,
+        } => header_token_search_diagnostic_context(
+            doc,
+            *page,
+            *index,
+            tokens,
+            *min_matches,
+            *max_matches,
+        ),
+        Assertion::DominantColumnCount {
+            count,
+            tolerance,
+            sample_pages,
+        } => dominant_column_count_diagnostic_context(doc, *count, *tolerance, *sample_pages),
+        Assertion::FullWidthRow { pattern, min_cells } => {
+            full_width_row_diagnostic_context(doc, pattern, *min_cells)
+        }
+        Assertion::PageSectionCount { min, max } => {
+            page_section_count_diagnostic_context(doc, *min, *max)
+        }
         Assertion::ColumnSearch {
             sheet,
             column,
@@ -602,6 +653,123 @@ fn section_diagnostic_context(doc: &Document, heading_pattern: &str) -> Option<V
     }))
 }
 
+fn header_token_search_diagnostic_context(
+    doc: &Document,
+    page: Option<u32>,
+    index: Option<usize>,
+    tokens: &[String],
+    min_matches: u64,
+    max_matches: Option<u64>,
+) -> Option<Value> {
+    let html = get_html_document(doc).ok()?;
+    let token_regexes = compile_header_token_regexes(tokens).ok()?;
+    let tables = html_tables_for_filter(html, page);
+    let scanned_tables: Vec<Value> = tables
+        .iter()
+        .enumerate()
+        .take(5)
+        .map(|(filtered_index, table)| {
+            let matched_tokens = matched_header_tokens(table, &token_regexes);
+            json!({
+                "table_index": table.index,
+                "filtered_index": filtered_index,
+                "page": table.page,
+                "headers": table.headers,
+                "matched_tokens": matched_tokens,
+                "match_count": matched_tokens.len()
+            })
+        })
+        .collect();
+    let best_match_count = scanned_tables
+        .iter()
+        .filter_map(|table| table["match_count"].as_u64())
+        .max()
+        .unwrap_or(0);
+
+    Some(json!({
+        "page": page,
+        "requested_index": index,
+        "min_matches": min_matches,
+        "max_matches": max_matches,
+        "tables_scanned": scanned_tables,
+        "best_match_count": best_match_count
+    }))
+}
+
+fn dominant_column_count_diagnostic_context(
+    doc: &Document,
+    count: usize,
+    tolerance: usize,
+    sample_pages: u32,
+) -> Option<Value> {
+    let html = get_html_document(doc).ok()?;
+    let tables = dominant_column_tables(html, sample_pages);
+    let column_counts: Vec<usize> = tables
+        .iter()
+        .map(|table| table_column_count(table))
+        .collect();
+    let dominant = dominant_mode(&column_counts).map(|(count, _)| count);
+
+    Some(json!({
+        "expected": count,
+        "tolerance": tolerance,
+        "sample_pages": sample_pages,
+        "column_counts": column_counts,
+        "dominant_column_count": dominant
+    }))
+}
+
+fn full_width_row_diagnostic_context(
+    doc: &Document,
+    pattern: &str,
+    min_cells: usize,
+) -> Option<Value> {
+    let html = get_html_document(doc).ok()?;
+    let regex = Regex::new(pattern).ok()?;
+    let candidates: Vec<Value> = html
+        .tables
+        .iter()
+        .flat_map(|table| {
+            table
+                .rows
+                .iter()
+                .enumerate()
+                .filter_map(|(row_index, row)| {
+                    full_width_row_text(row).map(|text| {
+                        json!({
+                            "table_index": table.index,
+                            "page": table.page,
+                            "row_index": row_index,
+                            "cell_count": row.len(),
+                            "text": text,
+                            "matches_pattern": regex.is_match(&text)
+                        })
+                    })
+                })
+        })
+        .take(5)
+        .collect();
+
+    Some(json!({
+        "pattern": pattern,
+        "min_cells": min_cells,
+        "candidate_rows": candidates
+    }))
+}
+
+fn page_section_count_diagnostic_context(
+    doc: &Document,
+    min: Option<u64>,
+    max: Option<u64>,
+) -> Option<Value> {
+    let html = get_html_document(doc).ok()?;
+    Some(json!({
+        "page_section_count": html.page_sections,
+        "min": min,
+        "max": max
+    }))
+}
+
 fn content_source_text(doc: &Document) -> Option<&str> {
     match doc {
         Document::Html(html) => Some(html.normalized.as_str()),
@@ -759,16 +927,14 @@ fn is_content_assertion(assertion: &Assertion) -> bool {
             | Assertion::TableColumns { .. }
             | Assertion::TableShape { .. }
             | Assertion::TableMinRows { .. }
+            | Assertion::HeaderTokenSearch { .. }
+            | Assertion::DominantColumnCount { .. }
+            | Assertion::FullWidthRow { .. }
+            | Assertion::PageSectionCount { .. }
     )
 }
 
 fn evaluate_content_assertion(assertion: &Assertion, doc: &Document) -> Result<(), String> {
-    if let Document::Pdf(pdf_doc) = doc
-        && pdf_doc.text.is_none()
-    {
-        return Err("No text_path provided (E_NO_TEXT)".to_owned());
-    }
-
     match assertion {
         Assertion::HeadingExists(text) => evaluate_heading_exists(doc, text),
         Assertion::HeadingRegex { pattern } => evaluate_heading_regex(doc, pattern),
@@ -801,6 +967,22 @@ fn evaluate_content_assertion(assertion: &Assertion, doc: &Document) -> Result<(
             index,
             min_rows,
         } => evaluate_table_min_rows(doc, heading, *index, *min_rows),
+        Assertion::HeaderTokenSearch {
+            page,
+            index,
+            tokens,
+            min_matches,
+            max_matches,
+        } => evaluate_header_token_search(doc, *page, *index, tokens, *min_matches, *max_matches),
+        Assertion::DominantColumnCount {
+            count,
+            tolerance,
+            sample_pages,
+        } => evaluate_dominant_column_count(doc, *count, *tolerance, *sample_pages),
+        Assertion::FullWidthRow { pattern, min_cells } => {
+            evaluate_full_width_row(doc, pattern, *min_cells)
+        }
+        Assertion::PageSectionCount { min, max } => evaluate_page_section_count(doc, *min, *max),
         _ => Err(format!(
             "assertion '{}' is not implemented in v0.1",
             assertion_type_name(assertion)
@@ -834,6 +1016,10 @@ fn assertion_type_name(assertion: &Assertion) -> &'static str {
         Assertion::TableColumns { .. } => "table_columns",
         Assertion::TableShape { .. } => "table_shape",
         Assertion::TableMinRows { .. } => "table_min_rows",
+        Assertion::HeaderTokenSearch { .. } => "header_token_search",
+        Assertion::DominantColumnCount { .. } => "dominant_column_count",
+        Assertion::FullWidthRow { .. } => "full_width_row",
+        Assertion::PageSectionCount { .. } => "page_section_count",
         Assertion::PageCount { .. } => "page_count",
         Assertion::MetadataRegex { .. } => "metadata_regex",
     }
@@ -1763,6 +1949,229 @@ fn evaluate_table_min_rows(
     }
 }
 
+fn evaluate_header_token_search(
+    doc: &Document,
+    page: Option<u32>,
+    index: Option<usize>,
+    tokens: &[String],
+    min_matches: u64,
+    max_matches: Option<u64>,
+) -> Result<(), String> {
+    let html = get_html_document(doc)?;
+    if tokens.is_empty() {
+        return Err("header_token_search requires at least one token".to_owned());
+    }
+    if let Some(max_matches) = max_matches
+        && max_matches < min_matches
+    {
+        return Err("header_token_search max_matches cannot be less than min_matches".to_owned());
+    }
+
+    let token_regexes = compile_header_token_regexes(tokens)?;
+    let tables = select_html_tables(html, page, index)?;
+    let best_match_count = tables
+        .iter()
+        .map(|table| matched_header_tokens(table, &token_regexes).len() as u64)
+        .max()
+        .unwrap_or(0);
+
+    if best_match_count < min_matches {
+        return Err(format!(
+            "best header token match count was {best_match_count}, expected at least {min_matches}"
+        ));
+    }
+    if let Some(max_matches) = max_matches
+        && best_match_count > max_matches
+    {
+        return Err(format!(
+            "best header token match count was {best_match_count}, expected at most {max_matches}"
+        ));
+    }
+
+    Ok(())
+}
+
+fn evaluate_dominant_column_count(
+    doc: &Document,
+    count: usize,
+    tolerance: usize,
+    sample_pages: u32,
+) -> Result<(), String> {
+    let html = get_html_document(doc)?;
+    if sample_pages == 0 {
+        return Err("dominant_column_count sample_pages must be >= 1".to_owned());
+    }
+
+    let tables = dominant_column_tables(html, sample_pages);
+    if tables.is_empty() {
+        return Err(format!(
+            "no html tables available within the first {sample_pages} pages"
+        ));
+    }
+
+    let column_counts: Vec<usize> = tables
+        .iter()
+        .map(|table| table_column_count(table))
+        .collect();
+    let Some((dominant, _)) = dominant_mode(&column_counts) else {
+        return Err("unable to determine dominant column count".to_owned());
+    };
+
+    if dominant.abs_diff(count) <= tolerance {
+        Ok(())
+    } else {
+        Err(format!(
+            "dominant column count was {dominant}, expected {count} +/- {tolerance}"
+        ))
+    }
+}
+
+fn evaluate_full_width_row(doc: &Document, pattern: &str, min_cells: usize) -> Result<(), String> {
+    let html = get_html_document(doc)?;
+    let regex =
+        Regex::new(pattern).map_err(|error| format!("invalid regex '{pattern}': {error}"))?;
+
+    let found = html.tables.iter().any(|table| {
+        table.rows.iter().any(|row| {
+            row.len() >= min_cells
+                && full_width_row_text(row).is_some_and(|text| regex.is_match(&text))
+        })
+    });
+
+    if found {
+        Ok(())
+    } else {
+        Err(format!(
+            "no full-width row matched '{pattern}' with min_cells {min_cells}"
+        ))
+    }
+}
+
+fn evaluate_page_section_count(
+    doc: &Document,
+    min: Option<u64>,
+    max: Option<u64>,
+) -> Result<(), String> {
+    let html = get_html_document(doc)?;
+    let count = html.page_sections as u64;
+
+    if let Some(min) = min
+        && count < min
+    {
+        return Err(format!(
+            "html page-section count was {count}, expected at least {min}"
+        ));
+    }
+    if let Some(max) = max
+        && count > max
+    {
+        return Err(format!(
+            "html page-section count was {count}, expected at most {max}"
+        ));
+    }
+
+    Ok(())
+}
+
+fn get_html_document(doc: &Document) -> Result<&HtmlDocument, String> {
+    match doc {
+        Document::Html(html) => Ok(html),
+        _ => Err("html assertion requires html format".to_owned()),
+    }
+}
+
+fn select_html_tables(
+    html: &HtmlDocument,
+    page: Option<u32>,
+    index: Option<usize>,
+) -> Result<Vec<&Table>, String> {
+    let tables = html_tables_for_filter(html, page);
+    if tables.is_empty() {
+        return match page {
+            Some(page) => Err(format!("no html tables found for page {page}")),
+            None => Err("no html tables found".to_owned()),
+        };
+    }
+
+    if let Some(index) = index {
+        let table = tables.get(index).copied().ok_or_else(|| match page {
+            Some(page) => format!("no html table at filtered index {index} for page {page}"),
+            None => format!("no html table at filtered index {index}"),
+        })?;
+        Ok(vec![table])
+    } else {
+        Ok(tables)
+    }
+}
+
+fn html_tables_for_filter(html: &HtmlDocument, page: Option<u32>) -> Vec<&Table> {
+    html.tables
+        .iter()
+        .filter(|table| page.is_none_or(|expected| table.page == Some(expected)))
+        .collect()
+}
+
+fn dominant_column_tables(html: &HtmlDocument, sample_pages: u32) -> Vec<&Table> {
+    let has_page_context = html.tables.iter().any(|table| table.page.is_some());
+    html.tables
+        .iter()
+        .filter(|table| !has_page_context || table.page.is_some_and(|page| page <= sample_pages))
+        .collect()
+}
+
+fn compile_header_token_regexes(tokens: &[String]) -> Result<Vec<(String, Regex)>, String> {
+    tokens
+        .iter()
+        .map(|token| {
+            Regex::new(token)
+                .map(|regex| (token.clone(), regex))
+                .map_err(|error| format!("invalid regex '{token}': {error}"))
+        })
+        .collect()
+}
+
+fn matched_header_tokens(table: &Table, token_regexes: &[(String, Regex)]) -> Vec<String> {
+    token_regexes
+        .iter()
+        .filter(|(_, regex)| table.headers.iter().any(|header| regex.is_match(header)))
+        .map(|(token, _)| token.clone())
+        .collect()
+}
+
+fn table_column_count(table: &Table) -> usize {
+    table
+        .rows
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or(table.headers.len())
+        .max(table.headers.len())
+}
+
+fn dominant_mode(counts: &[usize]) -> Option<(usize, usize)> {
+    let mut frequencies = HashMap::new();
+    for count in counts {
+        *frequencies.entry(*count).or_insert(0usize) += 1;
+    }
+
+    frequencies
+        .into_iter()
+        .max_by_key(|(count, frequency)| (*frequency, usize::MAX - *count))
+}
+
+fn full_width_row_text(row: &[String]) -> Option<String> {
+    let mut non_empty = row
+        .iter()
+        .map(|cell| cell.trim())
+        .filter(|cell| !cell.is_empty());
+    let first = non_empty.next()?.to_owned();
+    if non_empty.all(|cell| cell == first) {
+        Some(first)
+    } else {
+        None
+    }
+}
+
 fn find_table<'a>(
     doc: &'a Document,
     heading_pattern: &str,
@@ -1938,6 +2347,7 @@ mod tests {
     use crate::document::{CsvDocument, HtmlDocument, PdfDocument, RawDocument};
     use lopdf::{Document as LopdfDocument, Object, Stream, dictionary};
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::NamedTempFile;
 
     fn csv_document(contents: &str) -> Document {
@@ -1952,6 +2362,12 @@ mod tests {
         fs::write(file.path(), contents).expect("write html fixture");
         let (_persisted_file, path) = file.keep().expect("persist html fixture");
         let html_doc = HtmlDocument::open(&path).expect("open html fixture");
+        Document::Html(html_doc)
+    }
+
+    fn html_fixture_document(relative: &str) -> Document {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative);
+        let html_doc = HtmlDocument::open(&path).expect("open committed html fixture");
         Document::Html(html_doc)
     }
 
@@ -3511,5 +3927,209 @@ One line.
         let context = result.context.expect("diagnostic context");
         assert_eq!(context["heading_found"], true);
         assert_eq!(context["section_lines"], 1);
+    }
+
+    #[test]
+    fn header_token_search_supports_page_filters_indexing_and_exclusion_bounds() {
+        let ares = html_fixture_document("tests/fixtures/html/bdc_soi_ares_like.html");
+        let pennant = html_fixture_document("tests/fixtures/html/bdc_soi_pennant_like.html");
+
+        let page_match = evaluate(
+            &Assertion::HeaderTokenSearch {
+                page: Some(2),
+                index: Some(0),
+                tokens: vec![
+                    "(?i)business\\s+description".to_owned(),
+                    "(?i)coupon".to_owned(),
+                ],
+                min_matches: 2,
+                max_matches: None,
+            },
+            &ares,
+        );
+        assert!(page_match.passed);
+
+        let exclusion = evaluate(
+            &Assertion::HeaderTokenSearch {
+                page: None,
+                index: None,
+                tokens: vec!["(?i)business\\s+description".to_owned()],
+                min_matches: 0,
+                max_matches: Some(0),
+            },
+            &pennant,
+        );
+        assert!(exclusion.passed);
+
+        let missing = evaluate(
+            &Assertion::HeaderTokenSearch {
+                page: None,
+                index: None,
+                tokens: vec!["(?i)business\\s+description".to_owned()],
+                min_matches: 1,
+                max_matches: None,
+            },
+            &pennant,
+        );
+        assert!(!missing.passed);
+        assert!(
+            missing
+                .detail
+                .as_deref()
+                .expect("failure detail")
+                .contains("best header token match count")
+        );
+    }
+
+    #[test]
+    fn dominant_column_count_uses_mode_and_tolerance() {
+        let ares = html_fixture_document("tests/fixtures/html/bdc_soi_ares_like.html");
+        let empty = html_fixture_document("tests/fixtures/html/minimal_empty_shell.html");
+
+        let pass = evaluate(
+            &Assertion::DominantColumnCount {
+                count: 6,
+                tolerance: 0,
+                sample_pages: 2,
+            },
+            &ares,
+        );
+        assert!(pass.passed);
+
+        let fail = evaluate(
+            &Assertion::DominantColumnCount {
+                count: 4,
+                tolerance: 0,
+                sample_pages: 2,
+            },
+            &ares,
+        );
+        assert!(!fail.passed);
+        assert!(
+            fail.detail
+                .as_deref()
+                .expect("failure detail")
+                .contains("dominant column count")
+        );
+
+        let empty_fail = evaluate(
+            &Assertion::DominantColumnCount {
+                count: 1,
+                tolerance: 0,
+                sample_pages: 1,
+            },
+            &empty,
+        );
+        assert!(!empty_fail.passed);
+        assert!(
+            empty_fail
+                .detail
+                .as_deref()
+                .expect("failure detail")
+                .contains("no html tables")
+        );
+    }
+
+    #[test]
+    fn full_width_row_and_page_section_count_work_with_html_fixtures() {
+        let ares = html_fixture_document("tests/fixtures/html/bdc_soi_ares_like.html");
+        let blackrock = html_fixture_document("tests/fixtures/html/bdc_soi_blackrock_like.html");
+
+        let row_match = evaluate(
+            &Assertion::FullWidthRow {
+                pattern: "(?i)^(software|healthcare)$".to_owned(),
+                min_cells: 6,
+            },
+            &ares,
+        );
+        assert!(row_match.passed);
+
+        let row_missing = evaluate(
+            &Assertion::FullWidthRow {
+                pattern: "(?i)^(software|healthcare)$".to_owned(),
+                min_cells: 6,
+            },
+            &blackrock,
+        );
+        assert!(!row_missing.passed);
+
+        let page_count = evaluate(
+            &Assertion::PageSectionCount {
+                min: Some(3),
+                max: Some(3),
+            },
+            &ares,
+        );
+        assert!(page_count.passed);
+
+        let page_fail = evaluate(
+            &Assertion::PageSectionCount {
+                min: Some(4),
+                max: None,
+            },
+            &ares,
+        );
+        assert!(!page_fail.passed);
+    }
+
+    #[test]
+    fn diagnose_html_specific_assertions_report_actionable_context() {
+        let pennant = html_fixture_document("tests/fixtures/html/bdc_soi_pennant_like.html");
+        let ares = html_fixture_document("tests/fixtures/html/bdc_soi_ares_like.html");
+
+        let header_tokens = evaluate_with_diagnose(
+            &Assertion::HeaderTokenSearch {
+                page: None,
+                index: None,
+                tokens: vec!["(?i)business\\s+description".to_owned()],
+                min_matches: 1,
+                max_matches: None,
+            },
+            &pennant,
+            true,
+        );
+        assert!(!header_tokens.passed);
+        let header_context = header_tokens.context.expect("header diagnostic context");
+        assert_eq!(header_context["best_match_count"], 0);
+        assert!(header_context["tables_scanned"].as_array().is_some());
+
+        let dominant = evaluate_with_diagnose(
+            &Assertion::DominantColumnCount {
+                count: 5,
+                tolerance: 0,
+                sample_pages: 2,
+            },
+            &ares,
+            true,
+        );
+        assert!(!dominant.passed);
+        let dominant_context = dominant.context.expect("dominant diagnostic context");
+        assert_eq!(dominant_context["dominant_column_count"], 6);
+
+        let full_width = evaluate_with_diagnose(
+            &Assertion::FullWidthRow {
+                pattern: "(?i)^equity$".to_owned(),
+                min_cells: 6,
+            },
+            &ares,
+            true,
+        );
+        assert!(!full_width.passed);
+        let full_width_context = full_width.context.expect("full width diagnostic context");
+        assert!(full_width_context["candidate_rows"].as_array().is_some());
+
+        let page_sections = evaluate_with_diagnose(
+            &Assertion::PageSectionCount {
+                min: Some(4),
+                max: None,
+            },
+            &ares,
+            true,
+        );
+        assert!(!page_sections.passed);
+        let page_context = page_sections
+            .context
+            .expect("page-section diagnostic context");
+        assert_eq!(page_context["page_section_count"], 3);
     }
 }

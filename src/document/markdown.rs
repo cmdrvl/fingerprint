@@ -33,6 +33,7 @@ pub struct Table {
     pub index: usize,
     pub start_line: usize,
     pub end_line: usize,
+    pub page: Option<u32>,
     pub headers: Vec<String>,
     pub rows: Vec<Vec<String>>,
 }
@@ -328,6 +329,7 @@ fn parse_tables(content: &str, headings: &[Heading]) -> Vec<Table> {
                 index: table_index,
                 start_line: table_start + 1,
                 end_line: table_end + 1,
+                page: None,
                 headers: header_row,
                 rows: data_rows,
             });

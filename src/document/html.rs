@@ -12,6 +12,7 @@ pub struct HtmlDocument {
     pub headings: Vec<Heading>,
     pub sections: Vec<Section>,
     pub tables: Vec<Table>,
+    pub page_sections: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +32,7 @@ enum HtmlBlockKind {
     },
     Table {
         heading_ref: Option<String>,
+        page: Option<u32>,
         headers: Vec<String>,
         rows: Vec<Vec<String>>,
     },
@@ -39,6 +41,7 @@ enum HtmlBlockKind {
 #[derive(Debug, Clone)]
 struct TableSeed {
     heading_ref: Option<String>,
+    page: Option<u32>,
     headers: Vec<String>,
     rows: Vec<Vec<String>>,
 }
@@ -74,6 +77,7 @@ fn parse_html_document(path: &Path, raw: String) -> HtmlDocument {
 
     collect_blocks(document.tree.root(), None, &mut last_heading, &mut blocks);
 
+    let page_sections = count_page_sections(&document);
     let (normalized, headings, sections, tables) = materialize_blocks(&blocks);
 
     HtmlDocument {
@@ -83,6 +87,7 @@ fn parse_html_document(path: &Path, raw: String) -> HtmlDocument {
         headings,
         sections,
         tables,
+        page_sections,
     }
 }
 
@@ -139,11 +144,12 @@ fn collect_blocks(
             }
 
             if name == "table" {
-                let table = parse_top_level_table(&element, last_heading.clone());
+                let table = parse_top_level_table(&element, last_heading.clone(), page);
                 blocks.push(HtmlBlock {
                     page,
                     kind: HtmlBlockKind::Table {
                         heading_ref: table.heading_ref,
+                        page: table.page,
                         headers: table.headers,
                         rows: table.rows,
                     },
@@ -356,6 +362,12 @@ fn normalize_text_fragment(text: &str) -> String {
     lines.join("\n")
 }
 
+fn count_page_sections(document: &Html) -> usize {
+    let selector =
+        scraper::Selector::parse("section[data-page-number]").expect("valid page-section selector");
+    document.select(&selector).count()
+}
+
 fn collapse_whitespace(text: &str) -> String {
     let mut result = String::new();
     let mut last_was_whitespace = false;
@@ -375,11 +387,16 @@ fn collapse_whitespace(text: &str) -> String {
     result
 }
 
-fn parse_top_level_table(element: &ElementRef<'_>, heading_ref: Option<String>) -> TableSeed {
+fn parse_top_level_table(
+    element: &ElementRef<'_>,
+    heading_ref: Option<String>,
+    page: Option<u32>,
+) -> TableSeed {
     let row_seeds = collect_table_rows(*element);
     let (headers, rows) = expand_table_rows(&row_seeds);
     TableSeed {
         heading_ref,
+        page,
         headers,
         rows,
     }
@@ -591,6 +608,7 @@ fn materialize_blocks(blocks: &[HtmlBlock]) -> (String, Vec<Heading>, Vec<Sectio
             }
             HtmlBlockKind::Table {
                 heading_ref,
+                page,
                 headers,
                 rows,
             } => {
@@ -605,6 +623,7 @@ fn materialize_blocks(blocks: &[HtmlBlock]) -> (String, Vec<Heading>, Vec<Sectio
                     index: table_index,
                     start_line,
                     end_line,
+                    page: *page,
                     headers: headers.clone(),
                     rows: rows.clone(),
                 });

@@ -194,6 +194,14 @@ fn codegen_assertion(assertion: &crate::dsl::assertions::Assertion) -> String {
         }
     }
 
+    /// Format an Option<u32>.
+    fn opt_u32(value: Option<u32>) -> String {
+        match value {
+            Some(v) => format!("Some({})", v),
+            None => "None".to_owned(),
+        }
+    }
+
     /// Format an Option<u64>.
     fn opt_u64(value: Option<u64>) -> String {
         match value {
@@ -412,6 +420,46 @@ fn codegen_assertion(assertion: &crate::dsl::assertions::Assertion) -> String {
                 s(heading),
                 opt_u(*index),
                 min_rows
+            )
+        }
+        Assertion::HeaderTokenSearch {
+            page,
+            index,
+            tokens,
+            min_matches,
+            max_matches,
+        } => {
+            format!(
+                "HeaderTokenSearch {{ page: {}, index: {}, tokens: {}, min_matches: {}, max_matches: {} }}",
+                opt_u32(*page),
+                opt_u(*index),
+                vec_s(tokens),
+                min_matches,
+                opt_u64(*max_matches)
+            )
+        }
+        Assertion::DominantColumnCount {
+            count,
+            tolerance,
+            sample_pages,
+        } => {
+            format!(
+                "DominantColumnCount {{ count: {}, tolerance: {}, sample_pages: {} }}",
+                count, tolerance, sample_pages
+            )
+        }
+        Assertion::FullWidthRow { pattern, min_cells } => {
+            format!(
+                "FullWidthRow {{ pattern: {}, min_cells: {} }}",
+                s(pattern),
+                min_cells
+            )
+        }
+        Assertion::PageSectionCount { min, max } => {
+            format!(
+                "PageSectionCount {{ min: {}, max: {} }}",
+                opt_u64(*min),
+                opt_u64(*max)
             )
         }
         Assertion::PageCount { min, max } => {

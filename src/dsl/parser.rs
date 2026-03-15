@@ -122,6 +122,20 @@ fn assertion_base_name(assertion: &crate::dsl::assertions::Assertion) -> String 
             regex_excerpt(heading, 20),
             index.unwrap_or(0)
         ),
+        Assertion::HeaderTokenSearch { tokens, .. } => format!(
+            "header_token_search__{}",
+            tokens
+                .first()
+                .map(|token| regex_excerpt(token, 20))
+                .unwrap_or_else(|| "token".to_owned())
+        ),
+        Assertion::DominantColumnCount { count, .. } => {
+            format!("dominant_column_count__{count}")
+        }
+        Assertion::FullWidthRow { pattern, .. } => {
+            format!("full_width_row__{}", regex_excerpt(pattern, 20))
+        }
+        Assertion::PageSectionCount { .. } => "page_section_count".to_owned(),
         Assertion::SheetExists(sheet) => {
             format!("sheet_exists__{}", literal_excerpt(sheet, 20, false))
         }
@@ -514,5 +528,90 @@ assertions:
             }
             other => panic!("expected Assertion::HeaderRowMatch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_supports_html_specific_assertions_and_defaults() {
+        let yaml = r#"
+fingerprint_id: html-test.v1
+format: html
+assertions:
+  - header_token_search:
+      tokens:
+        - "(?i)business\\s+description"
+        - "(?i)coupon"
+      min_matches: 1
+  - dominant_column_count:
+      count: 6
+      tolerance: 1
+  - full_width_row:
+      pattern: "(?i)^(software|healthcare)$"
+      min_cells: 6
+  - page_section_count:
+      min: 2
+      max: 5
+"#;
+        let mut file = NamedTempFile::new().expect("create temp file");
+        std::io::Write::write_all(&mut file, yaml.as_bytes()).expect("write yaml");
+        std::io::Write::flush(&mut file).expect("flush yaml");
+
+        let parsed = parse(file.path()).expect("parse html-specific assertions");
+        let names: Vec<&str> = parsed
+            .assertions
+            .iter()
+            .map(|assertion| assertion.name.as_deref().expect("generated name"))
+            .collect();
+
+        assert_eq!(names[0], "header_token_search__businesss_descriptio");
+        assert_eq!(names[1], "dominant_column_count__6");
+        assert_eq!(names[2], "full_width_row__software_healthcare");
+        assert_eq!(names[3], "page_section_count");
+
+        match &parsed.assertions[0].assertion {
+            Assertion::HeaderTokenSearch {
+                page,
+                index,
+                tokens,
+                min_matches,
+                max_matches,
+            } => {
+                assert_eq!(*page, None);
+                assert_eq!(*index, None);
+                assert_eq!(*min_matches, 1);
+                assert_eq!(*max_matches, None);
+                assert_eq!(tokens.len(), 2);
+            }
+            other => panic!("expected Assertion::HeaderTokenSearch, got {other:?}"),
+        }
+
+        match &parsed.assertions[1].assertion {
+            Assertion::DominantColumnCount {
+                count,
+                tolerance,
+                sample_pages,
+            } => {
+                assert_eq!(*count, 6);
+                assert_eq!(*tolerance, 1);
+                assert_eq!(*sample_pages, 4);
+            }
+            other => panic!("expected Assertion::DominantColumnCount, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_rejects_unknown_html_assertion_keys() {
+        let yaml = r#"
+fingerprint_id: html-test.v2
+format: html
+assertions:
+  - unknown_html_assertion:
+      value: 1
+"#;
+        let mut file = NamedTempFile::new().expect("create temp file");
+        std::io::Write::write_all(&mut file, yaml.as_bytes()).expect("write yaml");
+        std::io::Write::flush(&mut file).expect("flush yaml");
+
+        let error = parse(file.path()).expect_err("unknown assertion should fail parsing");
+        assert!(error.contains("no variant of enum Assertion found"));
     }
 }
