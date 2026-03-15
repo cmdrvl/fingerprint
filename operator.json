@@ -1,7 +1,7 @@
 {
   "schema_version": "operator.v0",
   "name": "fingerprint",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Tests artifacts against fingerprint definitions and produces content hashes",
   "repository": "https://github.com/cmdrvl/fingerprint",
   "license": "MIT",

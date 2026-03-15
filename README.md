@@ -121,7 +121,7 @@ Run mode still applies **first-match-wins** at the root fingerprint level in CLI
 
 Every evaluated child still appears in the `children` array. The parent payload also includes a `child_routing` summary with `selected`, `no_child_match`, or `ambiguous`, plus `matched_child_fingerprint_ids` and `selected_child_fingerprint_id` when exactly one family route wins.
 
-HTML support and the four HTML-only assertions land in the `v0.5.0` release line. Older binaries reject these definitions during compile/validation instead of silently falling back. In this repository's current compile surface, unknown assertion keys return `E_UNKNOWN_ASSERTION`; unsupported or too-old format support validates as `E_INVALID_YAML`.
+HTML support and the four HTML-only assertions land in the `v0.5.x` release line. Older binaries reject these definitions during compile/validation instead of silently falling back. In this repository's current compile surface, unknown assertion keys return `E_UNKNOWN_ASSERTION`; unsupported or too-old format support validates as `E_INVALID_YAML`.
 
 ### It tells you what went wrong
 
@@ -458,7 +458,7 @@ Every refusal includes a concrete `next_command` when mechanical recovery is pos
     },
     "content_hash": "blake3:9f2a..."
   },
-  "tool_versions": { "vacuum": "0.1.0", "hash": "0.1.0", "fingerprint": "0.5.0" }
+  "tool_versions": { "vacuum": "0.1.0", "hash": "0.1.0", "fingerprint": "0.5.1" }
 }
 ```
 
