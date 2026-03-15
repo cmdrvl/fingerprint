@@ -10,10 +10,14 @@ fn run_fingerprint_with_definitions(
     extra_args: &[&str],
     definitions_dir: &Path,
 ) -> Output {
+    let trust_file = NamedTempFile::new().expect("create trust file");
+    fs::write(trust_file.path(), "trust:\n  - \"installed:*\"\n").expect("write trust file");
     let mut command = Command::new(env!("CARGO_BIN_EXE_fingerprint"));
     command.arg(manifest_path);
     command.args(extra_args);
     command.env("FINGERPRINT_DEFINITIONS", definitions_dir);
+    command.env("FINGERPRINT_TRUST", trust_file.path());
+    command.current_dir(env!("CARGO_MANIFEST_DIR"));
     command.output().expect("run fingerprint binary")
 }
 

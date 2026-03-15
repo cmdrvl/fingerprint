@@ -54,10 +54,14 @@ fn parse_jsonl(stdout: &[u8]) -> Vec<Value> {
 }
 
 fn run_fingerprint(manifest_path: &Path, extra_args: &[&str]) -> Output {
+    let trust_file = NamedTempFile::new().expect("create trust file");
+    fs::write(trust_file.path(), "trust:\n  - \"installed:*\"\n").expect("write trust file");
     let mut command = Command::new(env!("CARGO_BIN_EXE_fingerprint"));
     command.arg(manifest_path);
     command.args(extra_args);
     command.env("FINGERPRINT_DEFINITIONS", rules_dir());
+    command.env("FINGERPRINT_TRUST", trust_file.path());
+    command.current_dir(env!("CARGO_MANIFEST_DIR"));
     command.output().expect("run fingerprint binary")
 }
 

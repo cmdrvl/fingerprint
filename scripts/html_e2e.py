@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -217,18 +218,32 @@ def run_fingerprint(
         command.append("--no-witness")
 
     env = os.environ.copy()
+    trust_path: Path | None = None
     if definitions_dir is not None:
         env["FINGERPRINT_DEFINITIONS"] = str(definitions_dir)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            suffix=".yaml",
+            delete=False,
+        ) as handle:
+            handle.write('trust:\n  - "installed:*"\n')
+            trust_path = Path(handle.name)
+        env["FINGERPRINT_TRUST"] = str(trust_path)
 
     started = time.perf_counter()
-    process = subprocess.run(
-        command,
-        cwd=str(REPO_ROOT),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=env,
-        check=False,
-    )
+    try:
+        process = subprocess.run(
+            command,
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            check=False,
+        )
+    finally:
+        if trust_path is not None:
+            trust_path.unlink(missing_ok=True)
     duration_ms = int((time.perf_counter() - started) * 1000)
     return process, duration_ms, command
 

@@ -29,3 +29,5 @@ target
 target_codex/
 target_codex_hq/
 /artifacts/
+__pycache__/
+*.pyc

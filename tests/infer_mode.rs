@@ -2,6 +2,7 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use tempfile::NamedTempFile;
 
 fn repo_path(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
@@ -15,9 +16,13 @@ fn run_fingerprint(args: &[&str]) -> Output {
 }
 
 fn run_fingerprint_with_definitions(args: &[&str], definitions_dir: &Path) -> Output {
+    let trust_file = NamedTempFile::new().expect("create trust file");
+    fs::write(trust_file.path(), "trust:\n  - \"installed:*\"\n").expect("write trust file");
     Command::new(env!("CARGO_BIN_EXE_fingerprint"))
         .args(args)
         .env("FINGERPRINT_DEFINITIONS", definitions_dir)
+        .env("FINGERPRINT_TRUST", trust_file.path())
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
         .expect("run fingerprint binary with definitions")
 }
@@ -289,7 +294,9 @@ fn infer_html_output_bootstraps_positive_match_and_negative_rejection() {
     assert_eq!(
         run.status.code(),
         Some(1),
-        "positive match plus negative rejection should return PARTIAL"
+        "positive match plus negative rejection should return PARTIAL\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
     );
     let records = parse_jsonl(&run.stdout);
     assert_eq!(records.len(), 2);

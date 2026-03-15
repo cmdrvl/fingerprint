@@ -16,9 +16,13 @@ fn run_fingerprint(args: &[&str]) -> Output {
 }
 
 fn run_fingerprint_with_rules(args: &[&str]) -> Output {
+    let trust_file = NamedTempFile::new().expect("create trust file");
+    fs::write(trust_file.path(), "trust:\n  - \"installed:*\"\n").expect("write trust file");
     Command::new(env!("CARGO_BIN_EXE_fingerprint"))
         .args(args)
         .env("FINGERPRINT_DEFINITIONS", repo_path("rules"))
+        .env("FINGERPRINT_TRUST", trust_file.path())
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
         .expect("run fingerprint binary with repo rules")
 }
