@@ -1,4 +1,4 @@
-use crate::document::Document;
+use crate::document::{Document, StructuredDocument};
 use crate::dsl::parser::ExtractSection;
 use calamine::{Reader, open_workbook_auto};
 use regex::Regex;
@@ -219,16 +219,18 @@ fn extract_text_match(doc: &Document, section: &ExtractSection) -> Result<Option
     })))
 }
 
-fn content_document(doc: &Document) -> Option<&crate::document::MarkdownDocument> {
+fn content_document(doc: &Document) -> Option<StructuredDocument<'_>> {
     match doc {
-        Document::Markdown(markdown) => Some(markdown),
-        Document::Pdf(pdf) => pdf.text.as_ref(),
+        Document::Html(html) => Some(StructuredDocument::from_html(html)),
+        Document::Markdown(markdown) => Some(StructuredDocument::from_markdown(markdown)),
+        Document::Pdf(pdf) => pdf.text.as_ref().map(StructuredDocument::from_markdown),
         _ => None,
     }
 }
 
 fn content_text(doc: &Document) -> Option<&str> {
     match doc {
+        Document::Html(html) => Some(&html.normalized),
         Document::Markdown(markdown) => Some(&markdown.normalized),
         Document::Pdf(pdf) => pdf
             .text
@@ -352,7 +354,7 @@ fn parse_range_ref(range: &str) -> Result<CellRange, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::{CsvDocument, MarkdownDocument, PdfDocument};
+    use crate::document::{CsvDocument, HtmlDocument, MarkdownDocument, PdfDocument};
     use std::fs;
     use std::io::Write;
     use tempfile::NamedTempFile;
@@ -371,6 +373,15 @@ mod tests {
         file.flush().expect("flush markdown fixture");
         let markdown = MarkdownDocument::open(file.path()).expect("open markdown fixture");
         Document::Markdown(markdown)
+    }
+
+    fn html_document(contents: &str) -> Document {
+        let mut file = NamedTempFile::with_suffix(".html").expect("create html temp file");
+        file.write_all(contents.as_bytes())
+            .expect("write html fixture");
+        file.flush().expect("flush html fixture");
+        let html = HtmlDocument::open(file.path()).expect("open html fixture");
+        Document::Html(html)
     }
 
     #[test]
@@ -507,5 +518,77 @@ mod tests {
 
         let extracted = extract(&doc, &sections).expect("extract section from pdf text");
         assert!(extracted.contains_key("income_cap_section"));
+    }
+
+    #[test]
+    fn extracts_section_table_and_text_match_from_html() {
+        let doc = html_document(
+            r#"
+<html>
+  <body>
+    <h1>Rent Roll</h1>
+    <table>
+      <tr><th>Tenant</th><th>SF</th></tr>
+      <tr><td>Acme</td><td>1200</td></tr>
+    </table>
+    <h2>Income Capitalization</h2>
+    <p>As of June 15, 2024 the cap rate is 6.25%.</p>
+  </body>
+</html>
+"#,
+        );
+        let sections = vec![
+            ExtractSection {
+                name: "rent_roll_table".to_owned(),
+                r#type: "table".to_owned(),
+                anchor_heading: Some("(?i)rent roll".to_owned()),
+                index: Some(0),
+                anchor: None,
+                pattern: None,
+                within_chars: None,
+                sheet: None,
+                range: None,
+            },
+            ExtractSection {
+                name: "income_cap_section".to_owned(),
+                r#type: "section".to_owned(),
+                anchor_heading: Some("(?i)income capitali[sz]ation".to_owned()),
+                index: None,
+                anchor: None,
+                pattern: None,
+                within_chars: None,
+                sheet: None,
+                range: None,
+            },
+            ExtractSection {
+                name: "as_of_date".to_owned(),
+                r#type: "text_match".to_owned(),
+                anchor_heading: None,
+                index: None,
+                anchor: Some("(?i)as of".to_owned()),
+                pattern: Some(r"\w+ \d{1,2},? \d{4}".to_owned()),
+                within_chars: Some(100),
+                sheet: None,
+                range: None,
+            },
+        ];
+
+        let extracted = extract(&doc, &sections).expect("extract html sections");
+
+        let table = extracted
+            .get("rent_roll_table")
+            .expect("table extract present");
+        assert_eq!(table["columns"], json!(["Tenant", "SF"]));
+        assert_eq!(table["row_count"], json!(1));
+
+        let section = extracted
+            .get("income_cap_section")
+            .expect("section extract present");
+        assert_eq!(section["heading"], json!("Income Capitalization"));
+
+        let text_match = extracted
+            .get("as_of_date")
+            .expect("text match extract present");
+        assert_eq!(text_match["matched"], json!("June 15, 2024"));
     }
 }

@@ -12,7 +12,7 @@ pub use dispatch::{
     open_document_with_text_path,
 };
 pub use html::HtmlDocument;
-pub use markdown::MarkdownDocument;
+pub use markdown::{Heading, MarkdownDocument, Section, Table};
 use std::path::{Path, PathBuf};
 pub use text::TextDocument;
 
@@ -30,6 +30,14 @@ pub enum Document {
     Unknown(RawDocument),
 }
 
+#[derive(Clone, Copy)]
+pub struct StructuredDocument<'a> {
+    pub normalized: &'a str,
+    pub headings: &'a [Heading],
+    pub sections: &'a [Section],
+    pub tables: &'a [Table],
+}
+
 impl Document {
     pub fn path(&self) -> &Path {
         match self {
@@ -40,6 +48,26 @@ impl Document {
             Document::Markdown(d) => &d.path,
             Document::Text(d) => &d.path,
             Document::Unknown(d) => &d.path,
+        }
+    }
+}
+
+impl<'a> StructuredDocument<'a> {
+    pub fn from_markdown(document: &'a MarkdownDocument) -> Self {
+        Self {
+            normalized: document.normalized.as_str(),
+            headings: &document.headings,
+            sections: &document.sections,
+            tables: &document.tables,
+        }
+    }
+
+    pub fn from_html(document: &'a HtmlDocument) -> Self {
+        Self {
+            normalized: document.normalized.as_str(),
+            headings: &document.headings,
+            sections: &document.sections,
+            tables: &document.tables,
         }
     }
 }

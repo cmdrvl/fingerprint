@@ -47,7 +47,7 @@
   ],
 
   "capabilities": {
-    "formats": ["csv", "xlsx", "pdf"],
+    "formats": ["csv", "xlsx", "pdf", "html", "markdown", "text"],
     "profile_aware": false,
     "streaming": true
   },

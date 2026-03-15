@@ -81,6 +81,112 @@ fn run_mode_progress_flag_emits_structured_progress_events() {
 }
 
 #[test]
+fn run_mode_matches_installed_html_fingerprint_and_extracts_content() {
+    let definitions_dir = tempdir().expect("create definitions dir");
+    let html_fp = r#"
+fingerprint_id: html-schedule.v1
+format: html
+assertions:
+  - heading_exists: "Rent Roll"
+  - section_non_empty:
+      heading: "(?i)income capitali[sz]ation"
+  - table_columns:
+      heading: "(?i)rent roll"
+      patterns:
+        - "(?i)tenant"
+        - "(?i)sq\\.?\\s*ft|sf"
+        - "(?i)rent"
+  - text_regex:
+      pattern: "\\d+\\.\\d+%"
+extract:
+  - name: rent_roll
+    type: table
+    anchor_heading: "(?i)rent roll"
+    index: 0
+  - name: income_cap
+    type: section
+    anchor_heading: "(?i)income capitali[sz]ation"
+  - name: cap_rate
+    type: text_match
+    anchor: "(?i)cap rate"
+    pattern: "\\d+\\.\\d+%"
+    within_chars: 12
+content_hash:
+  algorithm: blake3
+  over:
+    - rent_roll
+    - income_cap
+    - cap_rate
+"#
+    .trim();
+    std::fs::write(
+        definitions_dir.path().join("html-schedule.fp.yaml"),
+        html_fp,
+    )
+    .expect("write html fingerprint definition");
+
+    let html_file = NamedTempFile::with_suffix(".html").expect("create html temp file");
+    std::fs::write(
+        html_file.path(),
+        r#"
+<html>
+  <body>
+    <h1>Rent Roll</h1>
+    <table>
+      <tr><th>Tenant Name</th><th>Sq. Ft.</th><th>Monthly Rent</th></tr>
+      <tr><td>Acme</td><td>1200</td><td>$10</td></tr>
+    </table>
+    <h2>Income Capitalization</h2>
+    <p>Cap rate is 5.25% for the current period.</p>
+  </body>
+</html>
+"#,
+    )
+    .expect("write html fixture");
+
+    let manifest = write_jsonl(&[json!({
+        "version": "hash.v0",
+        "path": html_file.path().display().to_string(),
+        "extension": ".html",
+        "bytes_hash": "blake3:html",
+        "tool_versions": { "hash": "0.1.0" }
+    })]);
+
+    let output = run_fingerprint_with_definitions(
+        manifest.path(),
+        &["--fp", "html-schedule.v1", "--no-witness"],
+        definitions_dir.path(),
+    );
+
+    assert_eq!(output.status.code(), Some(0));
+    let lines = parse_jsonl(&output.stdout);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        lines[0]["fingerprint"]["fingerprint_id"],
+        "html-schedule.v1"
+    );
+    assert_eq!(lines[0]["fingerprint"]["matched"], true);
+    assert_eq!(
+        lines[0]["fingerprint"]["extracted"]["rent_roll"]["columns"],
+        json!(["Tenant Name", "Sq. Ft.", "Monthly Rent"])
+    );
+    assert_eq!(
+        lines[0]["fingerprint"]["extracted"]["income_cap"]["heading"],
+        "Income Capitalization"
+    );
+    assert_eq!(
+        lines[0]["fingerprint"]["extracted"]["cap_rate"]["matched"],
+        "5.25%"
+    );
+    assert!(
+        lines[0]["fingerprint"]["content_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("blake3:")),
+        "matched html fingerprints should emit a content hash when configured"
+    );
+}
+
+#[test]
 fn run_mode_progress_flag_keeps_witness_failures_structured() {
     let csv_path = repo_path("tests/fixtures/files/sample.csv");
     let manifest = write_jsonl(&[json!({

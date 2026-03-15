@@ -73,6 +73,11 @@ fn smoke_describe_schema_and_list_exit_zero() {
         describe_json.get("pipeline").is_some(),
         "--describe must include pipeline"
     );
+    assert_eq!(
+        describe_json["capabilities"]["formats"],
+        json!(["csv", "xlsx", "pdf", "html", "markdown", "text"]),
+        "--describe must advertise every supported runtime format, including html"
+    );
 
     let schema = run_fingerprint(&["--schema"]);
     assert_eq!(schema.status.code(), Some(0));

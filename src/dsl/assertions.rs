@@ -1,4 +1,4 @@
-use crate::document::Document;
+use crate::document::{Document, StructuredDocument};
 use crate::registry::AssertionResult;
 use calamine::{Reader, open_workbook_auto};
 use chrono::NaiveDate;
@@ -604,6 +604,7 @@ fn section_diagnostic_context(doc: &Document, heading_pattern: &str) -> Option<V
 
 fn content_source_text(doc: &Document) -> Option<&str> {
     match doc {
+        Document::Html(html) => Some(html.normalized.as_str()),
         Document::Markdown(markdown) => Some(markdown.normalized.as_str()),
         Document::Text(text) => Some(text.content()),
         Document::Pdf(pdf) => pdf
@@ -1481,32 +1482,11 @@ fn evaluate_heading_level(doc: &Document, level: u8, pattern: &str) -> Result<()
 }
 
 fn evaluate_text_contains(doc: &Document, text: &str) -> Result<(), String> {
-    match doc {
-        Document::Markdown(md_doc) => {
-            if md_doc.normalized.contains(text) {
-                Ok(())
-            } else {
-                Err(format!("Text '{}' not found in document", text))
-            }
-        }
-        Document::Text(text_doc) => {
-            if text_doc.content().contains(text) {
-                Ok(())
-            } else {
-                Err(format!("Text '{}' not found in document", text))
-            }
-        }
-        Document::Pdf(pdf_doc) => match &pdf_doc.text {
-            Some(md_doc) => {
-                if md_doc.normalized.contains(text) {
-                    Ok(())
-                } else {
-                    Err(format!("Text '{}' not found in document", text))
-                }
-            }
-            None => Err("No text_path provided (E_NO_TEXT)".to_string()),
-        },
-        _ => Err("Content assertion 'text_contains' not supported for document type".to_string()),
+    let source = text_source_for_assertion(doc, "text_contains")?;
+    if source.contains(text) {
+        Ok(())
+    } else {
+        Err(format!("Text '{}' not found in document", text))
     }
 }
 
@@ -1514,32 +1494,11 @@ fn evaluate_text_regex(doc: &Document, pattern: &str) -> Result<(), String> {
     let regex =
         Regex::new(pattern).map_err(|error| format!("invalid regex '{pattern}': {error}"))?;
 
-    match doc {
-        Document::Markdown(md_doc) => {
-            if regex.is_match(&md_doc.normalized) {
-                Ok(())
-            } else {
-                Err(format!("Pattern '{}' not found in document", pattern))
-            }
-        }
-        Document::Text(text_doc) => {
-            if regex.is_match(text_doc.content()) {
-                Ok(())
-            } else {
-                Err(format!("Pattern '{}' not found in document", pattern))
-            }
-        }
-        Document::Pdf(pdf_doc) => match &pdf_doc.text {
-            Some(md_doc) => {
-                if regex.is_match(&md_doc.normalized) {
-                    Ok(())
-                } else {
-                    Err(format!("Pattern '{}' not found in document", pattern))
-                }
-            }
-            None => Err("No text_path provided (E_NO_TEXT)".to_string()),
-        },
-        _ => Err("Content assertion 'text_regex' not supported for document type".to_string()),
+    let source = text_source_for_assertion(doc, "text_regex")?;
+    if regex.is_match(source) {
+        Ok(())
+    } else {
+        Err(format!("Pattern '{}' not found in document", pattern))
     }
 }
 
@@ -1553,17 +1512,7 @@ fn evaluate_text_near(
         .map_err(|error| format!("invalid regex '{}': {error}", anchor_pattern))?;
     let value_regex =
         Regex::new(pattern).map_err(|error| format!("invalid regex '{pattern}': {error}"))?;
-    let source = match doc {
-        Document::Markdown(markdown) => markdown.normalized.as_str(),
-        Document::Text(text) => text.content(),
-        Document::Pdf(pdf) => match &pdf.text {
-            Some(markdown) => markdown.normalized.as_str(),
-            None => return Err("No text_path provided (E_NO_TEXT)".to_string()),
-        },
-        _ => {
-            return Err("Content assertion 'text_near' not supported for document type".to_owned());
-        }
-    };
+    let source = text_source_for_assertion(doc, "text_near")?;
 
     let anchors: Vec<_> = anchor_regex.find_iter(source).collect();
     let values: Vec<_> = value_regex.find_iter(source).collect();
@@ -1604,23 +1553,43 @@ fn distance_with_whitespace_tolerance(source: &str, start: usize, end: usize) ->
     }
 }
 
-/// Get the content document (MarkdownDocument) from any document type that supports content assertions.
-/// For PDFs, this ensures text_path is present and returns E_NO_TEXT if missing.
-fn get_content_document(doc: &Document) -> Result<&crate::document::MarkdownDocument, String> {
+/// Get a shared structured-content view from any document type that supports
+/// heading, section, and table assertions. For PDFs, this ensures text_path is
+/// present and returns E_NO_TEXT if missing.
+fn get_content_document(doc: &Document) -> Result<StructuredDocument<'_>, String> {
     match doc {
-        Document::Markdown(md_doc) => Ok(md_doc),
+        Document::Html(html_doc) => Ok(StructuredDocument::from_html(html_doc)),
+        Document::Markdown(md_doc) => Ok(StructuredDocument::from_markdown(md_doc)),
         Document::Pdf(pdf_doc) => match &pdf_doc.text {
-            Some(md_doc) => Ok(md_doc),
+            Some(md_doc) => Ok(StructuredDocument::from_markdown(md_doc)),
             None => Err("No text_path provided (E_NO_TEXT)".to_string()),
         },
         Document::Text(_) => Err(
-            "Heading assertions require markdown format (text format has no heading structure)"
+            "Heading assertions require html or markdown format, or pdf with text_path (text format has no heading structure)"
                 .to_string(),
         ),
         _ => Err(
-            "Content assertions with heading structure require markdown or pdf with text_path"
+            "Content assertions with heading structure require html, markdown, or pdf with text_path"
                 .to_string(),
         ),
+    }
+}
+
+fn text_source_for_assertion<'a>(
+    doc: &'a Document,
+    assertion_name: &str,
+) -> Result<&'a str, String> {
+    match doc {
+        Document::Html(html_doc) => Ok(html_doc.normalized.as_str()),
+        Document::Markdown(md_doc) => Ok(md_doc.normalized.as_str()),
+        Document::Text(text_doc) => Ok(text_doc.content()),
+        Document::Pdf(pdf_doc) => match &pdf_doc.text {
+            Some(md_doc) => Ok(md_doc.normalized.as_str()),
+            None => Err("No text_path provided (E_NO_TEXT)".to_string()),
+        },
+        _ => Err(format!(
+            "Content assertion '{assertion_name}' not supported for document type"
+        )),
     }
 }
 
@@ -1966,7 +1935,7 @@ fn is_date(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::{CsvDocument, PdfDocument, RawDocument};
+    use crate::document::{CsvDocument, HtmlDocument, PdfDocument, RawDocument};
     use lopdf::{Document as LopdfDocument, Object, Stream, dictionary};
     use std::fs;
     use tempfile::NamedTempFile;
@@ -1976,6 +1945,14 @@ mod tests {
         fs::write(file.path(), contents).expect("write csv fixture");
         let (_persisted_file, path) = file.keep().expect("persist csv fixture");
         Document::Csv(CsvDocument { path })
+    }
+
+    fn html_document(contents: &str) -> Document {
+        let file = NamedTempFile::with_suffix(".html").expect("create html temp file");
+        fs::write(file.path(), contents).expect("write html fixture");
+        let (_persisted_file, path) = file.keep().expect("persist html fixture");
+        let html_doc = HtmlDocument::open(&path).expect("open html fixture");
+        Document::Html(html_doc)
     }
 
     fn pdf_document(page_count: usize, metadata: &[(&str, &str)]) -> Document {
@@ -2411,7 +2388,7 @@ mod tests {
                 .detail
                 .as_deref()
                 .expect("failure detail")
-                .contains("require markdown or pdf with text_path")
+                .contains("require html, markdown, or pdf with text_path")
         );
     }
 
@@ -2507,6 +2484,44 @@ mod tests {
             &doc,
         );
         assert!(!result.passed);
+    }
+
+    #[test]
+    fn text_assertions_work_with_html_document() {
+        let doc = html_document(
+            r#"
+<html>
+  <body>
+    <h1>Overview</h1>
+    <p>Capitalization&nbsp;rate is 5.25% for the subject property.</p>
+  </body>
+</html>
+"#,
+        );
+
+        let contains = evaluate(
+            &Assertion::TextContains("Capitalization rate is 5.25%".to_string()),
+            &doc,
+        );
+        assert!(contains.passed);
+
+        let regex = evaluate(
+            &Assertion::TextRegex {
+                pattern: r"\d+\.\d+%".to_string(),
+            },
+            &doc,
+        );
+        assert!(regex.passed);
+
+        let near = evaluate(
+            &Assertion::TextNear {
+                anchor: "(?i)capitalization rate".to_string(),
+                pattern: r"\d+\.\d+%".to_string(),
+                within_chars: 10,
+            },
+            &doc,
+        );
+        assert!(near.passed);
     }
 
     #[test]
@@ -2854,6 +2869,69 @@ mod tests {
                 .unwrap()
                 .contains("heading not found")
         );
+    }
+
+    #[test]
+    fn heading_section_and_table_assertions_work_with_html_document() {
+        let doc = html_document(
+            r#"
+<html>
+  <body>
+    <h1>Rent Roll</h1>
+    <table>
+      <tr><th>Tenant Name</th><th>Sq. Ft.</th><th>Monthly Rent</th></tr>
+      <tr><td>Acme</td><td>1200</td><td>$10</td></tr>
+    </table>
+    <h2>Income Capitalization</h2>
+    <p>Cap rate analysis is included below.</p>
+  </body>
+</html>
+"#,
+        );
+
+        let heading = evaluate(&Assertion::HeadingExists("Rent Roll".to_string()), &doc);
+        assert!(heading.passed);
+
+        let section = evaluate(
+            &Assertion::SectionNonEmpty {
+                heading: "(?i)income capitali[sz]ation".to_string(),
+            },
+            &doc,
+        );
+        assert!(section.passed);
+
+        let table_exists = evaluate(
+            &Assertion::TableExists {
+                heading: "(?i)rent roll".to_string(),
+                index: None,
+            },
+            &doc,
+        );
+        assert!(table_exists.passed);
+
+        let table_columns = evaluate(
+            &Assertion::TableColumns {
+                heading: "(?i)rent roll".to_string(),
+                index: None,
+                patterns: vec![
+                    "(?i)tenant".to_string(),
+                    "(?i)sq\\.?\\s*ft|sf".to_string(),
+                    "(?i)rent".to_string(),
+                ],
+            },
+            &doc,
+        );
+        assert!(table_columns.passed);
+
+        let table_rows = evaluate(
+            &Assertion::TableMinRows {
+                heading: "(?i)rent roll".to_string(),
+                index: None,
+                min_rows: 1,
+            },
+            &doc,
+        );
+        assert!(table_rows.passed);
     }
 
     #[test]
