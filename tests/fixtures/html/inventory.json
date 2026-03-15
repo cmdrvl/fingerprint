@@ -1,0 +1,134 @@
+{
+  "schema_version": "fingerprint.html-fixtures.v1",
+  "fixtures": [
+    {
+      "id": "ambiguity_trap_dual_headers",
+      "path": "tests/fixtures/html/ambiguity_trap_dual_headers.html",
+      "categories": ["ambiguity-trap", "shared"],
+      "family": null,
+      "expected_headings": 2,
+      "expected_tables": 2,
+      "expected_pages": 0
+    },
+    {
+      "id": "bdc_soi_ares_like",
+      "path": "tests/fixtures/html/bdc_soi_ares_like.html",
+      "categories": ["bdc-family", "page-sections"],
+      "family": "ares",
+      "expected_headings": 3,
+      "expected_tables": 2,
+      "expected_pages": 3
+    },
+    {
+      "id": "bdc_soi_blackrock_like",
+      "path": "tests/fixtures/html/bdc_soi_blackrock_like.html",
+      "categories": ["bdc-family", "page-sections"],
+      "family": "blackrock",
+      "expected_headings": 3,
+      "expected_tables": 2,
+      "expected_pages": 2
+    },
+    {
+      "id": "bdc_soi_bxsl_like",
+      "path": "tests/fixtures/html/bdc_soi_bxsl_like.html",
+      "categories": ["bdc-family", "page-sections"],
+      "family": "bxsl",
+      "expected_headings": 3,
+      "expected_tables": 2,
+      "expected_pages": 2
+    },
+    {
+      "id": "bdc_soi_golub_like",
+      "path": "tests/fixtures/html/bdc_soi_golub_like.html",
+      "categories": ["bdc-family", "page-sections"],
+      "family": "golub",
+      "expected_headings": 3,
+      "expected_tables": 2,
+      "expected_pages": 2
+    },
+    {
+      "id": "bdc_soi_pennant_like",
+      "path": "tests/fixtures/html/bdc_soi_pennant_like.html",
+      "categories": ["bdc-family", "page-sections"],
+      "family": "pennant",
+      "expected_headings": 3,
+      "expected_tables": 2,
+      "expected_pages": 2
+    },
+    {
+      "id": "generic_page_sections_schedule",
+      "path": "tests/fixtures/html/generic_page_sections_schedule.html",
+      "categories": ["page-sections", "shared"],
+      "family": null,
+      "expected_headings": 3,
+      "expected_tables": 2,
+      "expected_pages": 3
+    },
+    {
+      "id": "hash_pair_base",
+      "path": "tests/fixtures/html/hash_pair_base.html",
+      "categories": ["hash-pair", "shared"],
+      "family": null,
+      "expected_headings": 2,
+      "expected_tables": 1,
+      "expected_pages": 0
+    },
+    {
+      "id": "hash_pair_markup_variant",
+      "path": "tests/fixtures/html/hash_pair_markup_variant.html",
+      "categories": ["hash-pair", "shared"],
+      "family": null,
+      "expected_headings": 2,
+      "expected_tables": 1,
+      "expected_pages": 0
+    },
+    {
+      "id": "hash_pair_value_change",
+      "path": "tests/fixtures/html/hash_pair_value_change.html",
+      "categories": ["hash-pair", "shared"],
+      "family": null,
+      "expected_headings": 2,
+      "expected_tables": 1,
+      "expected_pages": 0
+    },
+    {
+      "id": "malformed_static_schedule",
+      "path": "tests/fixtures/html/malformed_static_schedule.html",
+      "categories": ["malformed-static", "shared"],
+      "family": null,
+      "expected_headings": 2,
+      "expected_tables": 1,
+      "expected_pages": 2
+    },
+    {
+      "id": "minimal_empty_shell",
+      "path": "tests/fixtures/html/minimal_empty_shell.html",
+      "categories": ["error-path", "shared"],
+      "family": null,
+      "expected_headings": 0,
+      "expected_tables": 0,
+      "expected_pages": 0
+    },
+    {
+      "id": "span_edge_cases",
+      "path": "tests/fixtures/html/span_edge_cases.html",
+      "categories": ["table-spans", "shared"],
+      "family": null,
+      "expected_headings": 1,
+      "expected_tables": 1,
+      "expected_pages": 0
+    }
+  ],
+  "hash_pairs": [
+    {
+      "base": "hash_pair_base",
+      "variant": "hash_pair_markup_variant",
+      "expectation": "stable"
+    },
+    {
+      "base": "hash_pair_base",
+      "variant": "hash_pair_value_change",
+      "expectation": "changed"
+    }
+  ]
+}

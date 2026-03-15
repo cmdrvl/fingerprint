@@ -8,6 +8,8 @@ Core fixture corpus for `fingerprint` test bring-up.
 - `sample.xlsx` — happy-path XLSX fixture used by manifest-driven pipeline tests.
 - `sample.pdf` — happy-path PDF fixture for structural assertion and dispatch tests.
 - `sample.md` — markdown content paired with `sample.pdf` via `text_path` manifests.
+- `cbre_appraisal_sample.md` — CBRE-style commercial real estate appraisal sample for markdown structure and content assertions.
+- `financial_summary.md` — financial-summary markdown fixture with tables, business metrics, and formatting edge cases.
 - `corrupt.xlsx` — intentionally invalid XLSX bytes for parse-failure / `_skipped` path testing.
 - `unsupported.docx` — unsupported format fixture for testing `E_UNSUPPORTED_FORMAT` error paths.
 - `image.png` — another unsupported format fixture for comprehensive format rejection testing.
@@ -20,8 +22,24 @@ Core fixture corpus for `fingerprint` test bring-up.
 - `cbre_appraisal.md` — markdown content fixture paired with `report.pdf`.
 - `plain_report.txt` — plain text fixture for `text_contains`, `text_regex`, and `text_near`.
 - `corrupt.xlsx` — intentionally invalid XLSX bytes for parse-failure testing.
-- `cbre_appraisal_sample.md` — CBRE-style commercial real estate appraisal report with tables, financial data, and structured content for markdown parsing tests.
-- `financial_summary.md` — Q4 financial performance summary with complex markdown formatting, tables, code blocks, and business metrics for comprehensive markdown assertion testing.
+
+## `html/` (shared native HTML corpus)
+
+- `README.md` — HTML-specific scenario guide and maintenance instructions.
+- `inventory.json` — machine-readable inventory with expected heading/table/page counts and canonical hash-pair metadata.
+- `generic_page_sections_schedule.html` — generic multi-page schedule using `<section data-page-number>`.
+- `span_edge_cases.html` — focused `colspan`/`rowspan` table-expansion fixture.
+- `malformed_static_schedule.html` — malformed-but-static HTML that must remain parseable.
+- `ambiguity_trap_dual_headers.html` — overlapping header-token fixture for ambiguity and routing tests.
+- `minimal_empty_shell.html` — negative-path HTML shell with no headings or tables.
+- `hash_pair_base.html` — baseline HTML extract fixture for content-hash comparisons.
+- `hash_pair_markup_variant.html` — markup-only variant of the baseline; extracted content should remain stable.
+- `hash_pair_value_change.html` — value-changing variant of the baseline; extracted content hash should change.
+- `bdc_soi_ares_like.html` — Ares-like BDC schedule example with business-description and coupon columns.
+- `bdc_soi_bxsl_like.html` — BXSL-like BDC schedule example with investment-type section headings.
+- `bdc_soi_pennant_like.html` — Pennant-like BDC schedule example with explicit `Industry` column and asset-class headings.
+- `bdc_soi_golub_like.html` — Golub-like BDC schedule example with compact layout and industry section rows.
+- `bdc_soi_blackrock_like.html` — BlackRock-like BDC schedule example with issuer/instrument leading columns.
 
 ## `manifests/` (hash-enriched and failure fixtures)
 
@@ -33,6 +51,7 @@ Core fixture corpus for `fingerprint` test bring-up.
 - `version_mismatch.jsonl` — manifest records with invalid version strings (`hash.v99`, `unknown.v1`) for version validation testing.
 - `invalid_duplicates.jsonl` — manifest with duplicate records and missing required fields for validation and deduplication testing.
 - `unsupported_formats.jsonl` — manifest entries pointing to unsupported file types (`.docx`, `.png`, `.json`) for format dispatch rejection testing.
+- `html_corpus.jsonl` — deterministic hash-enriched references for every committed HTML fixture in `html/`.
 
 ## `witness/` (witness ledger and audit trail fixtures)
 
@@ -50,6 +69,7 @@ Core fixture corpus for `fingerprint` test bring-up.
 - Edge case coverage: duplicate detection, validation logic, storage limits, and error path testing.
 - Golden tests: deterministic output against a stable fixture corpus.
 - Content assertion tests: text_near bidirectional search, table_shape type inference, markdown normalization, regex boundary conditions.
+- HTML corpus tests: parser shape checks, known-family counts, ambiguity traps, and content-hash mutation regression.
 - Chained fingerprint tests: parent-child inheritance, orphan scenarios, circular reference detection, E_NO_TEXT fallback paths.
 - Parallel processing tests: deterministic pipeline ordering, resource contention handling, consistent execution under concurrency.
-- Real-world document tests: CBRE appraisal reports, financial summaries, complex markdown structures with business content patterns.
+- Real-world document tests: CBRE appraisal reports, financial summaries, complex markdown structures, and representative BDC-style HTML schedules.
