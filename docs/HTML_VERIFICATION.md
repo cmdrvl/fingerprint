@@ -2,6 +2,9 @@
 
 Use these commands when validating the HTML rollout end to end.
 
+For downstream rollout, dual-run, and rollback behavior around routed-family
+consumption, see [`docs/HTML_CONSUMER_CUTOVER.md`](./HTML_CONSUMER_CUTOVER.md).
+
 ## Full local verification
 
 Run the full repository verification surface, including tests and clippy:
