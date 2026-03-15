@@ -24,6 +24,7 @@ pub struct Section {
     pub start_line: usize,
     pub end_line: usize,
     pub content: String,
+    pub page: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -215,6 +216,7 @@ fn compute_sections(content: &str, headings: &[Heading]) -> Vec<Section> {
             start_line: 1,
             end_line: lines.len(),
             content: content_str,
+            page: None,
         });
         return sections;
     }
@@ -228,6 +230,7 @@ fn compute_sections(content: &str, headings: &[Heading]) -> Vec<Section> {
             start_line: 1,
             end_line: preamble_end,
             content: preamble_content,
+            page: None,
         });
     }
 
@@ -255,6 +258,7 @@ fn compute_sections(content: &str, headings: &[Heading]) -> Vec<Section> {
             start_line,
             end_line,
             content: section_lines.join("\n"),
+            page: None,
         });
     }
 

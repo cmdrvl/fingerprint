@@ -253,6 +253,7 @@ fn format_matches(fingerprint_format: &str, document: &Document) -> bool {
         Document::Xlsx(_) => fingerprint_format.eq_ignore_ascii_case("xlsx"),
         Document::Csv(_) => fingerprint_format.eq_ignore_ascii_case("csv"),
         Document::Pdf(_) => fingerprint_format.eq_ignore_ascii_case("pdf"),
+        Document::Html(_) => fingerprint_format.eq_ignore_ascii_case("html"),
         Document::Markdown(_) => {
             fingerprint_format.eq_ignore_ascii_case("markdown")
                 || fingerprint_format.eq_ignore_ascii_case("md")

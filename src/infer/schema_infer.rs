@@ -46,6 +46,7 @@ pub fn infer_schema(
         Document::Xlsx(_) => "xlsx",
         Document::Csv(_) => "csv",
         Document::Pdf(_) => "pdf",
+        Document::Html(_) => "html",
         Document::Markdown(_) => "markdown",
         Document::Text(_) => "text",
         Document::Unknown(_) => "raw",
@@ -134,6 +135,7 @@ fn locate_field(doc: &Document, field: &SchemaField) -> Option<LocatedField> {
                 locate_in_pdf_metadata(pdf, field)
             }
         }
+        Document::Html(_) => None,
         Document::Unknown(_) => None,
     }
 }

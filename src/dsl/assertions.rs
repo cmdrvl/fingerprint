@@ -7,20 +7,26 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 type CellRef = (usize, usize);
 type CellRange = (CellRef, CellRef);
-static DIAGNOSE_MODE: AtomicBool = AtomicBool::new(false);
+static DIAGNOSE_MODE: AtomicUsize = AtomicUsize::new(0);
 
 /// Enable or disable diagnostic context mode for assertion evaluation.
 pub fn set_diagnose_mode(enabled: bool) {
-    DIAGNOSE_MODE.store(enabled, Ordering::Relaxed);
+    if enabled {
+        DIAGNOSE_MODE.fetch_add(1, Ordering::SeqCst);
+    } else {
+        let _ = DIAGNOSE_MODE.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+            Some(count.saturating_sub(1))
+        });
+    }
 }
 
 /// Return whether diagnostic mode is currently active.
 pub fn diagnose_mode() -> bool {
-    DIAGNOSE_MODE.load(Ordering::Relaxed)
+    DIAGNOSE_MODE.load(Ordering::SeqCst) > 0
 }
 
 /// DSL assertion types. Each variant maps to one assertion in a `.fp.yaml` file.

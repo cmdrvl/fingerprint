@@ -1,5 +1,6 @@
 use crate::document::{
-    CsvDocument, Document, MarkdownDocument, PdfDocument, RawDocument, TextDocument, XlsxDocument,
+    CsvDocument, Document, HtmlDocument, MarkdownDocument, PdfDocument, RawDocument, TextDocument,
+    XlsxDocument,
 };
 use std::path::Path;
 
@@ -24,6 +25,10 @@ pub fn open_document_with_text_path(
             path: path.to_path_buf(),
         })),
         "pdf" => Ok(Document::Pdf(PdfDocument::open(path, text_path)?)),
+        "html" | "htm" => {
+            let doc = HtmlDocument::open(path)?;
+            Ok(Document::Html(doc))
+        }
         "md" | "markdown" => {
             let doc = MarkdownDocument::open(path)?;
             Ok(Document::Markdown(doc))
@@ -141,6 +146,34 @@ mod tests {
         match doc {
             Document::Markdown(_) => {} // Expected
             _ => panic!("Expected Markdown document"),
+        }
+    }
+
+    #[test]
+    fn dispatches_html_files() {
+        let file = make_temp_file_with_extension("<h1>Heading</h1><p>Body</p>", "html");
+        let doc = open_document(file.path(), "html").expect("open html document");
+
+        match doc {
+            Document::Html(doc) => {
+                assert_eq!(doc.headings.len(), 1);
+                assert_eq!(doc.headings[0].text, "Heading");
+            }
+            _ => panic!("Expected Html document"),
+        }
+    }
+
+    #[test]
+    fn dispatches_htm_files() {
+        let file = make_temp_file_with_extension("<h1>Heading</h1><p>Body</p>", "htm");
+        let doc = open_document(file.path(), "htm").expect("open html document");
+
+        match doc {
+            Document::Html(doc) => {
+                assert_eq!(doc.headings.len(), 1);
+                assert_eq!(doc.headings[0].text, "Heading");
+            }
+            _ => panic!("Expected Html document"),
         }
     }
 
