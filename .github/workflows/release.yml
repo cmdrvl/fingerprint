@@ -361,11 +361,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ARM64_SHA="$(awk '/fingerprint-v'"${RELEASE_VERSION}"'-aarch64-apple-darwin\.tar\.gz$/ {print $1}' SHA256SUMS | head -n1)"
-          X64_SHA="$(awk '/fingerprint-v'"${RELEASE_VERSION}"'-x86_64-apple-darwin\.tar\.gz$/ {print $1}' SHA256SUMS | head -n1)"
-          LINUX_SHA="$(awk '/fingerprint-v'"${RELEASE_VERSION}"'-x86_64-unknown-linux-gnu\.tar\.gz$/ {print $1}' SHA256SUMS | head -n1)"
+          MAC_ARM64_SHA="$(awk '/fingerprint-v'"${RELEASE_VERSION}"'-aarch64-apple-darwin\.tar\.gz$/ {print $1}' SHA256SUMS | head -n1)"
+          MAC_X64_SHA="$(awk '/fingerprint-v'"${RELEASE_VERSION}"'-x86_64-apple-darwin\.tar\.gz$/ {print $1}' SHA256SUMS | head -n1)"
+          LINUX_ARM64_SHA="$(awk '/fingerprint-v'"${RELEASE_VERSION}"'-aarch64-unknown-linux-gnu\.tar\.gz$/ {print $1}' SHA256SUMS | head -n1)"
+          LINUX_X64_SHA="$(awk '/fingerprint-v'"${RELEASE_VERSION}"'-x86_64-unknown-linux-gnu\.tar\.gz$/ {print $1}' SHA256SUMS | head -n1)"
 
-          if [ -z "${ARM64_SHA}" ] || [ -z "${X64_SHA}" ] || [ -z "${LINUX_SHA}" ]; then
+          if [ -z "${MAC_ARM64_SHA}" ] || [ -z "${MAC_X64_SHA}" ] || [ -z "${LINUX_ARM64_SHA}" ] || [ -z "${LINUX_X64_SHA}" ]; then
             echo "Missing expected checksum(s) in SHA256SUMS"
             exit 1
           fi
@@ -379,18 +380,25 @@ jobs:
             license "Proprietary"
 
             on_macos do
-              if Hardware::CPU.arm?
+              on_arm do
                 url "${RELEASE_BASE_URL}/fingerprint-${RELEASE_TAG}-aarch64-apple-darwin.tar.gz"
-                sha256 "${ARM64_SHA}"
-              else
+                sha256 "${MAC_ARM64_SHA}"
+              end
+              on_intel do
                 url "${RELEASE_BASE_URL}/fingerprint-${RELEASE_TAG}-x86_64-apple-darwin.tar.gz"
-                sha256 "${X64_SHA}"
+                sha256 "${MAC_X64_SHA}"
               end
             end
 
             on_linux do
-              url "${RELEASE_BASE_URL}/fingerprint-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz"
-              sha256 "${LINUX_SHA}"
+              on_arm do
+                url "${RELEASE_BASE_URL}/fingerprint-${RELEASE_TAG}-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "${LINUX_ARM64_SHA}"
+              end
+              on_intel do
+                url "${RELEASE_BASE_URL}/fingerprint-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "${LINUX_X64_SHA}"
+              end
             end
 
             def install
@@ -415,6 +423,7 @@ jobs:
           set -euo pipefail
           curl -fsI "${RELEASE_BASE_URL}/fingerprint-${RELEASE_TAG}-aarch64-apple-darwin.tar.gz" >/dev/null
           curl -fsI "${RELEASE_BASE_URL}/fingerprint-${RELEASE_TAG}-x86_64-apple-darwin.tar.gz" >/dev/null
+          curl -fsI "${RELEASE_BASE_URL}/fingerprint-${RELEASE_TAG}-aarch64-unknown-linux-gnu.tar.gz" >/dev/null
           curl -fsI "${RELEASE_BASE_URL}/fingerprint-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz" >/dev/null
 
       - name: Upload generated formula artifact
