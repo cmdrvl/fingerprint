@@ -11,6 +11,7 @@ pub mod pipeline;
 pub mod progress;
 pub mod refusal;
 pub mod registry;
+pub mod struct_check;
 pub mod witness;
 
 // Public re-exports for compiled fingerprint crates.
@@ -91,6 +92,9 @@ pub fn run() -> u8 {
             }
         }
         Some(Command::Witness { action }) => handle_witness_command(action),
+        Some(Command::StructCheck { rules, input }) => {
+            handle_struct_check_command(&rules, input.as_deref())
+        }
         Some(Command::Infer {
             dir,
             format,
@@ -172,7 +176,7 @@ where
 fn is_subcommand_token(arg: &std::ffi::OsStr) -> bool {
     matches!(
         arg.to_str(),
-        Some("compile" | "witness" | "infer" | "infer-schema")
+        Some("compile" | "witness" | "infer" | "infer-schema" | "struct-check")
     )
 }
 
@@ -661,6 +665,74 @@ fn handle_witness_command(action: cli::WitnessAction) -> u8 {
             }
         },
     }
+}
+
+/// Handle the struct-check subcommand.
+fn handle_struct_check_command(
+    rules_path: &std::path::Path,
+    input_path: Option<&std::path::Path>,
+) -> u8 {
+    use std::fs::File;
+    use std::io::{self, BufReader};
+    use struct_check::checker::{check_groups, read_vacuum_records};
+    use struct_check::rules::parse_rules_file;
+
+    // Load rules file
+    let rules_file = match parse_rules_file(rules_path) {
+        Ok(rf) => rf,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            return 2;
+        }
+    };
+
+    // Read vacuum.v0 JSONL from stdin or file
+    let groups = match input_path {
+        Some(path) => {
+            let file = match File::open(path) {
+                Ok(f) => f,
+                Err(error) => {
+                    eprintln!(
+                        "Error: failed to open input file '{}': {error}",
+                        path.display()
+                    );
+                    return 2;
+                }
+            };
+            let mut reader = BufReader::new(file);
+            read_vacuum_records(&mut reader)
+        }
+        None => {
+            let stdin = io::stdin();
+            let mut reader = stdin.lock();
+            read_vacuum_records(&mut reader)
+        }
+    };
+
+    let groups = match groups {
+        Ok(g) => g,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            return 2;
+        }
+    };
+
+    // Check groups against rules
+    let version = env!("CARGO_PKG_VERSION");
+    let (records, all_complete) = check_groups(&groups, &rules_file.rules, version);
+
+    // Emit struct-check.v0 JSONL to stdout
+    for record in &records {
+        match serde_json::to_string(record) {
+            Ok(json) => println!("{json}"),
+            Err(error) => {
+                eprintln!("Error: failed to serialize output record: {error}");
+                return 2;
+            }
+        }
+    }
+
+    if all_complete { 0 } else { 1 }
 }
 
 /// Handle default run mode (fingerprint processing).

@@ -94,6 +94,16 @@ pub enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Check directory structure against pattern rules
+    StructCheck {
+        /// Rules file (.sf.yaml)
+        #[arg(long, value_name = "PATH")]
+        rules: PathBuf,
+
+        /// JSONL input file (default: stdin)
+        #[arg(long, value_name = "FILE")]
+        input: Option<PathBuf>,
+    },
     /// Infer fingerprint from a document + field values
     InferSchema {
         /// Example document
