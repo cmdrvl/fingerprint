@@ -409,6 +409,46 @@ fingerprint infer <DIR> --format <FORMAT> --id <ID> --out <FILE> \
 fingerprint infer-schema --doc <FILE> [--text-path <FILE>] --fields <YAML> --id <ID> --out <FILE>
 ```
 
+### Struct-check mode
+
+Directory completeness verification — reads `vacuum.v0` JSONL and checks whether directories contain the required files.
+
+```bash
+fingerprint struct-check --rules <RULES.sf.yaml> [--input <FILE>]
+```
+
+Rules are defined in `.sf.yaml` files:
+
+```yaml
+rules:
+  - id: monthly-package.v1
+    group_by: "*/packages/P*"     # glob matched against directory path
+    required:
+      - "*.pdf"                    # at least one PDF must be present
+      - "*_summary.xlsx"           # a summary spreadsheet
+    optional:
+      - "*_notes.txt"              # optional notes file
+```
+
+Emits `struct-check.v0` JSONL with `complete`, `partial`, or `empty` outcomes per directory group:
+
+```json
+{"version":"struct-check.v0","rule_id":"monthly-package.v1","matched_directory":"org/packages/P20240101","outcome":"complete","present":["report.pdf","jan_summary.xlsx"],"missing":[],"unexpected":["draft.docx"]}
+```
+
+**S3 completeness checking** — combined with vacuum's `s3-to-vacuum` adapter, verify delivery completeness without downloading a single byte:
+
+```bash
+s3-to-vacuum s3://bucket/q3-delivery/ \
+  | fingerprint struct-check --rules cre-package.sf.yaml
+```
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | All matched directory groups have every required file |
+| `1` | At least one group is missing required files |
+| `2` | Refusal (invalid rules file, non-vacuum.v0 input, I/O error) |
+
 ### Exit codes
 
 | Code | Run mode | Compile mode |
