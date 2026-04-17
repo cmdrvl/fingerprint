@@ -22,6 +22,8 @@ You have 100,000 files in a data room. You've hashed them — you know the bytes
 
 A fingerprint is a set of deterministic assertions that encode domain knowledge. "This file has a worksheet called Assumptions. Cell A3 says Market Leasing Assumptions. The data range A3:D10 is fully populated. Therefore: this is an Argus model, version 1." That knowledge is versioned, testable, and compiled to Rust. Match or no match — never "87% confident."
 
+Spreadsheet fingerprints use `format: xlsx` for both modern `.xlsx` and legacy `.xls` Excel workbooks.
+
 ---
 
 ## What makes this different
@@ -181,7 +183,7 @@ For cases the DSL can't express, write Rust directly against the `Fingerprint` t
 
 Fingerprint doesn't just check filenames and magic bytes. It understands the internal structure of spreadsheets, HTML, PDFs, markdown, and plain text.
 
-### Spreadsheet assertions (XLSX, CSV)
+### Spreadsheet assertions (Excel `.xlsx` / `.xls`, CSV)
 
 | Assertion | What it checks |
 |-----------|---------------|
@@ -409,6 +411,8 @@ fingerprint infer <DIR> --format <FORMAT> --id <ID> --out <FILE> \
 fingerprint infer-schema --doc <FILE> [--text-path <FILE>] --fields <YAML> --id <ID> --out <FILE>
 ```
 
+For spreadsheet corpora, `--format xlsx` covers both `.xlsx` and `.xls` inputs; `--format xls` is accepted as a convenience alias and still emits `format: xlsx` fingerprints.
+
 ### Struct-check mode
 
 Directory completeness verification — reads `vacuum.v0` JSONL and checks whether directories contain the required files.
@@ -498,7 +502,7 @@ Every refusal includes a concrete `next_command` when mechanical recovery is pos
     },
     "content_hash": "blake3:9f2a..."
   },
-  "tool_versions": { "vacuum": "0.1.0", "hash": "0.1.0", "fingerprint": "0.5.1" }
+  "tool_versions": { "vacuum": "0.1.0", "hash": "0.1.0", "fingerprint": "0.6.1" }
 }
 ```
 

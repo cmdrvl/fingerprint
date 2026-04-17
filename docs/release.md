@@ -256,6 +256,7 @@ For critical bugs requiring immediate attention:
 
 | Version | Date | Type | Notes |
 |---------|------|------|-------|
+| v0.6.1  | 2026-04-17 | Patch | Official `.xls` workbook support and spreadsheet parse-validation fix |
 | v0.1.0  | TBD  | Initial | Initial release |
 
 ## Tools & Resources
