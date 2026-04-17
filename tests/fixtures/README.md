@@ -6,6 +6,7 @@ Core fixture corpus for `fingerprint` test bring-up.
 
 - `sample.csv` — happy-path CSV fixture for dispatch, spreadsheet assertions, and pipeline enrichment.
 - `sample.xlsx` — happy-path XLSX fixture used by manifest-driven pipeline tests.
+- `sample.xls` — happy-path legacy Excel fixture used to verify official `.xls` workbook support.
 - `sample.pdf` — happy-path PDF fixture for structural assertion and dispatch tests.
 - `sample.md` — markdown content paired with `sample.pdf` via `text_path` manifests.
 - `cbre_appraisal_sample.md` — CBRE-style commercial real estate appraisal sample for markdown structure and content assertions.

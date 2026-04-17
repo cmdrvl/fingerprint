@@ -89,12 +89,12 @@ pub fn emit_profile(fingerprint_id: &str, profile: &AggregatedProfile) -> Result
 
 fn normalize_format(format: &str) -> Result<&'static str, String> {
     match format.to_ascii_lowercase().as_str() {
-        "xlsx" => Ok("xlsx"),
+        "xlsx" | "xls" => Ok("xlsx"),
         "csv" => Ok("csv"),
         "pdf" => Ok("pdf"),
         "html" => Ok("html"),
         other => Err(format!(
-            "unsupported --format '{other}' (expected xlsx|csv|pdf|html)"
+            "unsupported --format '{other}' (expected xlsx|xls|csv|pdf|html)"
         )),
     }
 }

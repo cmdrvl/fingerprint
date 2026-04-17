@@ -18,9 +18,7 @@ pub fn open_document_with_text_path(
     let extension = extension.to_lowercase();
 
     match extension.as_str() {
-        "xlsx" | "xls" => Ok(Document::Xlsx(XlsxDocument {
-            path: path.to_path_buf(),
-        })),
+        "xlsx" | "xls" => Ok(Document::Xlsx(XlsxDocument::open(path)?)),
         "csv" => Ok(Document::Csv(CsvDocument {
             path: path.to_path_buf(),
         })),
@@ -64,7 +62,12 @@ pub fn open_document_from_path_with_text_path(
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::path::{Path, PathBuf};
     use tempfile::NamedTempFile;
+
+    fn fixture(relative: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
+    }
 
     fn make_temp_file_with_extension(contents: &str, extension: &str) -> NamedTempFile {
         let mut file =
@@ -77,8 +80,8 @@ mod tests {
 
     #[test]
     fn dispatches_xlsx_files() {
-        let file = make_temp_file_with_extension("dummy xlsx content", "xlsx");
-        let doc = open_document(file.path(), "xlsx").expect("open xlsx document");
+        let file = fixture("tests/fixtures/files/sample.xlsx");
+        let doc = open_document(&file, "xlsx").expect("open xlsx document");
 
         match doc {
             Document::Xlsx(_) => {} // Expected
@@ -88,8 +91,8 @@ mod tests {
 
     #[test]
     fn dispatches_xls_files() {
-        let file = make_temp_file_with_extension("dummy xls content", "xls");
-        let doc = open_document(file.path(), "xls").expect("open xls document");
+        let file = fixture("tests/fixtures/files/sample.xls");
+        let doc = open_document(&file, "xls").expect("open xls document");
 
         match doc {
             Document::Xlsx(_) => {} // Expected
@@ -239,13 +242,23 @@ mod tests {
 
     #[test]
     fn case_insensitive_extension_matching() {
-        let file = make_temp_file_with_extension("dummy content", "XLSX");
-        let doc = open_document(file.path(), "XLSX").expect("open document");
+        let file = fixture("tests/fixtures/files/sample.xlsx");
+        let doc = open_document(&file, "XLSX").expect("open document");
 
         match doc {
             Document::Xlsx(_) => {} // Expected
             _ => panic!("Expected Xlsx document"),
         }
+    }
+
+    #[test]
+    fn rejects_unreadable_spreadsheet_files_during_dispatch() {
+        let file = fixture("tests/fixtures/files/corrupt.xlsx");
+        let error = match open_document(&file, "xlsx") {
+            Ok(_) => panic!("corrupt xlsx should fail early"),
+            Err(error) => error,
+        };
+        assert!(error.contains("failed to open spreadsheet"), "{error}");
     }
 
     #[test]

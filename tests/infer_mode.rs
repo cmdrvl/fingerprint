@@ -70,6 +70,37 @@ fn infer_xlsx_writes_yaml_that_compile_check_accepts() {
 }
 
 #[test]
+fn infer_accepts_xls_alias_and_emits_xlsx_fingerprints() {
+    let corpus = tempfile::tempdir().expect("create tempdir");
+    fs::copy(
+        repo_path("tests/fixtures/files/sample.xls"),
+        corpus.path().join("sample.xls"),
+    )
+    .expect("copy xls fixture");
+
+    let output = run_fingerprint(&[
+        "--no-witness",
+        "infer",
+        corpus.path().to_str().expect("dir str"),
+        "--format",
+        "xls",
+        "--id",
+        "legacy-sheet.v1",
+        "--no-extract",
+    ]);
+
+    assert_eq!(output.status.code(), Some(0));
+    let yaml = String::from_utf8(output.stdout).expect("utf8");
+    assert!(yaml.contains("\\.xls"), "expected xls-aware filename regex");
+    assert!(
+        !yaml.contains("\\.xlsx$"),
+        "legacy-only corpus should not force xlsx-only regex"
+    );
+    let parsed: Value = serde_yaml::from_str(&yaml).expect("parse inferred yaml");
+    assert_eq!(parsed["format"], "xlsx");
+}
+
+#[test]
 fn infer_is_deterministic_for_same_inputs() {
     let dir = repo_path("tests/fixtures/files");
     let first = run_fingerprint(&[

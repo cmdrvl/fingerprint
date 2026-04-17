@@ -399,6 +399,46 @@ fn run_mode_parse_failure_creates_new_skipped_and_exit_one() {
 }
 
 #[test]
+fn run_mode_builtin_xlsx_skips_unreadable_workbooks() {
+    let corrupt_xlsx = repo_path("tests/fixtures/files/corrupt.xlsx");
+    let manifest = write_jsonl(&[json!({
+        "version": "hash.v0",
+        "path": corrupt_xlsx.display().to_string(),
+        "extension": ".xlsx",
+        "bytes_hash": "blake3:corrupt",
+        "tool_versions": { "hash": "0.1.0" }
+    })]);
+
+    let output = run_fingerprint(manifest.path(), &["--fp", "xlsx.v0", "--no-witness"]);
+
+    assert_eq!(output.status.code(), Some(1));
+    let lines = parse_jsonl(&output.stdout);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["_skipped"], true);
+    assert_eq!(lines[0]["fingerprint"], Value::Null);
+    assert_eq!(lines[0]["_warnings"][0]["code"], "E_PARSE");
+}
+
+#[test]
+fn run_mode_xlsx_builtin_matches_legacy_xls_inputs() {
+    let legacy_xls = repo_path("tests/fixtures/files/sample.xls");
+    let manifest = write_jsonl(&[json!({
+        "version": "hash.v0",
+        "path": legacy_xls.display().to_string(),
+        "extension": ".xls",
+        "bytes_hash": "blake3:legacy-xls",
+        "tool_versions": { "hash": "0.1.0" }
+    })]);
+
+    let output = run_fingerprint(manifest.path(), &["--fp", "xlsx.v0", "--no-witness"]);
+
+    assert_eq!(output.status.code(), Some(0));
+    let lines = parse_jsonl(&output.stdout);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["fingerprint"]["matched"], true);
+}
+
+#[test]
 fn run_mode_diagnose_surfaces_attempt_history_and_nearest_match_context() {
     let definitions_dir = tempdir().expect("create definitions tempdir");
     std::fs::write(

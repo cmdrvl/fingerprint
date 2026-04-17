@@ -119,9 +119,30 @@ pub fn aggregate(
 }
 
 fn aggregate_xlsx(observations: &[Observation]) -> Vec<CandidateAssertion> {
+    let filename_pattern = match observations
+        .iter()
+        .filter_map(|observation| match observation.extension.as_str() {
+            "xls" => Some("xls"),
+            "xlsx" => Some("xlsx"),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>()
+        .len()
+    {
+        0 | 1
+            if observations
+                .iter()
+                .any(|observation| observation.extension.eq_ignore_ascii_case("xls")) =>
+        {
+            "(?i).*\\.xls$".to_owned()
+        }
+        1 => "(?i).*\\.xlsx$".to_owned(),
+        _ => "(?i).*\\.xls(x)?$".to_owned(),
+    };
+
     let mut candidates = vec![CandidateAssertion {
         assertion: Assertion::FilenameRegex {
-            pattern: "(?i).*\\.xlsx$".to_owned(),
+            pattern: filename_pattern,
         },
         support: observations.len(),
     }];
@@ -738,14 +759,16 @@ mod tests {
     use std::collections::HashMap;
 
     fn xlsx_observation(
+        extension: &str,
+        filename: &str,
         sheets: &[&str],
         sheet_rows: &[(&str, u64)],
         cell_values: &[(&str, &str)],
     ) -> Observation {
         Observation {
             format: "xlsx".to_owned(),
-            extension: "xlsx".to_owned(),
-            filename: "fixture.xlsx".to_owned(),
+            extension: extension.to_owned(),
+            filename: filename.to_owned(),
             headings: Vec::new(),
             sheet_names: sheets.iter().map(ToString::to_string).collect(),
             row_counts: sheet_rows
@@ -790,8 +813,14 @@ mod tests {
     #[test]
     fn min_confidence_filters_low_support_assertions() {
         let observations = vec![
-            xlsx_observation(&["Sheet1"], &[("Sheet1", 10)], &[("Sheet1!A1", "Header")]),
-            xlsx_observation(&["Sheet1"], &[("Sheet1", 8)], &[]),
+            xlsx_observation(
+                "xlsx",
+                "fixture.xlsx",
+                &["Sheet1"],
+                &[("Sheet1", 10)],
+                &[("Sheet1!A1", "Header")],
+            ),
+            xlsx_observation("xlsx", "fixture.xlsx", &["Sheet1"], &[("Sheet1", 8)], &[]),
         ];
 
         let profile =
@@ -810,8 +839,20 @@ mod tests {
 
     #[test]
     fn aggregate_is_deterministic_for_input_order() {
-        let first = xlsx_observation(&["A"], &[("A", 5)], &[("A!A1", "alpha")]);
-        let second = xlsx_observation(&["A"], &[("A", 7)], &[("A!A1", "alpha")]);
+        let first = xlsx_observation(
+            "xlsx",
+            "fixture.xlsx",
+            &["A"],
+            &[("A", 5)],
+            &[("A!A1", "alpha")],
+        );
+        let second = xlsx_observation(
+            "xlsx",
+            "fixture.xlsx",
+            &["A"],
+            &[("A", 7)],
+            &[("A!A1", "alpha")],
+        );
 
         let profile_a = aggregate(
             &[first.clone(), second.clone()],
@@ -830,6 +871,8 @@ mod tests {
     #[test]
     fn no_extract_omits_extract_and_content_hash() {
         let observations = vec![xlsx_observation(
+            "xlsx",
+            "fixture.xlsx",
             &["Sheet1"],
             &[("Sheet1", 4)],
             &[("Sheet1!A1", "Header")],
@@ -839,6 +882,26 @@ mod tests {
 
         assert!(profile.extract.is_empty());
         assert!(profile.content_hash.is_none());
+    }
+
+    #[test]
+    fn xlsx_aggregation_uses_xls_filename_regex_for_legacy_corpora() {
+        let observations = vec![xlsx_observation(
+            "xls",
+            "fixture.xls",
+            &["Sheet1"],
+            &[("Sheet1", 4)],
+            &[("Sheet1!A1", "Header")],
+        )];
+        let profile =
+            aggregate(&observations, "xlsx", "test.v1", 0.0, false, None).expect("aggregate");
+
+        assert!(profile.assertions.iter().any(|entry| {
+            matches!(
+                &entry.assertion.assertion,
+                Assertion::FilenameRegex { pattern } if pattern == "(?i).*\\.xls$"
+            )
+        }));
     }
 
     #[test]

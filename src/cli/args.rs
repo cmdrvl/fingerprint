@@ -74,7 +74,7 @@ pub enum Command {
         /// Directory of example documents
         dir: PathBuf,
 
-        /// Expected format
+        /// Expected format (`xls` is accepted as an alias for spreadsheet `xlsx` fingerprints)
         #[arg(long, value_name = "FMT")]
         format: String,
 

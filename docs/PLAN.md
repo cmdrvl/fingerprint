@@ -180,7 +180,7 @@ fingerprint infer-schema --doc <FILE> --fields <YAML> [OPTIONS]
 
 ##### Flags
 
-- `--format <FMT>`: Expected format (`xlsx`, `csv`, `pdf`, `markdown`, `text`). If omitted, inferred from file extensions.
+- `--format <FMT>`: Expected format (`xlsx`, `csv`, `pdf`, `markdown`, `text`). For Excel workbooks, `xlsx` covers both `.xlsx` and legacy `.xls` inputs. If omitted, inferred from file extensions.
 - `--negative <DIR>`: Directory of negative examples for contrastive inference. Assertions are generated for patterns present in ALL positive examples and ABSENT from ALL negative examples.
 - `--id <ID>`: Fingerprint ID for the generated definition (default: derived from directory name).
 - `--out <FILE>`: Output `.fp.yaml` path (default: stdout).
@@ -358,6 +358,8 @@ Named assertions make `--diagnose` output and failure aggregation immediately ac
 | `filename_regex` | File basename matches regex | `filename_regex: { pattern: "(?i)(?:_FINF\|financials?\|Remit Financial)" }` |
 
 #### Spreadsheet assertions (xlsx, csv)
+
+`format: xlsx` is the shared Excel workbook assertion surface and applies to both `.xlsx` and legacy `.xls` files.
 
 | Assertion | Purpose | Example |
 |-----------|---------|---------|

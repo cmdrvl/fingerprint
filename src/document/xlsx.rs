@@ -6,10 +6,10 @@ type CellRef = (usize, usize);
 type CellRange = (CellRef, CellRef);
 
 impl XlsxDocument {
-    /// Open an XLSX file for lazy sheet access via calamine.
+    /// Open an Excel workbook (.xlsx or legacy .xls) for lazy sheet access via calamine.
     pub fn open(path: &Path) -> Result<Self, String> {
         open_workbook_auto(path)
-            .map_err(|error| format!("failed to open xlsx '{}': {error}", path.display()))?;
+            .map_err(|error| format!("failed to open spreadsheet '{}': {error}", path.display()))?;
         Ok(Self {
             path: path.to_path_buf(),
         })
@@ -17,16 +17,24 @@ impl XlsxDocument {
 
     /// List sheet names in workbook order.
     pub fn sheet_names(&self) -> Result<Vec<String>, String> {
-        let workbook = open_workbook_auto(&self.path)
-            .map_err(|error| format!("failed to open xlsx '{}': {error}", self.path.display()))?;
+        let workbook = open_workbook_auto(&self.path).map_err(|error| {
+            format!(
+                "failed to open spreadsheet '{}': {error}",
+                self.path.display()
+            )
+        })?;
         Ok(workbook.sheet_names().to_vec())
     }
 
     /// Read a single cell by A1-style address.
     pub fn read_cell(&self, sheet: &str, cell: &str) -> Result<Option<String>, String> {
         let position = parse_cell_ref(cell)?;
-        let mut workbook = open_workbook_auto(&self.path)
-            .map_err(|error| format!("failed to open xlsx '{}': {error}", self.path.display()))?;
+        let mut workbook = open_workbook_auto(&self.path).map_err(|error| {
+            format!(
+                "failed to open spreadsheet '{}': {error}",
+                self.path.display()
+            )
+        })?;
         let worksheet = workbook
             .worksheet_range(sheet)
             .map_err(|error| format!("failed to read sheet '{sheet}': {error}"))?;
@@ -40,8 +48,12 @@ impl XlsxDocument {
     /// Read a rectangular range by A1 notation (e.g. "A1:C3").
     pub fn read_range(&self, sheet: &str, range: &str) -> Result<Vec<Vec<Option<String>>>, String> {
         let (start, end) = parse_range_ref(range)?;
-        let mut workbook = open_workbook_auto(&self.path)
-            .map_err(|error| format!("failed to open xlsx '{}': {error}", self.path.display()))?;
+        let mut workbook = open_workbook_auto(&self.path).map_err(|error| {
+            format!(
+                "failed to open spreadsheet '{}': {error}",
+                self.path.display()
+            )
+        })?;
         let worksheet = workbook
             .worksheet_range(sheet)
             .map_err(|error| format!("failed to read sheet '{sheet}': {error}"))?;
@@ -64,8 +76,12 @@ impl XlsxDocument {
 
     /// Count non-empty rows in a sheet.
     pub fn sheet_row_count(&self, sheet: &str) -> Result<usize, String> {
-        let mut workbook = open_workbook_auto(&self.path)
-            .map_err(|error| format!("failed to open xlsx '{}': {error}", self.path.display()))?;
+        let mut workbook = open_workbook_auto(&self.path).map_err(|error| {
+            format!(
+                "failed to open spreadsheet '{}': {error}",
+                self.path.display()
+            )
+        })?;
         let worksheet = workbook
             .worksheet_range(sheet)
             .map_err(|error| format!("failed to read sheet '{sheet}': {error}"))?;
@@ -134,6 +150,7 @@ fn parse_range_ref(range: &str) -> Result<CellRange, String> {
 mod tests {
     use super::XlsxDocument;
     use std::fs;
+    use std::path::{Path, PathBuf};
     use tempfile::NamedTempFile;
 
     // Minimal workbook with one sheet ("Sheet1") and values:
@@ -193,6 +210,10 @@ mod tests {
         file
     }
 
+    fn fixture(relative: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
+    }
+
     #[test]
     fn open_rejects_missing_file() {
         let result = XlsxDocument::open(std::path::Path::new("/tmp/does-not-exist.xlsx"));
@@ -205,6 +226,18 @@ mod tests {
         fs::write(file.path(), "not an xlsx").expect("write malformed data");
         let result = XlsxDocument::open(file.path());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn open_accepts_legacy_xls_fixture() {
+        let path = fixture("tests/fixtures/files/sample.xls");
+        let doc = XlsxDocument::open(&path).expect("open xls");
+        let names = doc.sheet_names().expect("list sheet names");
+        assert_eq!(names, vec!["Sheet1".to_owned()]);
+        let a1 = doc.read_cell("Sheet1", "A1").expect("read A1");
+        let b2 = doc.read_cell("Sheet1", "B2").expect("read B2");
+        assert_eq!(a1.as_deref(), Some("Header"));
+        assert_eq!(b2.as_deref(), Some("42"));
     }
 
     #[test]
