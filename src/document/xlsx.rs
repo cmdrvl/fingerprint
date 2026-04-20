@@ -1,5 +1,7 @@
 use crate::document::XlsxDocument;
 use calamine::{Reader, open_workbook_auto};
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 
 type CellRef = (usize, usize);
@@ -8,8 +10,11 @@ type CellRange = (CellRef, CellRef);
 impl XlsxDocument {
     /// Open an Excel workbook (.xlsx or legacy .xls) for lazy sheet access via calamine.
     pub fn open(path: &Path) -> Result<Self, String> {
-        open_workbook_auto(path)
-            .map_err(|error| format!("failed to open spreadsheet '{}': {error}", path.display()))?;
+        open_workbook_auto(path).map_err(|error| {
+            incomplete_xlsx_archive_diagnostic(path).unwrap_or_else(|| {
+                format!("failed to open spreadsheet '{}': {error}", path.display())
+            })
+        })?;
         Ok(Self {
             path: path.to_path_buf(),
         })
@@ -93,6 +98,61 @@ impl XlsxDocument {
     }
 }
 
+fn incomplete_xlsx_archive_diagnostic(path: &Path) -> Option<String> {
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("xlsx"))
+    {
+        return None;
+    }
+
+    let file = File::open(path).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
+    let entry_count = archive.len();
+    let mut has_workbook = false;
+    let mut xl_entry_count = 0usize;
+
+    for index in 0..entry_count {
+        let Ok(entry) = archive.by_index(index) else {
+            continue;
+        };
+        let name = entry.name();
+        if name == "xl/workbook.xml" {
+            has_workbook = true;
+        }
+        if name.starts_with("xl/") {
+            xl_entry_count += 1;
+        }
+    }
+
+    if has_workbook {
+        return None;
+    }
+
+    let xl_detail = if xl_entry_count == 0 {
+        "none under xl/".to_owned()
+    } else {
+        format!("{xl_entry_count} under xl/")
+    };
+    let leading_bytes = if zip_local_header_starts_at_zero(path) == Some(false) {
+        "; ZIP local header does not start at byte 0, which can indicate extra leading bytes before the archive"
+    } else {
+        ""
+    };
+
+    Some(format!(
+        "Xlsx archive is incomplete or corrupt: no xl/workbook.xml found (archive contains {entry_count} entries, {xl_detail}){leading_bytes}"
+    ))
+}
+
+fn zip_local_header_starts_at_zero(path: &Path) -> Option<bool> {
+    let mut file = File::open(path).ok()?;
+    let mut header = [0u8; 4];
+    file.read_exact(&mut header).ok()?;
+    Some(header == [b'P', b'K', 0x03, 0x04])
+}
+
 fn parse_cell_ref(cell: &str) -> Result<CellRef, String> {
     let mut letters = String::new();
     let mut digits = String::new();
@@ -150,6 +210,8 @@ fn parse_range_ref(range: &str) -> Result<CellRange, String> {
 mod tests {
     use super::XlsxDocument;
     use std::fs;
+    use std::fs::File;
+    use std::io::Write;
     use std::path::{Path, PathBuf};
     use tempfile::NamedTempFile;
 
@@ -210,6 +272,23 @@ mod tests {
         file
     }
 
+    fn write_incomplete_xlsx_archive() -> NamedTempFile {
+        let file = NamedTempFile::with_suffix(".xlsx").expect("create incomplete xlsx temp file");
+        let writer = File::create(file.path()).expect("create xlsx zip target");
+        let mut zip = zip::ZipWriter::new(writer);
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("[Content_Types].xml", options)
+            .expect("start content types entry");
+        zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?>"#)
+            .expect("write content types entry");
+        zip.start_file("_rels/.rels", options)
+            .expect("start rels entry");
+        zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?>"#)
+            .expect("write rels entry");
+        zip.finish().expect("finish incomplete xlsx zip");
+        file
+    }
+
     fn fixture(relative: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
     }
@@ -226,6 +305,19 @@ mod tests {
         fs::write(file.path(), "not an xlsx").expect("write malformed data");
         let result = XlsxDocument::open(file.path());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn open_diagnoses_incomplete_xlsx_archive_missing_workbook() {
+        let file = write_incomplete_xlsx_archive();
+
+        let result = XlsxDocument::open(file.path());
+        assert!(result.is_err());
+        let error = result.err().unwrap_or_default();
+
+        assert!(error.contains("no xl/workbook.xml found"), "{error}");
+        assert!(error.contains("archive contains 2 entries"), "{error}");
+        assert!(error.contains("none under xl/"), "{error}");
     }
 
     #[test]

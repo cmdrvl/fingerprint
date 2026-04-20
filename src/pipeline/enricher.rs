@@ -1,4 +1,4 @@
-use crate::document::{Document, dispatch::open_document_with_text_path};
+use crate::document::{CsvDocument, Document, dispatch::open_document_with_text_path};
 use crate::dsl::assertions::diagnose_mode;
 use crate::progress::reporter::{report_warning, report_warning_code};
 use crate::refusal::codes::{BadInputDetail, RefusalCode, RefusalDetail, build_envelope};
@@ -141,7 +141,8 @@ pub fn enrich_record_with_fingerprints(
         );
     }
 
-    let document = match open_document_with_text_path(Path::new(path_str), &extension, text_path) {
+    let path = Path::new(path_str);
+    let document = match open_document_with_text_path(path, &extension, text_path) {
         Ok(document) => document,
         Err(error) => {
             let warning = Warning::new(
@@ -159,9 +160,24 @@ pub fn enrich_record_with_fingerprints(
 
     maybe_emit_sparse_text_warning(path_str, &document);
 
-    let fingerprint_value =
-        evaluate_fingerprints(&document, registry, fingerprint_ids).unwrap_or(Value::Null);
-    enriched_obj.insert("fingerprint".to_owned(), fingerprint_value);
+    let fingerprint_value = if should_try_csv_text_fallback(&extension, registry, fingerprint_ids) {
+        let csv_document = Document::Csv(CsvDocument {
+            path: path.to_path_buf(),
+        });
+        evaluate_fingerprints_with_csv_text_fallback(
+            &document,
+            &csv_document,
+            registry,
+            fingerprint_ids,
+        )
+    } else {
+        evaluate_fingerprints(&document, registry, fingerprint_ids)
+    };
+
+    enriched_obj.insert(
+        "fingerprint".to_owned(),
+        fingerprint_value.unwrap_or(Value::Null),
+    );
 
     Value::Object(enriched_obj.clone())
 }
@@ -249,6 +265,137 @@ fn evaluate_fingerprints(
     }
 
     last_attempt
+}
+
+fn evaluate_fingerprints_with_csv_text_fallback(
+    primary_document: &Document,
+    csv_document: &Document,
+    registry: &FingerprintRegistry,
+    fingerprint_ids: &[String],
+) -> Option<Value> {
+    let diagnose = diagnose_mode();
+    let mut last_attempt: Option<Value> = None;
+    let mut attempts = Vec::new();
+
+    for (index, fingerprint_id) in fingerprint_ids.iter().enumerate() {
+        let Some(fingerprint_info) = registry.info_for(fingerprint_id) else {
+            continue;
+        };
+        if fingerprint_info.parent.is_some() {
+            continue;
+        }
+
+        let Some(fingerprint) = registry.get(fingerprint_id) else {
+            continue;
+        };
+        let document = if fingerprint.format().eq_ignore_ascii_case("csv") {
+            csv_document
+        } else {
+            primary_document
+        };
+        if !format_matches(fingerprint.format(), document) {
+            continue;
+        }
+
+        let result = fingerprint.fingerprint(document);
+        if diagnose {
+            attempts.push(build_diagnostic_attempt(fingerprint.id(), &result));
+        }
+        let mut payload =
+            build_fingerprint_payload(fingerprint.id(), Some(fingerprint_info), &result);
+
+        if result.matched {
+            if diagnose {
+                attach_run_diagnostics(
+                    &mut payload,
+                    &attempts,
+                    false,
+                    remaining_root_candidate_ids_with_csv_text_fallback(
+                        primary_document,
+                        csv_document,
+                        registry,
+                        fingerprint_ids,
+                        index + 1,
+                    ),
+                );
+            }
+            let child_evaluation =
+                evaluate_children(document, registry, fingerprint_ids, fingerprint.id());
+            if let Some(parent_payload) = payload.as_object_mut() {
+                if !child_evaluation.children.is_empty() {
+                    parent_payload.insert(
+                        "children".to_owned(),
+                        Value::Array(child_evaluation.children),
+                    );
+                }
+                if let Some(routing) = child_evaluation.routing {
+                    parent_payload.insert(
+                        "child_routing".to_owned(),
+                        serde_json::to_value(routing)
+                            .expect("child routing summary should serialize"),
+                    );
+                }
+            }
+            return Some(payload);
+        }
+        last_attempt = Some(payload);
+    }
+
+    if diagnose && let Some(payload) = last_attempt.as_mut() {
+        attach_run_diagnostics(payload, &attempts, true, Vec::new());
+    }
+
+    last_attempt
+}
+
+fn should_try_csv_text_fallback(
+    extension: &str,
+    registry: &FingerprintRegistry,
+    fingerprint_ids: &[String],
+) -> bool {
+    if !matches!(extension, "txt" | "text" | "tsv" | "dat") {
+        return false;
+    }
+
+    fingerprint_ids.iter().any(|fingerprint_id| {
+        let Some(info) = registry.info_for(fingerprint_id) else {
+            return false;
+        };
+        if info.parent.is_some() {
+            return false;
+        }
+
+        registry
+            .get(fingerprint_id)
+            .is_some_and(|fingerprint| fingerprint.format().eq_ignore_ascii_case("csv"))
+    })
+}
+
+fn remaining_root_candidate_ids_with_csv_text_fallback(
+    primary_document: &Document,
+    csv_document: &Document,
+    registry: &FingerprintRegistry,
+    fingerprint_ids: &[String],
+    start_index: usize,
+) -> Vec<String> {
+    fingerprint_ids
+        .iter()
+        .skip(start_index)
+        .filter_map(|fingerprint_id| {
+            let info = registry.info_for(fingerprint_id)?;
+            if info.parent.is_some() {
+                return None;
+            }
+
+            let fingerprint = registry.get(fingerprint_id)?;
+            let document = if fingerprint.format().eq_ignore_ascii_case("csv") {
+                csv_document
+            } else {
+                primary_document
+            };
+            format_matches(fingerprint.format(), document).then(|| fingerprint.id().to_owned())
+        })
+        .collect()
 }
 
 fn evaluate_children(

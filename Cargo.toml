@@ -1,6 +1,6 @@
 [package]
 name = "fingerprint"
-version = "0.6.1"
+version = "0.6.2"
 edition = "2024"
 authors = ["CMD+RVL Inc. <engineering@cmd.com>"]
 description = "Content fingerprinting and document recognition system with DSL-based assertion engine"
@@ -25,6 +25,7 @@ globset = "=0.4.16"
 futures = "=0.3.31"
 scraper = "=0.22.0"
 ego-tree = "=0.10.0"
+zip = { version = "=2.4.2", default-features = false }
 frankensearch-core = "=0.1.2"
 frankensearch-embed = { version = "=0.1.2", default-features = false, features = ["hash"] }
 frankensearch-lexical = "=0.1.0"

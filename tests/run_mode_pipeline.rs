@@ -191,6 +191,65 @@ content_hash:
 }
 
 #[test]
+fn run_mode_evaluates_csv_fingerprint_against_text_extension() {
+    let definitions_dir = tempdir().expect("create definitions dir");
+    let csv_fp = r#"
+fingerprint_id: cmbs-setup.v1
+format: csv
+assertions:
+  - filename_regex:
+      pattern: "(?i).*_STUP\\.txt$"
+  - sheet_exists: "csv"
+  - sheet_min_rows:
+      sheet: "Sheet1"
+      min_rows: 2
+"#
+    .trim();
+    std::fs::write(definitions_dir.path().join("cmbs-setup.fp.yaml"), csv_fp)
+        .expect("write csv fingerprint definition");
+    let text_fp = r#"
+fingerprint_id: generic-text.v1
+format: text
+assertions:
+  - text_contains: "loan_id"
+"#
+    .trim();
+    std::fs::write(definitions_dir.path().join("generic-text.fp.yaml"), text_fp)
+        .expect("write text fingerprint definition");
+
+    let csv_file = NamedTempFile::with_suffix("_STUP.txt").expect("create csv text file");
+    std::fs::write(csv_file.path(), "loan_id,balance,rate\nA-1,1000000,5.25\n")
+        .expect("write csv text fixture");
+
+    let manifest = write_jsonl(&[json!({
+        "version": "hash.v0",
+        "path": csv_file.path().display().to_string(),
+        "extension": ".txt",
+        "mime_guess": "text/plain",
+        "bytes_hash": "blake3:csv-text",
+        "tool_versions": { "hash": "0.1.0" }
+    })]);
+
+    let output = run_fingerprint_with_definitions(
+        manifest.path(),
+        &[
+            "--fp",
+            "cmbs-setup.v1",
+            "--fp",
+            "generic-text.v1",
+            "--no-witness",
+        ],
+        definitions_dir.path(),
+    );
+
+    assert_eq!(output.status.code(), Some(0));
+    let lines = parse_jsonl(&output.stdout);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["fingerprint"]["fingerprint_id"], "cmbs-setup.v1");
+    assert_eq!(lines[0]["fingerprint"]["matched"], true);
+}
+
+#[test]
 fn run_mode_html_specific_assertions_keep_content_hash_stable_and_null_on_no_match() {
     let definitions_dir = tempdir().expect("create definitions dir");
     let html_fp = r#"

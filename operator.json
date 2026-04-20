@@ -1,8 +1,8 @@
 {
   "schema_version": "operator.v0",
   "name": "fingerprint",
-  "version": "0.6.1",
-  "description": "Tests artifacts against fingerprint definitions and produces content hashes. Spreadsheet fingerprints use the xlsx assertion surface for both .xlsx and legacy .xls workbooks.",
+  "version": "0.6.2",
+  "description": "Tests artifacts against fingerprint definitions and produces content hashes. Spreadsheet fingerprints use the xlsx assertion surface for .xlsx and legacy .xls workbooks; csv fingerprints can also evaluate delimited text-extension records.",
   "repository": "https://github.com/cmdrvl/fingerprint",
   "license": "MIT",
   "agent_guide": "https://github.com/cmdrvl/.github/blob/main/profile/AGENT_PROMPT.md",

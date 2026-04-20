@@ -502,7 +502,7 @@ Every refusal includes a concrete `next_command` when mechanical recovery is pos
     },
     "content_hash": "blake3:9f2a..."
   },
-  "tool_versions": { "vacuum": "0.1.0", "hash": "0.1.0", "fingerprint": "0.6.1" }
+  "tool_versions": { "vacuum": "0.1.0", "hash": "0.1.0", "fingerprint": "0.6.2" }
 }
 ```
 
