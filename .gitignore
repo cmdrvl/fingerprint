@@ -31,3 +31,9 @@ target_codex_hq/
 /artifacts/
 __pycache__/
 *.pyc
+
+# Standard noise-drop (per-machine state, OS noise, agent caches)
+.DS_Store
+.beads/.br_history/
+.codex_write_probe
+.regret/
