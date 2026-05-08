@@ -3,6 +3,7 @@
 
 pub mod cli;
 pub mod compile;
+pub mod doctor;
 pub mod document;
 pub mod dsl;
 pub mod infer;
@@ -17,6 +18,8 @@ pub mod witness;
 // Public re-exports for compiled fingerprint crates.
 pub use document::Document;
 pub use registry::{Fingerprint, FingerprintResult};
+
+pub(crate) const OPERATOR_JSON: &str = include_str!("../operator.json");
 
 use clap::{Parser, error::ErrorKind};
 
@@ -125,6 +128,13 @@ pub fn run() -> u8 {
             out.as_deref(),
             !cli.no_witness,
         ),
+        Some(Command::Doctor(args)) => match doctor::run(&args) {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("Error: fingerprint doctor failed: {}", error);
+                2
+            }
+        },
         None => {
             // Default run mode (fingerprint processing)
             handle_run_mode(cli)
@@ -176,7 +186,7 @@ where
 fn is_subcommand_token(arg: &std::ffi::OsStr) -> bool {
     matches!(
         arg.to_str(),
-        Some("compile" | "witness" | "infer" | "infer-schema" | "struct-check")
+        Some("compile" | "witness" | "infer" | "infer-schema" | "struct-check" | "doctor")
     )
 }
 
@@ -511,9 +521,7 @@ fn handle_compile_command(
 fn handle_describe() -> u8 {
     use std::io::Write;
     let mut stdout = std::io::stdout();
-    if stdout
-        .write_all(include_bytes!("../operator.json"))
-        .is_err()
+    if stdout.write_all(OPERATOR_JSON.as_bytes()).is_err()
         || stdout.write_all(b"\n").is_err()
         || stdout.flush().is_err()
     {

@@ -76,6 +76,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: cargo test --test cli_smoke_surfaces
         run: cargo test --test cli_smoke_surfaces
+      - name: cargo test --test doctor
+        run: cargo test --test doctor
 
   golden-tests:
     name: golden-tests
@@ -108,6 +110,8 @@ jobs:
         run: cargo run --release -- --version
       - name: fingerprint --help
         run: cargo run --release -- --help
+      - name: fingerprint doctor health
+        run: cargo run --release -- doctor health
 
   ci-success:
     name: ci-success

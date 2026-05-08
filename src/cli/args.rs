@@ -46,6 +46,8 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Inspect fingerprint's read-only diagnostic surface.
+    Doctor(DoctorArgs),
     /// Compile DSL fingerprint to Rust crate
     Compile {
         /// DSL fingerprint file (.fp.yaml)
@@ -128,6 +130,33 @@ pub enum Command {
     },
 }
 
+#[derive(Debug, Args)]
+pub struct DoctorArgs {
+    /// Emit one-call machine triage for headless agents.
+    #[arg(long = "robot-triage")]
+    pub robot_triage: bool,
+
+    #[command(subcommand)]
+    pub action: Option<DoctorAction>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DoctorAction {
+    /// Print a cheap one-line health summary.
+    Health,
+    /// Print the machine-readable doctor capability contract.
+    Capabilities(DoctorCapabilitiesArgs),
+    /// Print paste-ready operating notes for agents.
+    RobotDocs,
+}
+
+#[derive(Debug, Args)]
+pub struct DoctorCapabilitiesArgs {
+    /// Emit JSON output.
+    #[arg(long)]
+    pub json: bool,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum WitnessAction {
     /// Query witness records
@@ -194,7 +223,7 @@ impl WitnessFilters {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command, WitnessAction};
+    use super::{Cli, Command, DoctorAction, WitnessAction};
     use clap::Parser;
     use std::path::PathBuf;
 
@@ -248,6 +277,40 @@ mod tests {
             assert_eq!(out, Some(PathBuf::from("out-dir")));
             assert!(check);
             assert!(!schema);
+        }
+    }
+
+    #[test]
+    fn parses_doctor_robot_triage_without_input() {
+        let cli = Cli::parse_from(["fingerprint", "doctor", "--robot-triage"]);
+
+        assert!(cli.input.is_none());
+        assert!(matches!(
+            cli.command,
+            Some(Command::Doctor(super::DoctorArgs {
+                robot_triage: true,
+                action: None,
+            }))
+        ));
+    }
+
+    #[test]
+    fn parses_doctor_capabilities_json_without_input() {
+        let cli = Cli::parse_from(["fingerprint", "doctor", "capabilities", "--json"]);
+
+        let command = cli.command;
+        assert!(
+            matches!(command, Some(Command::Doctor(_))),
+            "expected doctor command"
+        );
+        if let Some(Command::Doctor(args)) = command {
+            assert!(!args.robot_triage);
+            assert!(matches!(
+                args.action,
+                Some(DoctorAction::Capabilities(super::DoctorCapabilitiesArgs {
+                    json: true,
+                }))
+            ));
         }
     }
 

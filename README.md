@@ -453,6 +453,19 @@ s3-to-vacuum s3://bucket/q3-delivery/ \
 | `1` | At least one group is missing required files |
 | `2` | Refusal (invalid rules file, non-vacuum.v0 input, I/O error) |
 
+### Doctor mode
+
+Read-only health and capability reporting for headless agents:
+
+```bash
+fingerprint doctor health
+fingerprint doctor capabilities --json
+fingerprint doctor robot-docs
+fingerprint doctor --robot-triage
+```
+
+This release has no `doctor --fix` surface. Doctor commands do not write witness ledgers, mutate fingerprint definitions, run network probes, or create `.doctor/` artifacts.
+
 ### Exit codes
 
 | Code | Run mode | Compile mode |
