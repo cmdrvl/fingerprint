@@ -24,6 +24,7 @@ fn help_routes_exit_success() {
     for args in [
         &["--help"][..],
         &["doctor", "--help"][..],
+        &["doctor", "health", "--help"][..],
         &["doctor", "capabilities", "--help"][..],
     ] {
         let result = run_fingerprint(args);
@@ -48,6 +49,25 @@ fn doctor_health_is_read_only_and_successful() {
         "doctor health should not write stderr: {}",
         String::from_utf8_lossy(&result.stderr)
     );
+}
+
+#[test]
+fn doctor_health_json_is_read_only_and_successful() {
+    let result = run_fingerprint(["doctor", "health", "--json"]);
+
+    assert_eq!(result.status.code(), Some(0));
+    assert!(
+        result.stderr.is_empty(),
+        "doctor health json should not write stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let value: serde_json::Value =
+        serde_json::from_slice(&result.stdout).expect("health should be JSON");
+
+    assert_eq!(value["schema_version"], "fingerprint.doctor.v1");
+    assert_eq!(value["tool"], "fingerprint");
+    assert_eq!(value["summary"]["status"], "healthy");
+    assert_eq!(value["read_only"], true);
 }
 
 #[test]
@@ -83,6 +103,7 @@ fn doctor_capabilities_json_declares_read_only_contract() {
         .expect("commands should be an array");
     for expected in [
         "fingerprint doctor health",
+        "fingerprint doctor health --json",
         "fingerprint doctor capabilities --json",
         "fingerprint doctor robot-docs",
         "fingerprint doctor --robot-triage",
@@ -140,6 +161,7 @@ fn doctor_robot_docs_names_agent_surface() {
     );
     let stdout = String::from_utf8(result.stdout).expect("robot docs utf8");
     assert!(stdout.contains("fingerprint doctor health"));
+    assert!(stdout.contains("fingerprint doctor health --json"));
     assert!(stdout.contains("fingerprint doctor capabilities --json"));
     assert!(stdout.contains("no doctor --fix surface exists yet"));
 }

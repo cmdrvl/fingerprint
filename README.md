@@ -459,6 +459,7 @@ Read-only health and capability reporting for headless agents:
 
 ```bash
 fingerprint doctor health
+fingerprint doctor health --json
 fingerprint doctor capabilities --json
 fingerprint doctor robot-docs
 fingerprint doctor --robot-triage
