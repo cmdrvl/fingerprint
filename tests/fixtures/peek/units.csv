@@ -1,0 +1,5 @@
+Report: demand model
+Region,Month,Volume,Rate
+text,date,units,%
+North,2026-01,10,0.40
+South,2026-02,12,0.35

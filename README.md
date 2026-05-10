@@ -24,6 +24,14 @@ A fingerprint is a set of deterministic assertions that encode domain knowledge.
 
 Spreadsheet fingerprints use `format: xlsx` for both modern `.xlsx` and legacy `.xls` Excel workbooks.
 
+For messy CSV exports, `fingerprint peek` gives downstream profile tooling a safe look at row shape without exposing cell content:
+
+```bash
+fingerprint peek vendor-export.csv --json --suggest
+```
+
+The output is a single `fingerprint.peek.v0` JSON object with row indexes, column counts, type counts, length buckets, delimiter confidence, and optional pre-parse suggestions. It never emits raw cell values; witness records contain metadata and hashes only.
+
 ---
 
 ## What makes this different
@@ -412,6 +420,21 @@ fingerprint infer-schema --doc <FILE> [--text-path <FILE>] --fields <YAML> --id 
 ```
 
 For spreadsheet corpora, `--format xlsx` covers both `.xlsx` and `.xls` inputs; `--format xls` is accepted as a convenience alias and still emits `format: xlsx` fingerprints.
+
+### Peek mode
+
+```bash
+fingerprint peek <FILE> [--rows N] [--json] [--suggest] [--no-witness]
+```
+
+Peek mode is read-only. It inspects CSV-like row shape and emits metadata only, so agents can decide whether a file needs preamble skipping, multi-row headers, or units-row handling before calling `profile slice`.
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--rows <N>` | integer | 50 | Maximum physical rows to inspect |
+| `--json` | flag | on | Accepted for consistency; output is always JSON |
+| `--suggest` | flag | | Include `profile_pre_parse` suggestions |
+| `--no-witness` | flag | | Suppress witness ledger recording |
 
 ### Struct-check mode
 

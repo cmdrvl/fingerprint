@@ -8,6 +8,7 @@ pub mod document;
 pub mod dsl;
 pub mod infer;
 pub mod output;
+pub mod peek;
 pub mod pipeline;
 pub mod progress;
 pub mod refusal;
@@ -95,6 +96,13 @@ pub fn run() -> u8 {
             }
         }
         Some(Command::Witness { action }) => handle_witness_command(action),
+        Some(Command::Peek(args)) => match peek::run(&args, !cli.no_witness) {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("Error: fingerprint peek failed: {error}");
+                2
+            }
+        },
         Some(Command::StructCheck { rules, input }) => {
             handle_struct_check_command(&rules, input.as_deref())
         }
@@ -186,7 +194,7 @@ where
 fn is_subcommand_token(arg: &std::ffi::OsStr) -> bool {
     matches!(
         arg.to_str(),
-        Some("compile" | "witness" | "infer" | "infer-schema" | "struct-check" | "doctor")
+        Some("compile" | "witness" | "infer" | "infer-schema" | "struct-check" | "doctor" | "peek")
     )
 }
 

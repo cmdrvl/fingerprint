@@ -81,9 +81,17 @@ fingerprint infer ./cbre-examples/ --negative ./non-cbre-examples/ --format mark
 fingerprint infer-schema --doc appraisal.md --fields fields.yaml --id cbre-appraisal.v1
 ```
 
+fingerprint also has a read-only **peek** mode for CSV-like files:
+
+```bash
+fingerprint peek messy-export.csv --json --suggest
+```
+
+Peek mode emits row-shape metadata only: physical row indexes, column counts, non-empty counts, type-class counts, length buckets, delimiter confidence, and optional `profile_pre_parse` suggestions. It must not emit raw cell values in stdout, stderr, refusal details, or witness params.
+
 ---
 
-## Three Modes
+## Four Modes
 
 ### Run mode (stream enrichment)
 
@@ -102,7 +110,11 @@ Learns fingerprint definitions from example documents. Two sub-modes:
 
 Both infer sub-modes are reproducible within a pinned toolchain: same inputs + same frankensearch version + same embedding model → same `.fp.yaml` output. No LLM calls. All local. BM25 lexical search is fully deterministic; semantic search is deterministic given pinned model weights. The generated `.fp.yaml` records the toolchain versions used for reproducibility.
 
-All three modes share the `fingerprint` binary. Run mode is the default; compile and infer are subcommands.
+### Peek mode (row-shape sensing)
+
+Inspects a CSV-like file before profile authoring. Peek mode is for layout triage only: it helps identify preambles, header rows, units rows, and likely data starts without disclosing data values. It emits a single `fingerprint.peek.v0` JSON object and appends a witness record by default unless `--no-witness` is set.
+
+All four modes share the `fingerprint` binary. Run mode is the default; compile, infer, struct-check, witness, doctor, and peek are subcommands.
 
 ---
 
@@ -222,6 +234,31 @@ For each field, the tool locates the value in the document, identifies the neare
 - `0`: Schema infer completed, `.fp.yaml` emitted.
 - `1`: Some fields not located (partial definition emitted with warnings).
 - `2`: Refusal (document unreadable, no fields located).
+
+### Peek mode
+
+```bash
+fingerprint peek <FILE> [OPTIONS]
+```
+
+#### Arguments
+
+- `<FILE>`: CSV-like text file to inspect.
+
+#### Flags
+
+- `--rows <N>`: Maximum physical rows to inspect. Default: `50`.
+- `--json`: Accepted for spine consistency. Output is always a single JSON object.
+- `--suggest`: Include profile pre-parse suggestions under `result.suggestions.profile_pre_parse`.
+- `--no-witness`: Suppress witness ledger recording.
+
+#### Output contract
+
+- Envelope version: `fingerprint.peek.v0`.
+- Success outcome: `SUCCESS`, exit `0`.
+- Refusal outcome: `REFUSAL`, exit `2`.
+- The result may contain row indexes, column counts, non-empty counts, cell type counts, length histograms, delimiter metadata, shape classes, modal column count, header/data row estimates, and suggestion metadata.
+- The result must not contain source cell text. Refusal details and witness params must also avoid source cell text.
 
 ---
 

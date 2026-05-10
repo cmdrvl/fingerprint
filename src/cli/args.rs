@@ -24,7 +24,7 @@ pub struct Cli {
     pub jobs: Option<usize>,
 
     /// Suppress witness ledger recording
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub no_witness: bool,
 
     /// Emit progress to stderr
@@ -48,6 +48,8 @@ pub struct Cli {
 pub enum Command {
     /// Inspect fingerprint's read-only diagnostic surface.
     Doctor(DoctorArgs),
+    /// Inspect delimited row shape without emitting cell content.
+    Peek(PeekArgs),
     /// Compile DSL fingerprint to Rust crate
     Compile {
         /// DSL fingerprint file (.fp.yaml)
@@ -128,6 +130,24 @@ pub enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+}
+
+#[derive(Debug, Args)]
+pub struct PeekArgs {
+    /// CSV-like file to inspect.
+    pub file: PathBuf,
+
+    /// Maximum number of rows to inspect.
+    #[arg(long, default_value_t = 50)]
+    pub rows: usize,
+
+    /// Emit JSON output. `peek` is JSON by default; this flag is accepted for consistency.
+    #[arg(long)]
+    pub json: bool,
+
+    /// Include pre-parse suggestions for profile draft/slice flows.
+    #[arg(long)]
+    pub suggest: bool,
 }
 
 #[derive(Debug, Args)]
@@ -299,6 +319,29 @@ mod tests {
                 action: None,
             }))
         ));
+    }
+
+    #[test]
+    fn parses_peek_subcommand_without_run_mode_fingerprints() {
+        let cli = Cli::parse_from([
+            "fingerprint",
+            "peek",
+            "dataset.csv",
+            "--rows",
+            "12",
+            "--json",
+            "--suggest",
+        ]);
+
+        assert!(cli.input.is_none());
+        let command = cli.command;
+        assert!(matches!(command, Some(Command::Peek(_))));
+        if let Some(Command::Peek(args)) = command {
+            assert_eq!(args.file, PathBuf::from("dataset.csv"));
+            assert_eq!(args.rows, 12);
+            assert!(args.json);
+            assert!(args.suggest);
+        }
     }
 
     #[test]

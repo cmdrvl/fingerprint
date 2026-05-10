@@ -18,6 +18,7 @@ Three modes:
 - **Run mode** (default): stream enrichment — reads hash-enriched JSONL, tests each record against fingerprint definitions, emits enriched JSONL.
 - **Compile mode**: DSL compilation — reads `.fp.yaml` and generates a Rust crate implementing the Fingerprint trait.
 - **Infer mode**: learn definitions — observes a corpus and generates `.fp.yaml` candidates.
+- **Peek mode**: row-shape sensing — reads a CSV-like file and emits metadata only; it must never emit cell values.
 
 ### Quick Reference
 
@@ -30,6 +31,9 @@ vacuum /data | hash | fingerprint --fp argus-model.v1 --fp csv.v0
 
 # Compile DSL to Rust crate
 fingerprint compile argus-model.fp.yaml --out fingerprint-argus-model-v1/
+
+# Inspect CSV row shape without exposing cell content
+fingerprint peek messy-export.csv --json --suggest --no-witness
 ```
 
 ### Source of Truth
@@ -50,6 +54,7 @@ fingerprint compile argus-model.fp.yaml --out fingerprint-argus-model-v1/
 | `src/compile/` | Codegen: DSL → Rust crate |
 | `src/pipeline/` | JSONL reader, record enricher, parallel processing |
 | `src/output/` | JSONL serialization to stdout |
+| `src/peek.rs` | Veil-safe row-shape sensor for CSV pre-parse planning |
 | `src/progress/` | Structured progress to stderr |
 | `src/refusal/` | Refusal codes and envelope construction |
 | `src/witness/` | Witness append/query behavior |
@@ -66,6 +71,7 @@ fingerprint compile argus-model.fp.yaml --out fingerprint-argus-model-v1/
 - Refusal path emits one refusal JSON envelope to stdout.
 - No human-report mode on stdout — pure JSONL only.
 - `--diagnose` may add `fingerprint.diagnostics` with attempted fingerprint IDs, first failed assertion summaries, nearest-match context, and first-match short-circuit metadata. Normal run mode stays schema-stable without it.
+- `fingerprint peek` is the exception to stream enrichment: it emits a single `fingerprint.peek.v0` JSON object containing row shape metadata only. It is read-only and must not emit cell content.
 
 | Exit | Meaning |
 |------|---------|
@@ -125,6 +131,67 @@ Ambient witness semantics must match spine conventions:
 - Witness failures do not mutate domain outcome semantics (non-fatal).
 - Witness query subcommands supported (`query`, `last`, `count`).
 - Compile mode does NOT produce witness records.
+- Peek witness records may include input path, file hash, row count, and shape summary parameters; they must not include raw cell content.
+
+### 8. Peek content safety
+
+- `fingerprint peek` may inspect cell values internally to classify type and length.
+- It must emit only counts, row indexes, length buckets, type classes, delimiter metadata, and pre-parse suggestions.
+- Do not put raw cell values into JSON output, refusal details, stderr warnings, test names, or witness params.
+- If a parser error happens, return a generic parse refusal with path and error class only.
+
+## Repo Ownership Boundaries
+
+This repo owns template recognition, fingerprint DSL compilation, deterministic inference, row-shape sensing, and witness records for those operations. It does not own profile slicing, row-level reconciliation, lockfile semantics, packaging, or Homebrew tap policy beyond the release workflow files in this repo.
+
+Keep changes inside this repo's behavioral surface. If a fix requires a downstream contract change, file a bead in the downstream repo instead of smuggling a compatibility shim into `fingerprint`.
+
+## Build, Test, And Lint Commands
+
+Run these after substantive Rust changes:
+
+```bash
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
+Before committing, run UBS on changed files:
+
+```bash
+ubs $(git diff --name-only --cached)
+```
+
+For focused work, use the narrow tests first, then the full gate:
+
+```bash
+cargo test --test peek
+cargo test doctor
+```
+
+## Beads And Agent Mail
+
+- Use `br ready --json`, `br show <id> --json`, `br update <id> --status in_progress`, `br close <id> --reason "..."`, and `br sync --flush-only`.
+- Never run bare `bv`; use only `bv --robot-*` flags if graph triage is needed.
+- If multiple agents are editing this repo, reserve only exact files through Agent Mail. Use the bead ID as the shared thread ID.
+- Treat unexpected working-tree edits as concurrent work. Do not revert, stash, or overwrite them.
+
+## Tool Guidance
+
+- Use `rg` for text/file search and `ast-grep` when Rust syntax or structural matching matters.
+- Prefer existing modules and output helpers over new abstractions.
+- Keep CLI output machine-readable. Do not add casual stdout text to run mode or `peek`.
+- Avoid network-dependent tests unless the existing suite already gates that behavior.
+
+## Landing The Plane
+
+Before ending a session with repo changes:
+
+1. Run the relevant quality gates.
+2. Close or update the worked Beads and run `br sync --flush-only`.
+3. Commit all repo-owned changes.
+4. Push `main`, then `git push origin main:master`.
+5. Verify `git status -sb` is clean and up to date.
 
 ---
 
