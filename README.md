@@ -1,5 +1,9 @@
 # fingerprint
 
+![fingerprint: deterministic file classification. A painterly dashboard listing twelve unknown files on the left and four versioned fingerprint definitions in the middle (argus_dcf_v1, 10K_filing_v2, rent_roll_v3, lease_abstract_v1). Classification results on the right map nine files to a definition with a checkmark and stamp three as Unknown in amber. The expanded argus_dcf_v1 detail shows three exact-match assertions. Attestation reads: Deterministic. Binary. Reproducible. On the record.](docs/images/fingerprint.webp)
+
+> *Either the file matches the definition, or it doesn't. No probabilities.*
+
 <div align="center">
 
 [![CI](https://github.com/cmdrvl/fingerprint/actions/workflows/ci.yml/badge.svg)](https://github.com/cmdrvl/fingerprint/actions/workflows/ci.yml)
@@ -735,3 +739,7 @@ vacuum --> hash --> fingerprint --> lock --> shape --> rvl --> pack
                                               |
                                             canon
 ```
+
+---
+
+*`fingerprint` is part of the open-source toolchain from the [CMD+RVL](https://cmdrvl.com) lineage and AI enablement practice. MIT-licensed. Contributions welcome from any practice or stack.*
