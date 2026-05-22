@@ -321,7 +321,7 @@ Resolution must be deterministic:
 Trust boundary:
 
 - Built-in fingerprints are trusted by default.
-- External crates/plugins require explicit allowlisting in config (`~/.epistemic/config.toml`) before use.
+- External crates/plugins require explicit allowlisting in config (`~/.cmdrvl/config/fingerprint/trust.yaml`) before use.
 - Unallowlisted external fingerprints fail with `E_UNTRUSTED_FP`.
 
 ```bash
@@ -1730,7 +1730,7 @@ Infer mode generates a `.fp.yaml` file. It does NOT produce fingerprint results.
 - **`--list` tests:** lists built-in fingerprints
 - **Exit code tests:** 0 all matched, 1 partial, 2 refusal
 - **Refusal tests:** E_BAD_INPUT, E_UNKNOWN_FP, E_DUPLICATE_FP_ID, E_UNTRUSTED_FP
-- **Witness tests:** witness record appended; witness query/last/count behavior and exit codes
+- **Witness tests:** witness record appended; witness query/last/count behavior and exit codes; legacy witness, trust, and definition paths migrate to `~/.cmdrvl/`
 - **Golden file tests:** known XLSX through known fingerprint produces exact expected output
 - **Golden file tests (content):** known markdown through known content fingerprint produces exact expected output
 - **Infer corpus tests:** N example documents → deterministic `.fp.yaml` (same inputs = same output)

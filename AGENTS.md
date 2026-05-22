@@ -126,7 +126,9 @@ fingerprint peek messy-export.csv --json --suggest --no-witness
 ### 7. Witness parity
 
 Ambient witness semantics must match spine conventions:
-- Append by default to `$EPISTEMIC_WITNESS` or `~/.epistemic/witness.jsonl`.
+- Append by default to `$EPISTEMIC_WITNESS` or `~/.cmdrvl/state/witness/witness.jsonl`.
+- Trust config defaults to `~/.cmdrvl/config/fingerprint/trust.yaml`.
+- Installed definitions default to `~/.cmdrvl/config/fingerprint/definitions/`.
 - `--no-witness` opt-out.
 - Witness failures do not mutate domain outcome semantics (non-fatal).
 - Witness query subcommands supported (`query`, `last`, `count`).

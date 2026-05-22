@@ -4,7 +4,7 @@ use std::fs;
 use serde_json::{Value, json};
 
 use crate::cli::args::PeekArgs;
-use crate::witness::ledger::{append, ledger_path};
+use crate::witness::ledger::{append, ledger_path_for_append};
 use crate::witness::record::{WitnessInput, WitnessRecord};
 
 const ENVELOPE_VERSION: &str = "fingerprint.peek.v0";
@@ -570,7 +570,14 @@ fn append_peek_witness(args: &PeekArgs, bytes: &[u8], result: &Value) -> Option<
         }
     };
     let witness_id = record.id.clone();
-    if let Err(error) = append(&ledger_path(), &record) {
+    let ledger = match ledger_path_for_append() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("Warning: Failed to prepare peek witness ledger: {error}");
+            return None;
+        }
+    };
+    if let Err(error) = append(&ledger, &record) {
         eprintln!("Warning: Failed to record peek witness: {error}");
         return None;
     }

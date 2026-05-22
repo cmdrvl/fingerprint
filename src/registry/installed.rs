@@ -65,17 +65,13 @@ impl Fingerprint for DslFingerprint {
 
 /// Default directory for installed fingerprint definitions.
 fn definitions_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("FINGERPRINT_DEFINITIONS") {
-        return PathBuf::from(dir);
-    }
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".fingerprint")
-        .join("definitions")
+    crate::config::definitions_dir_for_read().unwrap_or_else(|error| {
+        eprintln!("Warning: failed to prepare fingerprint definitions directory: {error}");
+        crate::config::definitions_dir()
+    })
 }
 
-/// Discover installed fingerprint definitions from `~/.fingerprint/definitions/`.
+/// Discover installed fingerprint definitions from the canonical config root.
 ///
 /// Scans the definitions directory for `.fp.yaml` files, parses each one,
 /// and returns fingerprint implementations with metadata.

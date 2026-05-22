@@ -58,6 +58,17 @@ fn parse_witness_ledger(path: &Path) -> Vec<Value> {
         .collect()
 }
 
+fn canonical_witness_path(home: &Path) -> PathBuf {
+    home.join(".cmdrvl")
+        .join("state")
+        .join("witness")
+        .join("witness.jsonl")
+}
+
+fn canonical_fingerprint_config_dir(home: &Path) -> PathBuf {
+    home.join(".cmdrvl").join("config").join("fingerprint")
+}
+
 #[test]
 fn run_mode_progress_flag_emits_structured_progress_events() {
     let csv_path = repo_path("tests/fixtures/files/sample.csv");
@@ -82,6 +93,89 @@ fn run_mode_progress_flag_emits_structured_progress_events() {
             .any(|line| line["type"] == "progress" && line["tool"] == "fingerprint"),
         "progress mode should emit structured progress events to stderr"
     );
+}
+
+#[test]
+fn run_mode_migrates_default_witness_trust_and_definitions_paths() {
+    let home = tempdir().expect("create home tempdir");
+    let legacy_witness = home.path().join(".epistemic").join("witness.jsonl");
+    std::fs::create_dir_all(legacy_witness.parent().expect("legacy witness parent"))
+        .expect("create legacy witness parent");
+    std::fs::write(
+        &legacy_witness,
+        "{\"id\":\"legacy-old\",\"tool\":\"fingerprint\",\"outcome\":\"OLD\"}\n",
+    )
+    .expect("write legacy witness");
+
+    let legacy_fingerprint = home.path().join(".fingerprint");
+    let legacy_definitions = legacy_fingerprint.join("definitions");
+    std::fs::create_dir_all(&legacy_definitions).expect("create legacy definitions");
+    std::fs::write(
+        legacy_fingerprint.join("trust.yaml"),
+        "trust:\n  - \"installed:*\"\n",
+    )
+    .expect("write legacy trust");
+    std::fs::write(
+        legacy_definitions.join("local-csv.fp.yaml"),
+        r#"
+fingerprint_id: local-csv.v1
+format: csv
+assertions:
+  - filename_regex:
+      pattern: "(?i)\\.csv$"
+"#,
+    )
+    .expect("write legacy definition");
+
+    let csv_path = repo_path("tests/fixtures/files/sample.csv");
+    let manifest = write_jsonl(&[json!({
+        "version": "hash.v0",
+        "path": csv_path.display().to_string(),
+        "extension": ".csv",
+        "bytes_hash": "blake3:csv",
+        "tool_versions": { "hash": "0.1.0" }
+    })]);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_fingerprint"))
+        .arg(manifest.path())
+        .args(["--fp", "local-csv.v1"])
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .env_remove("EPISTEMIC_WITNESS")
+        .env_remove("FINGERPRINT_TRUST")
+        .env_remove("FINGERPRINT_DEFINITIONS")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("run fingerprint binary");
+
+    assert_eq!(output.status.code(), Some(0));
+
+    let canonical_witness = canonical_witness_path(home.path());
+    let witness_rows = parse_witness_ledger(&canonical_witness);
+    assert_eq!(witness_rows.len(), 2);
+    assert_eq!(witness_rows[0]["outcome"], "OLD");
+    assert_eq!(witness_rows[1]["tool"], "fingerprint");
+    assert_eq!(witness_rows[1]["outcome"], "ALL_MATCHED");
+
+    let canonical_config = canonical_fingerprint_config_dir(home.path());
+    assert!(canonical_config.join("trust.yaml").exists());
+    assert!(
+        canonical_config
+            .join("definitions")
+            .join("local-csv.fp.yaml")
+            .exists()
+    );
+
+    let migration = std::fs::read_to_string(home.path().join(".cmdrvl/migrations/applied.jsonl"))
+        .expect("migration records");
+    assert!(migration.contains("witness_ledger"));
+    assert!(migration.contains("fingerprint_trust_config"));
+    assert!(migration.contains("fingerprint_definitions"));
+
+    let notice =
+        std::fs::read_to_string(home.path().join(".cmdrvl/notices/deprecated-paths.jsonl"))
+            .expect("deprecation notices");
+    assert!(notice.contains("legacy_path_migrated"));
 }
 
 #[test]

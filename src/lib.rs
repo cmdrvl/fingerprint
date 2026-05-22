@@ -3,6 +3,7 @@
 
 pub mod cli;
 pub mod compile;
+pub mod config;
 pub mod doctor;
 pub mod document;
 pub mod dsl;
@@ -286,14 +287,28 @@ fn append_run_mode_witness(
     output_bytes: &[u8],
 ) {
     use progress::reporter::report_warning;
-    use witness::ledger::{append, ledger_path};
+    use witness::ledger::{append, ledger_path, ledger_path_for_append};
     use witness::record::WitnessRecord;
 
     if cli.no_witness {
         return;
     }
 
-    let ledger_path = ledger_path();
+    let ledger_path = match ledger_path_for_append() {
+        Ok(path) => path,
+        Err(error) => {
+            let path = ledger_path();
+            if cli.progress {
+                report_warning(
+                    &path.display().to_string(),
+                    &format!("witness migration failed: {error}"),
+                );
+            } else {
+                eprintln!("Warning: Failed to prepare witness ledger: {error}");
+            }
+            return;
+        }
+    };
     let witness_record = WitnessRecord::new(
         env!("CARGO_PKG_VERSION").to_owned(),
         current_binary_hash(),
@@ -587,9 +602,15 @@ fn handle_list() -> u8 {
 fn handle_witness_command(action: cli::WitnessAction) -> u8 {
     use cli::WitnessAction;
     use serde_json::json;
-    use witness::{ledger::ledger_path, query};
+    use witness::{ledger::ledger_path_for_query, query};
 
-    let ledger_path = ledger_path();
+    let ledger_path = match ledger_path_for_query() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("Error querying witness: {}", error);
+            return 2;
+        }
+    };
 
     match action {
         WitnessAction::Query { filters, json } => match query::query(&ledger_path, &filters) {
@@ -858,30 +879,15 @@ struct TrustConfig {
 
 /// Load trust allowlist from config files.
 ///
-/// Searches (in order, merging entries):
-/// 1. `~/.fingerprint/trust.yaml` (user config)
-/// 2. `.fingerprint/trust.yaml` (project config)
-///
-/// Override location with `FINGERPRINT_TRUST` environment variable.
+/// Searches `~/.cmdrvl/config/fingerprint/trust.yaml` after migrating legacy
+/// home/project locations. Override location with `FINGERPRINT_TRUST`.
 fn load_trust_config() -> Vec<String> {
     let mut entries = Vec::new();
-
-    if let Ok(path) = std::env::var("FINGERPRINT_TRUST") {
-        load_trust_file(&std::path::PathBuf::from(path), &mut entries);
-        return entries;
-    }
-
-    // User config: ~/.fingerprint/trust.yaml
-    let home_config = std::env::var("HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("."))
-        .join(".fingerprint")
-        .join("trust.yaml");
-    load_trust_file(&home_config, &mut entries);
-
-    // Project config: .fingerprint/trust.yaml
-    let project_config = std::path::PathBuf::from(".fingerprint").join("trust.yaml");
-    load_trust_file(&project_config, &mut entries);
+    let trust_path = crate::config::trust_path_for_read().unwrap_or_else(|error| {
+        eprintln!("Warning: failed to prepare fingerprint trust config: {error}");
+        crate::config::trust_path()
+    });
+    load_trust_file(&trust_path, &mut entries);
 
     entries
 }
@@ -951,7 +957,7 @@ fn build_registry() -> Result<registry::FingerprintRegistry, refusal::codes::Ref
                 policy,
             } => {
                 let next_command = format!(
-                    "Add to ~/.fingerprint/trust.yaml:\ntrust:\n  - \"{}\"",
+                    "Add to ~/.cmdrvl/config/fingerprint/trust.yaml:\ntrust:\n  - \"{}\"",
                     provider
                 );
                 build_envelope(
@@ -1132,7 +1138,7 @@ fn handle_infer_command(
 ) -> u8 {
     use crate::infer;
     use std::fs;
-    use witness::ledger::{append, ledger_path};
+    use witness::ledger::{append, ledger_path_for_append};
     use witness::record::{WitnessInput, WitnessRecord};
 
     // Infer profile from directory
@@ -1202,12 +1208,16 @@ fn handle_infer_command(
         );
 
         match witness {
-            Ok(record) => {
-                let ledger = ledger_path();
-                if let Err(error) = append(&ledger, &record) {
-                    eprintln!("Warning: Failed to record witness: {error}");
+            Ok(record) => match ledger_path_for_append() {
+                Ok(ledger) => {
+                    if let Err(error) = append(&ledger, &record) {
+                        eprintln!("Warning: Failed to record witness: {error}");
+                    }
                 }
-            }
+                Err(error) => {
+                    eprintln!("Warning: Failed to prepare witness ledger: {error}");
+                }
+            },
             Err(error) => {
                 eprintln!("Warning: Failed to build witness record: {error}");
             }
@@ -1229,7 +1239,7 @@ fn handle_infer_schema_command(
     use crate::document::open_document_from_path_with_text_path;
     use crate::infer::schema;
     use std::fs;
-    use witness::ledger::{append, ledger_path};
+    use witness::ledger::{append, ledger_path_for_append};
     use witness::record::{WitnessInput, WitnessRecord};
 
     let fields = match schema::parse_fields_file(fields_path) {
@@ -1334,12 +1344,16 @@ fn handle_infer_schema_command(
         );
 
         match witness {
-            Ok(record) => {
-                let ledger = ledger_path();
-                if let Err(error) = append(&ledger, &record) {
-                    eprintln!("Warning: Failed to record witness: {error}");
+            Ok(record) => match ledger_path_for_append() {
+                Ok(ledger) => {
+                    if let Err(error) = append(&ledger, &record) {
+                        eprintln!("Warning: Failed to record witness: {error}");
+                    }
                 }
-            }
+                Err(error) => {
+                    eprintln!("Warning: Failed to prepare witness ledger: {error}");
+                }
+            },
             Err(error) => {
                 eprintln!("Warning: Failed to build witness record: {error}");
             }

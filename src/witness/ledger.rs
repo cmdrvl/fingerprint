@@ -42,35 +42,22 @@ pub fn append(ledger_path: &Path, record: &WitnessRecord) -> Result<(), String> 
     Ok(())
 }
 
-/// Resolve the witness ledger path from `$EPISTEMIC_WITNESS` or default.
+/// Resolve the witness ledger path from `$EPISTEMIC_WITNESS` or the canonical default.
 pub fn ledger_path() -> std::path::PathBuf {
-    ledger_path_from_env(|key| std::env::var(key).ok())
+    crate::config::witness_path()
 }
 
-fn ledger_path_from_env<F>(get_env: F) -> std::path::PathBuf
-where
-    F: Fn(&str) -> Option<String>,
-{
-    if let Some(path) = get_env("EPISTEMIC_WITNESS")
-        && !path.trim().is_empty()
-    {
-        return path.into();
-    }
+pub fn ledger_path_for_append() -> Result<std::path::PathBuf, String> {
+    crate::config::witness_path_for_append()
+}
 
-    if let Some(home) = get_env("HOME")
-        && !home.trim().is_empty()
-    {
-        return std::path::PathBuf::from(home)
-            .join(".epistemic")
-            .join("witness.jsonl");
-    }
-
-    std::path::PathBuf::from(".epistemic/witness.jsonl")
+pub fn ledger_path_for_query() -> Result<std::path::PathBuf, String> {
+    crate::config::witness_path_for_query()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{append, ledger_path_from_env};
+    use super::append;
     use crate::witness::record::{WitnessInput, WitnessRecord};
     use serde_json::json;
     use std::fs;
@@ -91,31 +78,6 @@ mod tests {
             "2026-02-24T10:00:00Z",
         )
         .expect("build witness record")
-    }
-
-    #[test]
-    fn ledger_path_prefers_epistemic_witness_env_var() {
-        let path = ledger_path_from_env(|key| match key {
-            "EPISTEMIC_WITNESS" => Some("/tmp/custom-witness.jsonl".to_owned()),
-            "HOME" => Some("/tmp/home".to_owned()),
-            _ => None,
-        });
-
-        assert_eq!(path, std::path::PathBuf::from("/tmp/custom-witness.jsonl"));
-    }
-
-    #[test]
-    fn ledger_path_defaults_to_home_epistemic_path() {
-        let path = ledger_path_from_env(|key| match key {
-            "EPISTEMIC_WITNESS" => None,
-            "HOME" => Some("/tmp/home".to_owned()),
-            _ => None,
-        });
-
-        assert_eq!(
-            path,
-            std::path::PathBuf::from("/tmp/home/.epistemic/witness.jsonl")
-        );
     }
 
     #[test]

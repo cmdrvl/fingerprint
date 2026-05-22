@@ -329,12 +329,17 @@ fn build_capabilities() -> DoctorCapabilities {
                 mutates_in_this_release: false,
             },
             DataPathCapability {
-                path: "~/.config/fingerprint/trust.yml",
-                purpose: "run-mode installed definition trust fallback; not touched by doctor commands",
+                path: "~/.cmdrvl/config/fingerprint/trust.yaml",
+                purpose: "run-mode installed definition trust config; not touched by doctor commands",
                 mutates_in_this_release: false,
             },
             DataPathCapability {
-                path: "~/.epistemic/witness.jsonl",
+                path: "~/.cmdrvl/config/fingerprint/definitions/",
+                purpose: "run-mode installed definition directory; not touched by doctor commands",
+                mutates_in_this_release: false,
+            },
+            DataPathCapability {
+                path: "~/.cmdrvl/state/witness/witness.jsonl",
                 purpose: "run/infer witness ledger; not touched by doctor commands",
                 mutates_in_this_release: false,
             },

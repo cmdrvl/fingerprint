@@ -167,7 +167,8 @@ Drop a `.fp.yaml` file into the definitions directory and fingerprint runs it im
 
 ```bash
 # After infer generates your YAML, just install it
-cp cbre-appraisal.fp.yaml ~/.fingerprint/definitions/
+mkdir -p ~/.cmdrvl/config/fingerprint/definitions/
+cp cbre-appraisal.fp.yaml ~/.cmdrvl/config/fingerprint/definitions/
 
 # Run it — no compilation needed
 vacuum /data | hash | fingerprint --fp cbre-appraisal.v1
@@ -303,7 +304,7 @@ vacuum /data/dec/ | hash | fingerprint --fp csv.v0 \
 pack seal dec.lock.json --note "December delivery" --output evidence/dec/
 ```
 
-Every run is recorded in the ambient witness ledger (`~/.epistemic/witness.jsonl`) as an append-only, content-addressed local receipt.
+Every run is recorded in the ambient witness ledger (`~/.cmdrvl/state/witness/witness.jsonl`) as an append-only, content-addressed local receipt. On first run, legacy `~/.epistemic/witness.jsonl`, `~/.fingerprint/trust.yaml`, and `~/.fingerprint/definitions/` paths are copied into the canonical `~/.cmdrvl` layout with migration/deprecation JSONL records.
 
 ---
 
@@ -625,7 +626,8 @@ content_hash:
 Run it directly (development):
 
 ```bash
-cp argus-model.fp.yaml ~/.fingerprint/definitions/
+mkdir -p ~/.cmdrvl/config/fingerprint/definitions/
+cp argus-model.fp.yaml ~/.cmdrvl/config/fingerprint/definitions/
 vacuum /data/models | hash | fingerprint --fp argus-model.v1
 ```
 
@@ -684,7 +686,7 @@ fingerprint witness count --since 2026-02-01
 | `1` | No matches |
 | `2` | CLI error |
 
-Ledger location: `~/.epistemic/witness.jsonl` (override with `EPISTEMIC_WITNESS`).
+Ledger location: `~/.cmdrvl/state/witness/witness.jsonl` (override with `EPISTEMIC_WITNESS`).
 
 </details>
 
