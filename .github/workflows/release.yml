@@ -376,7 +376,6 @@ jobs:
           class Fingerprint < Formula
             desc "Determine whether an artifact matches a known template"
             homepage "https://github.com/cmdrvl/fingerprint"
-            version "${RELEASE_VERSION}"
             license "Proprietary"
 
             on_macos do

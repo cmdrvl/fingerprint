@@ -114,7 +114,7 @@ Both infer sub-modes are reproducible within a pinned toolchain: same inputs + s
 
 Inspects a CSV-like file before profile authoring. Peek mode is for layout triage only: it helps identify preambles, header rows, units rows, and likely data starts without disclosing data values. It emits a single `fingerprint.peek.v0` JSON object and appends a witness record by default unless `--no-witness` is set.
 
-All four modes share the `fingerprint` binary. Run mode is the default; compile, infer, struct-check, witness, doctor, and peek are subcommands.
+All four modes share the `fingerprint` binary. Run mode is the default; compile, infer, struct-check, witness, doctor, capabilities, robot-docs, and peek are subcommands.
 
 ---
 
@@ -133,6 +133,8 @@ fingerprint witness <query|last|count> [OPTIONS]
 
 #### Flags
 
+- `--json`: Accepted as structured-output intent. Run-mode output is already JSONL.
+- `--robot-triage`: Emit one machine-readable triage report without reading input.
 - `--fp <ID>`: Fingerprint ID to test (repeatable). At least one required unless `--list` is specified. Multiple `--fp` flags are evaluated in CLI order; first match wins per artifact.
 - `--list`: List all available fingerprints (built-in + installed) and exit 0.
 - `--jobs <N>`: Number of parallel workers (default: CPU count). `--jobs 1` for sequential.
@@ -1152,7 +1154,7 @@ fingerprint appends a witness record for every **run mode** invocation (success 
 {
   "id": "blake3:...",
   "tool": "fingerprint",
-  "version": "0.1.0",
+  "version": "0.9.0",
   "binary_hash": "blake3:...",
   "inputs": [
     { "path": "stdin", "hash": null, "bytes": null }
@@ -1627,7 +1629,7 @@ Infer mode generates a `.fp.yaml` file. It does NOT produce fingerprint results.
 {
   "schema_version": "operator.v0",
   "name": "fingerprint",
-  "version": "0.1.0",
+  "version": "0.9.0",
   "description": "Tests artifacts against fingerprint definitions and produces content hashes",
   "repository": "https://github.com/cmdrvl/fingerprint",
   "license": "MIT",
@@ -1636,7 +1638,7 @@ Infer mode generates a `.fp.yaml` file. It does NOT produce fingerprint results.
     "binary": "fingerprint",
     "output_mode": "stream",
     "output_schema": "fingerprint.v0",
-    "json_flag": null
+    "json_flag": "--json"
   },
 
   "arguments": [
@@ -1644,6 +1646,8 @@ Infer mode generates a `.fp.yaml` file. It does NOT produce fingerprint results.
   ],
 
   "options": [
+    { "name": "json", "flag": "--json", "type": "boolean", "description": "Accepted as structured-output intent; run-mode output is already JSONL" },
+    { "name": "robot_triage", "flag": "--robot-triage", "type": "boolean", "description": "Emit one machine-readable triage report without reading input" },
     { "name": "fp", "flag": "--fp", "type": "string", "repeatable": true, "description": "Fingerprint ID (evaluated in CLI order; first match wins)" },
     { "name": "list", "flag": "--list", "type": "boolean", "description": "List available fingerprints" },
     { "name": "jobs", "flag": "--jobs", "type": "integer", "description": "Number of parallel workers" },
@@ -1670,7 +1674,12 @@ Infer mode generates a `.fp.yaml` file. It does NOT produce fingerprint results.
   "capabilities": {
     "formats": ["csv", "xlsx", "pdf", "markdown", "text"],
     "profile_aware": false,
-    "streaming": true
+    "streaming": true,
+    "agent_surfaces": [
+      "fingerprint --robot-triage",
+      "fingerprint capabilities --json",
+      "fingerprint robot-docs guide"
+    ]
   },
 
   "pipeline": {

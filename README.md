@@ -395,6 +395,8 @@ fingerprint [<INPUT>] [OPTIONS]
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
+| `--json` | flag | | Accepted as structured-output intent; run-mode output is already JSONL |
+| `--robot-triage` | flag | | Emit one machine-readable triage report without reading input |
 | `--fp <ID>` | string | required | Fingerprint ID to test (repeatable, first match wins) |
 | `--list` | flag | | List all available fingerprints and exit |
 | `--diagnose` | flag | | Show full diagnostic context on assertion failures |
@@ -486,6 +488,9 @@ s3-to-vacuum s3://bucket/q3-delivery/ \
 Read-only health and capability reporting for headless agents:
 
 ```bash
+fingerprint --robot-triage
+fingerprint capabilities --json
+fingerprint robot-docs guide
 fingerprint doctor health
 fingerprint doctor health --json
 fingerprint doctor capabilities --json
@@ -493,7 +498,7 @@ fingerprint doctor robot-docs
 fingerprint doctor --robot-triage
 ```
 
-This release has no `doctor --fix` surface. Doctor commands do not write witness ledgers, mutate fingerprint definitions, run network probes, or create `.doctor/` artifacts.
+`fingerprint doctor --fix` is intentionally unavailable in this release. It exits `2` with safe read-only alternatives. Top-level agent surfaces and doctor commands do not write witness ledgers, mutate fingerprint definitions, run network probes, or create `.doctor/` artifacts.
 
 ### Exit codes
 
@@ -646,6 +651,11 @@ vacuum /data/models | hash | fingerprint --fp argus-model.v1
 For the full toolchain guide, see the [Agent Operator Guide](https://github.com/cmdrvl/.github/blob/main/profile/AGENT_PROMPT.md).
 
 ```bash
+# Agent discovery
+fingerprint --robot-triage
+fingerprint capabilities --json
+fingerprint robot-docs guide
+
 # Self-describing contract
 fingerprint --describe | jq '.capabilities.formats'
 fingerprint --describe | jq '.options[] | select(.flag == "--diagnose")'

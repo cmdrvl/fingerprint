@@ -1,0 +1,4 @@
+{"name":"capabilities","argv":["fingerprint","capabilities","--json"],"description":"Return machine-readable tool capabilities without reading stdin or appending witness records","mutates":false,"source":"fingerprint capabilities --json"}
+{"name":"global_json","argv":["fingerprint","--json"],"description":"Accepted as structured-output intent; run-mode output is already JSONL","mutates":false,"source":"fingerprint capabilities --json"}
+{"name":"robot_docs","argv":["fingerprint","robot-docs","guide"],"description":"Print paste-ready agent guidance for safe fingerprint operation","mutates":false,"source":"fingerprint capabilities --json"}
+{"name":"robot_triage","argv":["fingerprint","--robot-triage"],"description":"Return one read-only machine-readable health, capability, and recommendation report","mutates":false,"source":"fingerprint capabilities --json"}

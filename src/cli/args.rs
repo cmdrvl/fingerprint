@@ -11,6 +11,14 @@ pub struct Cli {
     #[arg(value_name = "INPUT")]
     pub input: Option<PathBuf>,
 
+    /// Accept structured-output intent; run-mode output is already JSONL
+    #[arg(long)]
+    pub json: bool,
+
+    /// Emit one machine-readable triage report without reading input
+    #[arg(long = "robot-triage")]
+    pub robot_triage: bool,
+
     /// Fingerprint ID to test (repeatable; evaluated in CLI order, first match wins)
     #[arg(long = "fp", alias = "fingerprint", value_name = "ID")]
     pub fingerprints: Vec<String>,
@@ -46,6 +54,13 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Describe agent-facing capabilities.
+    Capabilities(TopLevelCapabilitiesArgs),
+    /// Print agent-facing usage guidance.
+    RobotDocs {
+        #[command(subcommand)]
+        action: Option<RobotDocsAction>,
+    },
     /// Inspect fingerprint's read-only diagnostic surface.
     Doctor(DoctorArgs),
     /// Inspect delimited row shape without emitting cell content.
@@ -156,8 +171,25 @@ pub struct DoctorArgs {
     #[arg(long = "robot-triage")]
     pub robot_triage: bool,
 
+    /// Repair mode is unavailable; prints safe alternatives.
+    #[arg(long, hide = true)]
+    pub fix: bool,
+
     #[command(subcommand)]
     pub action: Option<DoctorAction>,
+}
+
+#[derive(Debug, Args)]
+pub struct TopLevelCapabilitiesArgs {
+    /// Emit JSON output.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RobotDocsAction {
+    /// Print the agent guide.
+    Guide,
 }
 
 #[derive(Debug, Subcommand)]
@@ -250,7 +282,7 @@ impl WitnessFilters {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command, DoctorAction, WitnessAction};
+    use super::{Cli, Command, DoctorAction, RobotDocsAction, WitnessAction};
     use clap::Parser;
     use std::path::PathBuf;
 
@@ -278,6 +310,34 @@ mod tests {
         assert!(cli.no_witness);
         assert!(cli.progress);
         assert!(cli.diagnose);
+        assert!(!cli.json);
+        assert!(!cli.robot_triage);
+    }
+
+    #[test]
+    fn parses_top_level_agent_surfaces_without_input() {
+        let triage = Cli::parse_from(["fingerprint", "--robot-triage"]);
+        assert!(triage.command.is_none());
+        assert!(triage.robot_triage);
+
+        let capabilities = Cli::parse_from(["fingerprint", "capabilities", "--json"]);
+        assert!(matches!(
+            capabilities.command,
+            Some(Command::Capabilities(super::TopLevelCapabilitiesArgs {
+                json: true,
+            }))
+        ));
+
+        let robot_docs = Cli::parse_from(["fingerprint", "robot-docs", "guide"]);
+        assert!(matches!(
+            robot_docs.command,
+            Some(Command::RobotDocs {
+                action: Some(RobotDocsAction::Guide),
+            })
+        ));
+
+        let json_intent = Cli::parse_from(["fingerprint", "--json", "--fp", "csv.v0"]);
+        assert!(json_intent.json);
     }
 
     #[test]
@@ -316,6 +376,7 @@ mod tests {
             cli.command,
             Some(Command::Doctor(super::DoctorArgs {
                 robot_triage: true,
+                fix: false,
                 action: None,
             }))
         ));
@@ -355,6 +416,7 @@ mod tests {
         );
         if let Some(Command::Doctor(args)) = command {
             assert!(!args.robot_triage);
+            assert!(!args.fix);
             assert!(matches!(
                 args.action,
                 Some(DoctorAction::Capabilities(super::DoctorCapabilitiesArgs {

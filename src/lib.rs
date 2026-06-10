@@ -62,6 +62,38 @@ pub fn run() -> u8 {
         }
     };
 
+    if cli.robot_triage {
+        return match doctor::emit_robot_triage() {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("Error: fingerprint doctor failed: {}", error);
+                2
+            }
+        };
+    }
+
+    match &cli.command {
+        Some(Command::Capabilities(args)) => {
+            return match doctor::emit_capabilities(args.json || cli.json) {
+                Ok(code) => code,
+                Err(error) => {
+                    eprintln!("Error: fingerprint capabilities failed: {}", error);
+                    2
+                }
+            };
+        }
+        Some(Command::RobotDocs { action }) => {
+            return match doctor::emit_robot_docs(action.as_ref()) {
+                Ok(code) => code,
+                Err(error) => {
+                    eprintln!("Error: fingerprint robot-docs failed: {}", error);
+                    2
+                }
+            };
+        }
+        _ => {}
+    }
+
     // Handle flags that cause immediate exit
     if cli.describe {
         return handle_describe();
@@ -137,13 +169,14 @@ pub fn run() -> u8 {
             out.as_deref(),
             !cli.no_witness,
         ),
-        Some(Command::Doctor(args)) => match doctor::run(&args) {
+        Some(Command::Doctor(args)) => match doctor::run(&args, cli.json) {
             Ok(code) => code,
             Err(error) => {
                 eprintln!("Error: fingerprint doctor failed: {}", error);
                 2
             }
         },
+        Some(Command::Capabilities(_)) | Some(Command::RobotDocs { .. }) => unreachable!(),
         None => {
             // Default run mode (fingerprint processing)
             handle_run_mode(cli)
@@ -195,7 +228,17 @@ where
 fn is_subcommand_token(arg: &std::ffi::OsStr) -> bool {
     matches!(
         arg.to_str(),
-        Some("compile" | "witness" | "infer" | "infer-schema" | "struct-check" | "doctor" | "peek")
+        Some(
+            "capabilities"
+                | "robot-docs"
+                | "compile"
+                | "witness"
+                | "infer"
+                | "infer-schema"
+                | "struct-check"
+                | "doctor"
+                | "peek"
+        )
     )
 }
 

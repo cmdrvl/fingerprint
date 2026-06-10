@@ -1,0 +1,17 @@
+{
+  "target_path": "/Users/zac/Source/cmdrvl/fingerprint",
+  "discovered_at": "2026-06-10T04:16:50Z",
+  "languages": [
+    "rust"
+  ],
+  "binaries": [
+    "fingerprint"
+  ],
+  "env_var_prefix": "FINGERPRINT",
+  "existing_surfaces": {
+    "robot_mode": true,
+    "capabilities": true,
+    "robot_docs": true
+  },
+  "recommended_mode": "audit-only"
+}

@@ -26,6 +26,8 @@ fn help_routes_exit_success() {
         &["doctor", "--help"][..],
         &["doctor", "health", "--help"][..],
         &["doctor", "capabilities", "--help"][..],
+        &["capabilities", "--help"][..],
+        &["robot-docs", "--help"][..],
     ] {
         let result = run_fingerprint(args);
         assert_eq!(result.status.code(), Some(0), "help route: {args:?}");
@@ -90,6 +92,11 @@ fn doctor_capabilities_json_declares_read_only_contract() {
     assert_eq!(value["tool"], "fingerprint");
     assert_eq!(value["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(value["read_only"], true);
+    assert_eq!(value["fix_mode"]["available"], false);
+    assert_eq!(
+        value["agent_surfaces"]["robot_triage"]["argv"][1],
+        "--robot-triage"
+    );
     assert_eq!(
         value["fixers"]
             .as_array()
@@ -102,11 +109,15 @@ fn doctor_capabilities_json_declares_read_only_contract() {
         .as_array()
         .expect("commands should be an array");
     for expected in [
+        "fingerprint --robot-triage",
+        "fingerprint capabilities --json",
+        "fingerprint robot-docs guide",
         "fingerprint doctor health",
         "fingerprint doctor health --json",
         "fingerprint doctor capabilities --json",
         "fingerprint doctor robot-docs",
         "fingerprint doctor --robot-triage",
+        "fingerprint doctor --fix",
     ] {
         assert!(
             commands
@@ -115,6 +126,57 @@ fn doctor_capabilities_json_declares_read_only_contract() {
             "missing command capability {expected}"
         );
     }
+}
+
+#[test]
+fn top_level_agent_surfaces_are_read_only_and_machine_discoverable() {
+    let capabilities = run_fingerprint(["capabilities", "--json"]);
+
+    assert_eq!(capabilities.status.code(), Some(0));
+    assert!(
+        capabilities.stderr.is_empty(),
+        "top-level capabilities should not write stderr: {}",
+        String::from_utf8_lossy(&capabilities.stderr)
+    );
+    let value: serde_json::Value =
+        serde_json::from_slice(&capabilities.stdout).expect("capabilities should be JSON");
+
+    assert_eq!(
+        value["schema_version"],
+        "fingerprint.doctor.capabilities.v1"
+    );
+    assert_eq!(
+        value["agent_surfaces"]["capabilities"]["argv"][1],
+        "capabilities"
+    );
+    assert_eq!(value["side_effects"]["reads_input_manifest"], false);
+    assert_eq!(value["side_effects"]["writes_witness_ledger"], false);
+
+    let triage = run_fingerprint(["--robot-triage"]);
+    assert_eq!(triage.status.code(), Some(0));
+    assert!(
+        triage.stderr.is_empty(),
+        "top-level robot triage should not write stderr: {}",
+        String::from_utf8_lossy(&triage.stderr)
+    );
+    let triage_value: serde_json::Value =
+        serde_json::from_slice(&triage.stdout).expect("triage should be JSON");
+    assert_eq!(triage_value["schema_version"], "fingerprint.doctor.v1");
+    assert_eq!(
+        triage_value["capabilities"]["agent_surfaces"]["robot_docs"]["argv"][2],
+        "guide"
+    );
+
+    let docs = run_fingerprint(["robot-docs", "guide"]);
+    assert_eq!(docs.status.code(), Some(0));
+    assert!(
+        docs.stderr.is_empty(),
+        "top-level robot docs should not write stderr: {}",
+        String::from_utf8_lossy(&docs.stderr)
+    );
+    let stdout = String::from_utf8(docs.stdout).expect("robot docs utf8");
+    assert!(stdout.contains("fingerprint robot-docs guide"));
+    assert!(stdout.contains("fingerprint capabilities --json"));
 }
 
 #[test]
@@ -160,10 +222,13 @@ fn doctor_robot_docs_names_agent_surface() {
         String::from_utf8_lossy(&result.stderr)
     );
     let stdout = String::from_utf8(result.stdout).expect("robot docs utf8");
+    assert!(stdout.contains("fingerprint --robot-triage"));
+    assert!(stdout.contains("fingerprint capabilities --json"));
+    assert!(stdout.contains("fingerprint robot-docs guide"));
     assert!(stdout.contains("fingerprint doctor health"));
     assert!(stdout.contains("fingerprint doctor health --json"));
     assert!(stdout.contains("fingerprint doctor capabilities --json"));
-    assert!(stdout.contains("no doctor --fix surface exists yet"));
+    assert!(stdout.contains("fingerprint doctor --fix is unavailable"));
 }
 
 #[test]
@@ -191,20 +256,23 @@ fn doctor_robot_triage_is_single_call_json() {
     );
     assert_eq!(
         value["capabilities_url"],
-        "command:fingerprint doctor capabilities --json"
+        "command:fingerprint capabilities --json"
     );
 }
 
 #[test]
-fn doctor_fix_surface_is_not_present() {
+fn doctor_fix_surface_reports_unavailable_without_mutating() {
     let result = run_fingerprint(["doctor", "--fix"]);
 
     assert_eq!(result.status.code(), Some(2));
     assert!(
         result.stdout.is_empty(),
-        "usage errors should not emit stdout"
+        "doctor --fix should not emit stdout"
     );
-    assert!(String::from_utf8_lossy(&result.stderr).contains("unexpected argument '--fix'"));
+    let stderr = String::from_utf8(result.stderr).expect("stderr utf8");
+    assert!(stderr.contains("fingerprint doctor --fix is unavailable"));
+    assert!(stderr.contains("fingerprint --robot-triage"));
+    assert!(stderr.contains("fingerprint capabilities --json"));
 }
 
 #[test]

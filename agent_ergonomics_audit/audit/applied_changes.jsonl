@@ -1,0 +1,4 @@
+{"id":"fingerprint-agent-001","applied":true,"commit":null,"files":["src/cli/args.rs","src/lib.rs","src/doctor.rs","tests/doctor.rs","operator.json","README.md","docs/PLAN.md"],"summary":"Added top-level read-only agent discovery routes and tests."}
+{"id":"fingerprint-agent-002","applied":true,"commit":null,"files":["src/cli/args.rs","src/lib.rs","operator.json","README.md","docs/PLAN.md"],"summary":"Accepted top-level --json as structured-output intent and documented it."}
+{"id":"fingerprint-agent-003","applied":true,"commit":null,"files":["src/cli/args.rs","src/doctor.rs","tests/doctor.rs"],"summary":"Added hidden doctor --fix refusal with safe alternatives."}
+{"id":"fingerprint-agent-004","applied":true,"commit":null,"files":[".github/workflows/release.yml"],"summary":"Removed redundant Homebrew formula version emission."}

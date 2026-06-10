@@ -1,21 +1,29 @@
 use std::path::Path;
 
 use serde::Serialize;
+use serde_json::json;
 
-use crate::cli::args::{DoctorAction, DoctorArgs};
+use crate::cli::args::{DoctorAction, DoctorArgs, RobotDocsAction};
 
 const DOCTOR_SCHEMA_VERSION: &str = "fingerprint.doctor.v1";
 const DOCTOR_CONTRACT_VERSION: &str = "cmdrvl.read_only_doctor.v1";
 
-pub fn run(args: &DoctorArgs) -> Result<u8, Box<dyn std::error::Error>> {
+pub fn run(args: &DoctorArgs, json_output: bool) -> Result<u8, Box<dyn std::error::Error>> {
+    if args.fix {
+        return Ok(emit_fix_unavailable());
+    }
+
     if args.robot_triage {
-        return robot_triage();
+        return emit_robot_triage();
     }
 
     match &args.action {
-        Some(DoctorAction::Health(health_args)) => health(health_args.json),
-        Some(DoctorAction::Capabilities(capabilities_args)) => capabilities(capabilities_args.json),
-        Some(DoctorAction::RobotDocs) => robot_docs(),
+        Some(DoctorAction::Health(health_args)) => health(health_args.json || json_output),
+        Some(DoctorAction::Capabilities(capabilities_args)) => {
+            emit_capabilities(capabilities_args.json || json_output)
+        }
+        Some(DoctorAction::RobotDocs) => emit_robot_docs(None),
+        None if json_output => health(true),
         None => human_triage(),
     }
 }
@@ -50,32 +58,42 @@ fn human_triage() -> Result<u8, Box<dyn std::error::Error>> {
         }
     }
     println!();
-    println!("Next: fingerprint doctor capabilities --json");
+    println!("Next: fingerprint capabilities --json");
     Ok(report.exit_code)
 }
 
-fn capabilities(json: bool) -> Result<u8, Box<dyn std::error::Error>> {
+pub fn emit_capabilities(json: bool) -> Result<u8, Box<dyn std::error::Error>> {
     let payload = build_capabilities();
     if json {
         println!("{}", serde_json::to_string_pretty(&payload)?);
     } else {
-        println!("fingerprint doctor capabilities");
+        println!("fingerprint capabilities");
         println!("schema_version: {}", payload.schema_version);
         println!("contract_version: {}", payload.contract_version);
         println!("read_only: {}", payload.read_only);
-        println!("json: fingerprint doctor capabilities --json");
+        println!("json: fingerprint capabilities --json");
     }
     Ok(0)
 }
 
-fn robot_docs() -> Result<u8, Box<dyn std::error::Error>> {
-    println!("# fingerprint doctor robot-docs");
+pub fn emit_robot_docs(action: Option<&RobotDocsAction>) -> Result<u8, Box<dyn std::error::Error>> {
+    match action {
+        Some(RobotDocsAction::Guide) | None => {}
+    }
+
+    println!("# fingerprint robot-docs guide");
     println!();
     println!(
-        "fingerprint doctor is read-only in this release. It never repairs files, deletes files, runs network probes, writes witness ledgers, mutates fingerprint definitions, or writes run artifacts."
+        "fingerprint's agent surfaces are read-only in this release. They never repair files, delete files, run network probes, write witness ledgers, mutate fingerprint definitions, or write run artifacts."
     );
     println!();
-    println!("Commands:");
+    println!("Top-level commands:");
+    println!("- fingerprint --robot-triage");
+    println!("- fingerprint capabilities --json");
+    println!("- fingerprint robot-docs guide");
+    println!("- fingerprint --json --fp <ID> <INPUT> # accepted; run output is already JSONL");
+    println!();
+    println!("Doctor commands:");
     println!("- fingerprint doctor health");
     println!("- fingerprint doctor health --json");
     println!("- fingerprint doctor capabilities --json");
@@ -88,15 +106,23 @@ fn robot_docs() -> Result<u8, Box<dyn std::error::Error>> {
     println!("- 2: command-line usage error from clap or doctor runtime error");
     println!();
     println!(
-        "Repair policy: no doctor --fix surface exists yet. File follow-up work with detector, backup, inverse, fixture, and undo coverage before adding one."
+        "Repair policy: fingerprint doctor --fix is unavailable. File follow-up work with detector, backup, inverse, fixture, and undo coverage before adding one."
     );
     Ok(0)
 }
 
-fn robot_triage() -> Result<u8, Box<dyn std::error::Error>> {
+pub fn emit_robot_triage() -> Result<u8, Box<dyn std::error::Error>> {
     let report = build_report();
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(report.exit_code)
+}
+
+pub fn emit_fix_unavailable() -> u8 {
+    eprintln!("fingerprint doctor --fix is unavailable; doctor is read-only in this release.");
+    eprintln!("Try --robot-triage: fingerprint --robot-triage");
+    eprintln!("Try capabilities --json: fingerprint capabilities --json");
+    eprintln!("Try doctor capabilities --json: fingerprint doctor capabilities --json");
+    2
 }
 
 fn build_report() -> DoctorReport {
@@ -170,11 +196,11 @@ fn build_report() -> DoctorReport {
         checks,
         actions_planned: Vec::new(),
         recommended_command: if status == "healthy" {
-            "fingerprint doctor health"
+            "fingerprint capabilities --json"
         } else {
-            "fingerprint doctor --robot-triage"
+            "fingerprint --robot-triage"
         },
-        capabilities_url: "command:fingerprint doctor capabilities --json",
+        capabilities_url: "command:fingerprint capabilities --json",
         capabilities,
         exit_code,
     }
@@ -230,7 +256,26 @@ fn build_capabilities() -> DoctorCapabilities {
         contract_version: DOCTOR_CONTRACT_VERSION,
         read_only: true,
         online_default: false,
+        fix_mode: FixMode {
+            available: false,
+            reason: "fingerprint doctor is audit-only until detectors, backups, inverses, and fixtures exist",
+        },
         commands: vec![
+            CommandCapability {
+                command: "fingerprint --robot-triage",
+                output: "json",
+                mutates: false,
+            },
+            CommandCapability {
+                command: "fingerprint capabilities --json",
+                output: "json",
+                mutates: false,
+            },
+            CommandCapability {
+                command: "fingerprint robot-docs guide",
+                output: "markdown",
+                mutates: false,
+            },
             CommandCapability {
                 command: "fingerprint doctor health",
                 output: "one-line text",
@@ -256,7 +301,52 @@ fn build_capabilities() -> DoctorCapabilities {
                 output: "json",
                 mutates: false,
             },
+            CommandCapability {
+                command: "fingerprint doctor --fix",
+                output: "stderr text and exit 2",
+                mutates: false,
+            },
         ],
+        agent_surfaces: json!({
+            "global_json": {
+                "argv": ["fingerprint", "--json"],
+                "description": "Accepted as structured-output intent; run-mode output is already JSONL"
+            },
+            "robot_triage": {
+                "argv": ["fingerprint", "--robot-triage"],
+                "description": "Return one read-only machine-readable health, capability, and recommendation report"
+            },
+            "capabilities": {
+                "argv": ["fingerprint", "capabilities", "--json"],
+                "description": "Return machine-readable tool capabilities without reading stdin or appending witness records"
+            },
+            "robot_docs": {
+                "argv": ["fingerprint", "robot-docs", "guide"],
+                "description": "Print paste-ready agent guidance for safe fingerprint operation"
+            }
+        }),
+        fingerprint_capabilities: json!({
+            "streaming_jsonl": true,
+            "operator_describe": true,
+            "schema_describe": true,
+            "witness_query": true,
+            "row_shape_peek": true,
+            "definition_compile": true,
+            "definition_infer": true,
+            "formats": ["csv", "xlsx", "pdf", "html", "markdown", "text"]
+        }),
+        side_effects: json!({
+            "reads_stdin": false,
+            "reads_input_manifest": false,
+            "opens_artifact_files": false,
+            "evaluates_fingerprints": false,
+            "writes_witness_ledger": false,
+            "creates_witness_directory": false,
+            "writes_doctor_artifacts": false,
+            "mutates_fingerprint_definitions": false,
+            "changes_cwd": false,
+            "uses_network": false
+        }),
         detectors: vec![
             DetectorCapability {
                 id: "binary-metadata",
@@ -403,12 +493,22 @@ struct DoctorCapabilities {
     contract_version: &'static str,
     read_only: bool,
     online_default: bool,
+    fix_mode: FixMode,
     commands: Vec<CommandCapability>,
+    agent_surfaces: serde_json::Value,
+    fingerprint_capabilities: serde_json::Value,
+    side_effects: serde_json::Value,
     detectors: Vec<DetectorCapability>,
     fixers: Vec<String>,
     exit_codes: Vec<ExitCodeCapability>,
     env_vars: Vec<EnvVarCapability>,
     data_paths: Vec<DataPathCapability>,
+}
+
+#[derive(Debug, Serialize)]
+struct FixMode {
+    available: bool,
+    reason: &'static str,
 }
 
 #[derive(Debug, Serialize)]
