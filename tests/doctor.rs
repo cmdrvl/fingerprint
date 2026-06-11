@@ -97,6 +97,15 @@ fn doctor_capabilities_json_declares_read_only_contract() {
         value["agent_surfaces"]["robot_triage"]["argv"][1],
         "--robot-triage"
     );
+    assert_eq!(value["composition"]["family"]["name"], "cmdrvl-spine");
+    assert_eq!(value["composition"]["position"], 3);
+    assert_eq!(value["composition"]["accepts"][0], "hash.v0 JSONL");
+    assert_eq!(value["composition"]["produces"][0], "fingerprint.v0 JSONL");
+    assert!(
+        value["composition"]["canonical_chain"][0]
+            .as_str()
+            .is_some_and(|command| command.contains("| fingerprint --fp <ID> | lock"))
+    );
     assert_eq!(
         value["fixers"]
             .as_array()
@@ -177,6 +186,9 @@ fn top_level_agent_surfaces_are_read_only_and_machine_discoverable() {
     let stdout = String::from_utf8(docs.stdout).expect("robot docs utf8");
     assert!(stdout.contains("fingerprint robot-docs guide"));
     assert!(stdout.contains("fingerprint capabilities --json"));
+    assert!(stdout.contains("Composition:"));
+    assert!(stdout.contains("fingerprint consumes hash.v0 JSONL"));
+    assert!(stdout.contains("pack seal dataset.lock.json --output evidence/<DATASET>/"));
 }
 
 #[test]

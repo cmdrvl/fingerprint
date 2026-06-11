@@ -93,6 +93,13 @@ pub fn emit_robot_docs(action: Option<&RobotDocsAction>) -> Result<u8, Box<dyn s
     println!("- fingerprint robot-docs guide");
     println!("- fingerprint --json --fp <ID> <INPUT> # accepted; run output is already JSONL");
     println!();
+    println!("Composition:");
+    println!("- fingerprint consumes hash.v0 JSONL and emits fingerprint.v0 JSONL.");
+    println!(
+        "- Canonical chain: vacuum --json <ROOT>... | hashbytes | fingerprint --fp <ID> | lock --dataset-id <DATASET> > dataset.lock.json"
+    );
+    println!("- Seal: pack seal dataset.lock.json --output evidence/<DATASET>/");
+    println!();
     println!("Doctor commands:");
     println!("- fingerprint doctor health");
     println!("- fingerprint doctor health --json");
@@ -335,6 +342,31 @@ fn build_capabilities() -> DoctorCapabilities {
             "definition_infer": true,
             "formats": ["csv", "xlsx", "pdf", "html", "markdown", "text"]
         }),
+        composition: json!({
+            "family": {
+                "name": "cmdrvl-spine",
+                "siblings": [
+                    {"tool": "vacuum", "capabilities": "vacuum capabilities --json"},
+                    {"tool": "hashbytes", "capabilities": "hashbytes capabilities --json"},
+                    {"tool": "fingerprint", "capabilities": "fingerprint capabilities --json"},
+                    {"tool": "lock", "capabilities": "lock capabilities --json"},
+                    {"tool": "pack", "capabilities": "pack capabilities --json"}
+                ]
+            },
+            "role": "middle of the evidence stream; recognize hashed artifacts with fingerprint definitions",
+            "position": 3,
+            "accepts": ["hash.v0 JSONL"],
+            "produces": ["fingerprint.v0 JSONL"],
+            "canonical_chain": [
+                "vacuum --json <ROOT>... | hashbytes | fingerprint --fp <ID> | lock --dataset-id <DATASET> > dataset.lock.json",
+                "pack seal dataset.lock.json --output evidence/<DATASET>/"
+            ],
+            "agent_rules": [
+                "Run fingerprint after hashbytes when lockfiles need matched template evidence.",
+                "Order repeated --fp definitions from specific to general; first match wins.",
+                "Pipe fingerprint JSONL to lock; do not convert it to human text."
+            ]
+        }),
         side_effects: json!({
             "reads_stdin": false,
             "reads_input_manifest": false,
@@ -497,6 +529,7 @@ struct DoctorCapabilities {
     commands: Vec<CommandCapability>,
     agent_surfaces: serde_json::Value,
     fingerprint_capabilities: serde_json::Value,
+    composition: serde_json::Value,
     side_effects: serde_json::Value,
     detectors: Vec<DetectorCapability>,
     fixers: Vec<String>,
