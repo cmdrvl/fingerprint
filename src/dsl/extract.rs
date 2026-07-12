@@ -261,6 +261,10 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
         .stop_selector
         .as_deref()
         .ok_or_else(|| "region extract requires 'stop_selector'".to_owned())?;
+    let anchor_text_regex =
+        compile_optional_region_regex("anchor_text_regex", section.anchor_text_regex.as_deref())?;
+    let stop_text_regex =
+        compile_optional_region_regex("stop_text_regex", section.stop_text_regex.as_deref())?;
 
     let continue_past = section
         .continue_past
@@ -276,6 +280,7 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
     let anchors = html
         .select_nodes(anchor_selector)?
         .into_iter()
+        .filter(|node| node_matches_optional_regex(*node, anchor_text_regex.as_ref()))
         .filter_map(|node| {
             let located = locate_element(html, node, anchor_search_start)?;
             anchor_search_start = located.byte_end;
@@ -293,36 +298,53 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
     if anchors.is_empty() {
         return Ok(None);
     }
+    let anchor_as_ofs = anchors
+        .iter()
+        .map(|anchor| region_anchor_as_of(html, anchor.node, anchor.normalized.line))
+        .collect::<Vec<_>>();
 
-    let stop_nodes = html.select_nodes(stop_selector)?;
+    let stop_nodes = html
+        .select_nodes(stop_selector)?
+        .into_iter()
+        .filter(|node| node_matches_optional_regex(*node, stop_text_regex.as_ref()))
+        .collect::<Vec<_>>();
     let mut regions = Vec::new();
+    let mut covered_continuation: Option<(String, usize)> = None;
     for (index, anchor) in anchors.iter().enumerate() {
+        let anchor_as_of = anchor_as_ofs[index].as_deref();
+        if covered_continuation
+            .as_ref()
+            .is_some_and(|(as_of, until_order)| {
+                anchor_as_of == Some(as_of.as_str()) && anchor.normalized.order < *until_order
+            })
+        {
+            continue;
+        }
         let stop = first_region_stop(
             html,
             &stop_nodes,
+            anchor.node,
             anchor.normalized,
             anchor.raw_span.map(|span| span.end),
             &continue_past,
+            anchor_as_of,
         );
-        let next_anchor = anchors.get(index + 1).map(|anchor| RegionBoundary {
-            normalized: anchor.normalized,
-            raw_span: anchor.raw_span,
-        });
+        let next_anchor =
+            next_non_continuation_anchor(&anchors, &anchor_as_ofs, index, &continue_past);
         let boundary = earlier_boundary(stop, next_anchor);
         let end_line = boundary
             .map(|boundary| boundary.normalized.line)
             .unwrap_or_else(|| html.normalized.lines().count() + 1)
             .max(anchor.normalized.line + 1);
         let boundary_order = boundary.map(|boundary| boundary.normalized.order);
+        if let Some(anchor_as_of) = anchor_as_of {
+            covered_continuation = Some((
+                anchor_as_of.to_owned(),
+                boundary_order.unwrap_or(usize::MAX),
+            ));
+        }
 
-        let table_indices = html
-            .tables
-            .iter()
-            .filter(|table| {
-                table.start_line >= anchor.normalized.line && table.start_line < end_line
-            })
-            .map(|table| table.index)
-            .collect::<Vec<_>>();
+        let table_indices = region_table_indices(html, anchor.normalized.order, boundary_order)?;
         let page_span = region_page_span(
             html,
             anchor.normalized.line,
@@ -363,19 +385,65 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
     }
 }
 
+fn next_non_continuation_anchor(
+    anchors: &[RegionAnchor<'_>],
+    anchor_as_ofs: &[Option<String>],
+    index: usize,
+    continue_past: &[Regex],
+) -> Option<RegionBoundary> {
+    let current_as_of = anchor_as_ofs.get(index).and_then(|as_of| as_of.as_deref());
+    anchors
+        .iter()
+        .enumerate()
+        .skip(index + 1)
+        .find(|(next_index, _)| {
+            if continue_past.iter().any(|pattern| {
+                pattern.is_match(selector_node_text(anchors[*next_index].node).as_str())
+            }) {
+                return false;
+            }
+            let next_as_of = anchor_as_ofs
+                .get(*next_index)
+                .and_then(|as_of| as_of.as_deref());
+            !matches!((current_as_of, next_as_of), (Some(current), Some(next)) if current == next)
+        })
+        .map(|(_, anchor)| RegionBoundary {
+            normalized: anchor.normalized,
+            raw_span: anchor.raw_span,
+        })
+}
+
+fn compile_optional_region_regex(
+    name: &str,
+    pattern: Option<&str>,
+) -> Result<Option<Regex>, String> {
+    pattern
+        .map(|pattern| {
+            Regex::new(pattern)
+                .map_err(|error| format!("invalid region {name} regex '{pattern}': {error}"))
+        })
+        .transpose()
+}
+
+fn node_matches_optional_regex(node: scraper::ElementRef<'_>, regex: Option<&Regex>) -> bool {
+    regex.is_none_or(|regex| regex.is_match(selector_node_text(node).as_str()))
+}
+
 fn first_region_stop(
     html: &HtmlDocument,
     stop_nodes: &[scraper::ElementRef<'_>],
+    anchor_node: scraper::ElementRef<'_>,
     anchor: LocatedElement,
     raw_search_start: Option<usize>,
     continue_past: &[Regex],
+    anchor_as_of: Option<&str>,
 ) -> Option<RegionBoundary> {
     stop_nodes
         .iter()
         .copied()
         .filter_map(|node| {
             let order = html.element_order_index(&node)?;
-            (order > anchor.order).then_some((order, node))
+            (order > anchor.order && !is_descendant_of(node, anchor_node)).then_some((order, node))
         })
         .find_map(|(_, node)| {
             let text = selector_node_text(node);
@@ -385,11 +453,23 @@ fn first_region_stop(
             {
                 return None;
             }
-            locate_element(html, node, anchor.byte_end).map(|located| RegionBoundary {
+            let located = locate_element(html, node, anchor.byte_end)?;
+            if anchor_as_of.is_some_and(|anchor_as_of| {
+                region_anchor_as_of(html, node, located.line).as_deref() == Some(anchor_as_of)
+            }) {
+                return None;
+            }
+            Some(RegionBoundary {
                 normalized: located,
                 raw_span: raw_search_start.and_then(|start| locate_raw_element(html, node, start)),
             })
         })
+}
+
+fn is_descendant_of(node: scraper::ElementRef<'_>, ancestor: scraper::ElementRef<'_>) -> bool {
+    node.ancestors()
+        .filter_map(scraper::ElementRef::wrap)
+        .any(|candidate| candidate.id() == ancestor.id())
 }
 
 fn earlier_boundary(
@@ -406,31 +486,116 @@ fn earlier_boundary(
     }
 }
 
+fn region_table_indices(
+    html: &HtmlDocument,
+    start_order: usize,
+    stop_order: Option<usize>,
+) -> Result<Vec<usize>, String> {
+    let span_end_order = stop_order.unwrap_or(usize::MAX);
+    Ok(html
+        .select_nodes("table")?
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, table)| {
+            let order = html.element_order_index(&table)?;
+            (order >= start_order && order < span_end_order).then_some(index)
+        })
+        .collect())
+}
+
 fn locate_element(
     html: &HtmlDocument,
     element: scraper::ElementRef<'_>,
     search_start: usize,
 ) -> Option<LocatedElement> {
+    let order = html.element_order_index(&element)?;
+    if let Some(located) = locate_element_line_block(html, element, order, search_start) {
+        return Some(located);
+    }
+
     let text = selector_node_text(element);
     if text.is_empty() {
         return None;
     }
     let bounded_start = search_start.min(html.normalized.len());
-    let relative_start = html.normalized[bounded_start..].find(text.as_str())?;
-    let byte_start = bounded_start + relative_start;
-    let byte_end = byte_start + text.len();
+    let (byte_start, byte_end) = locate_text_span(&html.normalized, &text, bounded_start)?;
     let line = html.normalized[..byte_start]
         .bytes()
         .filter(|byte| *byte == b'\n')
         .count()
         + 1;
-    let order = html.element_order_index(&element)?;
-
     Some(LocatedElement {
         order,
         byte_end,
         line,
     })
+}
+
+fn locate_element_line_block(
+    html: &HtmlDocument,
+    element: scraper::ElementRef<'_>,
+    order: usize,
+    search_start: usize,
+) -> Option<LocatedElement> {
+    let mut candidate_ids = vec![element.id()];
+    candidate_ids.extend(
+        element
+            .ancestors()
+            .filter_map(scraper::ElementRef::wrap)
+            .map(|ancestor| ancestor.id()),
+    );
+    candidate_ids.dedup();
+
+    candidate_ids.into_iter().find_map(|candidate_id| {
+        let block = html
+            .line_blocks
+            .iter()
+            .find(|block| block.element_id == candidate_id)?;
+        let byte_end = line_byte_end(&html.normalized, block.end_line);
+        (byte_end >= search_start).then_some(LocatedElement {
+            order,
+            byte_end,
+            line: block.start_line,
+        })
+    })
+}
+
+fn line_byte_end(text: &str, line: usize) -> usize {
+    if line == 0 {
+        return 0;
+    }
+    let mut current_line = 1usize;
+    for (index, byte) in text.bytes().enumerate() {
+        if byte == b'\n' {
+            if current_line == line {
+                return index;
+            }
+            current_line += 1;
+        }
+    }
+    text.len()
+}
+
+fn locate_text_span(haystack: &str, needle: &str, search_start: usize) -> Option<(usize, usize)> {
+    let bounded_start = search_start.min(haystack.len());
+    if let Some(relative_start) = haystack[bounded_start..].find(needle) {
+        let byte_start = bounded_start + relative_start;
+        return Some((byte_start, byte_start + needle.len()));
+    }
+
+    let tokens = needle.split_whitespace().take(200).collect::<Vec<_>>();
+    if tokens.is_empty() {
+        return None;
+    }
+    let flexible_pattern = tokens
+        .iter()
+        .map(|token| regex::escape(token))
+        .collect::<Vec<_>>()
+        .join(r"\s*");
+    let flexible = Regex::new(flexible_pattern.as_str()).ok()?;
+    flexible
+        .find(&haystack[bounded_start..])
+        .map(|match_| (bounded_start + match_.start(), bounded_start + match_.end()))
 }
 
 fn locate_raw_element(
@@ -490,6 +655,19 @@ fn region_date_text(
             .map(str::to_owned),
     );
     parts.join(" ")
+}
+
+fn region_anchor_as_of(
+    html: &HtmlDocument,
+    anchor_node: scraper::ElementRef<'_>,
+    start_line: usize,
+) -> Option<String> {
+    parse_as_of_date(&region_date_text(
+        html,
+        anchor_node,
+        start_line,
+        start_line + 6,
+    ))
 }
 
 fn parse_as_of_date(region_text: &str) -> Option<String> {
@@ -594,10 +772,13 @@ fn region_page_span(
         .filter(|order| **order < start_order)
         .count();
     let span_end_order = stop_order.unwrap_or(usize::MAX);
-    let within_span = hard_break_orders
+    let mut within_span = hard_break_orders
         .iter()
         .filter(|order| **order >= start_order && **order < span_end_order)
         .count();
+    if stop_order.is_some() {
+        within_span = within_span.saturating_sub(1);
+    }
     let first_page = before_start + 1;
     let last_page = first_page + within_span;
 

@@ -536,7 +536,9 @@ fn generate_extracted_code(extract: &[ExtractSection]) -> String {
                     pattern: {pattern},
                     within_chars: {within_chars},
                     anchor_selector: {anchor_selector},
+                    anchor_text_regex: {anchor_text_regex},
                     stop_selector: {stop_selector},
+                    stop_text_regex: {stop_text_regex},
                     continue_past: {continue_past},
                 }}"#,
             name = format_args!("{:?}", section.name),
@@ -549,7 +551,9 @@ fn generate_extracted_code(extract: &[ExtractSection]) -> String {
             pattern = codegen_option_string(section.pattern.as_deref()),
             within_chars = codegen_option_display(section.within_chars),
             anchor_selector = codegen_option_string(section.anchor_selector.as_deref()),
+            anchor_text_regex = codegen_option_string(section.anchor_text_regex.as_deref()),
             stop_selector = codegen_option_string(section.stop_selector.as_deref()),
+            stop_text_regex = codegen_option_string(section.stop_text_regex.as_deref()),
             continue_past = codegen_string_vec(&section.continue_past),
         ));
     }

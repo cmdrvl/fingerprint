@@ -117,12 +117,17 @@ a domain schema.
 | `table` | `html`, `markdown`, `pdf` with `text_path` | `name`, `type`, `anchor_heading` | `{ "start_line": 45, "end_line": 62, "columns": [...], "row_count": 15 }` |
 | `section` | `html`, `markdown`, `pdf` with `text_path` | `name`, `type`, `anchor_heading` | `{ "start_line": 30, "end_line": 90, "heading": "Income Capitalization Approach" }` |
 | `text_match` | `html`, `markdown`, `text`, `pdf` with `text_path` | `name`, `type`, `anchor`, `pattern`, `within_chars` | `{ "line": 12, "char_offset": 45, "matched": "June 15, 2024" }` |
-| `region` | `html` only | `name`, `type`, `anchor_selector`, `stop_selector` | Bounds-only region metadata: `anchor_selector`, `stop_selector`, `start_line`, `end_line`, `table_indices`, `page_span`, `byte_offsets`, and `as_of`. Multiple anchors emit `{ "regions": [...] }`. |
+| `region` | `html` only | `name`, `type`, `anchor_selector`, `stop_selector` | Bounds-only region metadata: `anchor_selector`, `stop_selector`, `start_line`, `end_line`, DOM-order `table_indices`, `page_span`, `byte_offsets`, and `as_of`. Multiple anchors emit `{ "regions": [...] }`. |
 <!-- extract-catalog:end -->
 
 Optional fields:
 
 - `index` selects the Nth table under a heading, defaulting to `0`.
+- `anchor_text_regex` on `region` optionally filters anchor-selector matches by
+  visible node text. This is deterministic and does not add normalizer
+  heuristics.
+- `stop_text_regex` on `region` optionally filters stop-selector matches by
+  visible node text.
 - `continue_past` on `region` is a list of regexes for stop candidates such as
   repeated `(continued)` headers that should not end the region.
 
@@ -236,7 +241,7 @@ format: html
 assertions:
   - node_text_regex:
       selector: "h1, div[style*='text-align:center'], p[style*='text-align:center']"
-      pattern: "(?i)schedules?\\s+of\\s+investments"
+      pattern: "(?i)schedu\\s*les?\\s+of\\s+investments"
       min_matches: 1
   - node_count:
       selector: "table"
@@ -244,10 +249,12 @@ assertions:
 extract:
   - name: schedule_region
     type: region
-    anchor_selector: "h1, div[style*='text-align:center'], p[style*='text-align:center']"
-    stop_selector: "h1, h2, div[style*='text-align:center'], p[style*='text-align:center']"
+    anchor_selector: "h1.soi, div[id] + hr + div[style*='min-height']"
+    anchor_text_regex: "(?i)schedu\\s*les?\\s+of\\s+investments"
+    stop_selector: "h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div"
+    stop_text_regex: "(?i)(schedu\\s*les?\\s+of\\s+investments|notes|derivative\\s+instruments|item\\s+[0-9])"
     continue_past:
-      - "(?i)\\(continued\\)"
+      - "(?i)(\\(continued\\)|\\bcontinued\\b)"
 content_hash:
   algorithm: blake3
   over: [schedule_region]
@@ -284,4 +291,3 @@ content_hash:
   algorithm: blake3
   over: [income_section]
 ```
-

@@ -5,7 +5,7 @@ assertions:
   - name: schedule_heading_text
     node_text_regex:
       selector: "h1, h2, div, p, span"
-      pattern: "(?i)schedules?\\s+of\\s+investments"
+      pattern: "(?i)schedu\\s*les?\\s+of\\s+investments"
       min_matches: 1
   - name: schedule_tables_present
     node_count:
@@ -15,7 +15,9 @@ assertions:
 extract:
   - name: schedule_region
     type: region
-    anchor_selector: "h1, div[style*='text-align:center'][style*='font-weight:bold'], div[style*='text-align: center'][style*='font-weight: bold'], p[style*='text-align:center'][style*='font-weight:bold'], p[style*='text-align: center'][style*='font-weight: bold']"
-    stop_selector: "h1, h2.notes, div[style*='text-align:center'][style*='font-weight:bold'], div[style*='text-align: center'][style*='font-weight: bold'], p[style*='text-align:center'][style*='font-weight:bold'], p[style*='text-align: center'][style*='font-weight: bold']"
+    anchor_selector: "h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span"
+    anchor_text_regex: "(?i)schedu\\s*les?\\s+of\\s+investments"
+    stop_selector: "h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p"
+    stop_text_regex: "(?i)(schedu\\s*les?\\s+of\\s+investments|notes|derivative\\s+instruments|item\\s+[0-9])"
     continue_past:
-      - "(?i)\\(continued\\)"
+      - "(?i)(\\(continued\\)|\\bcontinued\\b)"

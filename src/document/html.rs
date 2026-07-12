@@ -13,11 +13,20 @@ pub struct HtmlDocument {
     pub headings: Vec<Heading>,
     pub sections: Vec<Section>,
     pub tables: Vec<Table>,
+    pub line_blocks: Vec<HtmlLineBlock>,
     pub page_sections: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct HtmlLineBlock {
+    pub element_id: ego_tree::NodeId,
+    pub start_line: usize,
+    pub end_line: usize,
 }
 
 #[derive(Debug, Clone)]
 struct HtmlBlock {
+    element_id: ego_tree::NodeId,
     page: Option<u32>,
     kind: HtmlBlockKind,
 }
@@ -114,10 +123,16 @@ fn parse_html_document(path: &Path, raw: String) -> HtmlDocument {
     let mut blocks = Vec::new();
     let mut last_heading = None;
 
-    collect_blocks(document.tree.root(), None, &mut last_heading, &mut blocks);
+    collect_blocks(
+        document.tree.root(),
+        None,
+        None,
+        &mut last_heading,
+        &mut blocks,
+    );
 
     let page_sections = count_page_sections(&document);
-    let (normalized, headings, sections, tables) = materialize_blocks(&blocks);
+    let (normalized, headings, sections, tables, line_blocks) = materialize_blocks(&blocks);
 
     HtmlDocument {
         path: path.to_path_buf(),
@@ -127,6 +142,7 @@ fn parse_html_document(path: &Path, raw: String) -> HtmlDocument {
         headings,
         sections,
         tables,
+        line_blocks,
         page_sections,
     }
 }
@@ -134,14 +150,18 @@ fn parse_html_document(path: &Path, raw: String) -> HtmlDocument {
 fn collect_blocks(
     node: ego_tree::NodeRef<'_, Node>,
     current_page: Option<u32>,
+    current_element_id: Option<ego_tree::NodeId>,
     last_heading: &mut Option<String>,
     blocks: &mut Vec<HtmlBlock>,
 ) {
     match node.value() {
         Node::Text(text) => {
             let normalized = normalize_text_fragment(text.text.as_ref());
-            if !normalized.is_empty() {
+            if !normalized.is_empty()
+                && let Some(element_id) = current_element_id
+            {
                 blocks.push(HtmlBlock {
+                    element_id,
                     page: current_page,
                     kind: HtmlBlockKind::Text { text: normalized },
                 });
@@ -151,6 +171,7 @@ fn collect_blocks(
             let Some(element) = ElementRef::wrap(node) else {
                 return;
             };
+            let current_id = element.id();
             let name = element.value().name();
 
             if should_ignore_element(name) {
@@ -168,6 +189,7 @@ fn collect_blocks(
                 if !text.is_empty() {
                     *last_heading = Some(text.clone());
                     blocks.push(HtmlBlock {
+                        element_id: current_id,
                         page,
                         kind: HtmlBlockKind::Heading { level, text },
                     });
@@ -177,7 +199,7 @@ fn collect_blocks(
                         && (is_block_container(child_element.value().name())
                             || child_element.value().name() == "table")
                     {
-                        collect_blocks(child, page, last_heading, blocks);
+                        collect_blocks(child, page, Some(current_id), last_heading, blocks);
                     }
                 }
                 return;
@@ -186,6 +208,7 @@ fn collect_blocks(
             if name == "table" {
                 let table = parse_top_level_table(&element, last_heading.clone(), page);
                 blocks.push(HtmlBlock {
+                    element_id: current_id,
                     page,
                     kind: HtmlBlockKind::Table {
                         heading_ref: table.heading_ref,
@@ -201,6 +224,7 @@ fn collect_blocks(
                 let text = normalize_text_fragment(&collect_text_with_breaks(node));
                 if !text.is_empty() {
                     blocks.push(HtmlBlock {
+                        element_id: current_id,
                         page,
                         kind: HtmlBlockKind::Text { text },
                     });
@@ -209,12 +233,18 @@ fn collect_blocks(
             }
 
             for child in node.children() {
-                collect_blocks(child, page, last_heading, blocks);
+                collect_blocks(child, page, Some(current_id), last_heading, blocks);
             }
         }
         _ => {
             for child in node.children() {
-                collect_blocks(child, current_page, last_heading, blocks);
+                collect_blocks(
+                    child,
+                    current_page,
+                    current_element_id,
+                    last_heading,
+                    blocks,
+                );
             }
         }
     }
@@ -628,23 +658,32 @@ fn row_is_separator(row: &[String]) -> bool {
 // synthesize new visual headings, page models, or inferred sections here; route
 // new HTML structural cues to selector assertions and selector-anchored extract
 // definitions instead.
-fn materialize_blocks(blocks: &[HtmlBlock]) -> (String, Vec<Heading>, Vec<Section>, Vec<Table>) {
+fn materialize_blocks(
+    blocks: &[HtmlBlock],
+) -> (
+    String,
+    Vec<Heading>,
+    Vec<Section>,
+    Vec<Table>,
+    Vec<HtmlLineBlock>,
+) {
     let mut lines = Vec::new();
     let mut line_pages = Vec::new();
     let mut headings = Vec::new();
     let mut tables = Vec::new();
+    let mut line_blocks = Vec::new();
     let mut table_index = 0;
 
     for block in blocks {
         append_block_separator(&mut lines, &mut line_pages, block.page);
+        let start_line = lines.len() + 1;
         match &block.kind {
             HtmlBlockKind::Heading { level, text } => {
                 let line = format!("{} {}", "#".repeat(*level as usize), text);
-                let line_number = lines.len() + 1;
                 headings.push(Heading {
                     level: *level,
                     text: text.clone(),
-                    line: line_number,
+                    line: start_line,
                 });
                 lines.push(line);
                 line_pages.push(block.page);
@@ -661,7 +700,6 @@ fn materialize_blocks(blocks: &[HtmlBlock]) -> (String, Vec<Heading>, Vec<Sectio
                 headers,
                 rows,
             } => {
-                let start_line = lines.len() + 1;
                 for line in table_to_lines(headers, rows) {
                     lines.push(line);
                     line_pages.push(block.page);
@@ -679,13 +717,21 @@ fn materialize_blocks(blocks: &[HtmlBlock]) -> (String, Vec<Heading>, Vec<Sectio
                 table_index += 1;
             }
         }
+        let end_line = lines.len();
+        if start_line <= end_line {
+            line_blocks.push(HtmlLineBlock {
+                element_id: block.element_id,
+                start_line,
+                end_line,
+            });
+        }
     }
 
     trim_trailing_blank_lines(&mut lines, &mut line_pages);
     let normalized = lines.join("\n");
     let sections = compute_sections_with_pages(&normalized, &headings, &line_pages);
 
-    (normalized, headings, sections, tables)
+    (normalized, headings, sections, tables, line_blocks)
 }
 
 fn append_block_separator(

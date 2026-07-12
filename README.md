@@ -255,8 +255,10 @@ region starts at an `anchor_selector` match, ends before the next
 `anchor_selector`, `stop_selector`, `start_line`, `end_line`, `table_indices`,
 `page_span`, `byte_offsets`, and `as_of`. `byte_offsets` is a best-effort raw
 HTML `[start,end)` span and is `null` when the source node cannot be located
-deterministically. Multiple anchor matches emit `{ "regions": [...] }` in
-document order.
+deterministically. `table_indices` indexes raw DOM `<table>` elements in
+document order within the bounded region, independent of the frozen normalized
+table model. Multiple anchor matches emit `{ "regions": [...] }` in document
+order.
 
 ### Universal
 

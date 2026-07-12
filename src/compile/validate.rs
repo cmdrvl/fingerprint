@@ -234,6 +234,16 @@ fn validate_extract_sections(format: &str, extract: &[ExtractSection]) -> Result
                 if let Some(selector) = &section.stop_selector {
                     validate_selector("region.stop_selector", selector)?;
                 }
+                validate_optional_region_regex(
+                    &section.name,
+                    "anchor_text_regex",
+                    section.anchor_text_regex.as_ref(),
+                )?;
+                validate_optional_region_regex(
+                    &section.name,
+                    "stop_text_regex",
+                    section.stop_text_regex.as_ref(),
+                )?;
                 for pattern in &section.continue_past {
                     if pattern.trim().is_empty() {
                         return Err(format!(
@@ -258,6 +268,27 @@ fn validate_extract_sections(format: &str, extract: &[ExtractSection]) -> Result
         }
     }
 
+    Ok(())
+}
+
+fn validate_optional_region_regex(
+    extract_name: &str,
+    field_name: &str,
+    pattern: Option<&String>,
+) -> Result<(), String> {
+    let Some(pattern) = pattern else {
+        return Ok(());
+    };
+    if pattern.trim().is_empty() {
+        return Err(format!(
+            "extract '{extract_name}' of type 'region' has empty {field_name} pattern"
+        ));
+    }
+    regex::Regex::new(pattern).map_err(|error| {
+        format!(
+            "extract '{extract_name}' of type 'region' has invalid {field_name} regex '{pattern}': {error}"
+        )
+    })?;
     Ok(())
 }
 
@@ -499,6 +530,23 @@ mod tests {
 
         let error = validate_definition(&definition).expect_err("bad selector should fail");
         assert!(error.contains("invalid CSS selector"));
+    }
+
+    #[test]
+    fn validate_definition_rejects_invalid_region_text_filter_regex() {
+        let mut definition = base_html_definition();
+        definition.extract = vec![ExtractSection {
+            name: "schedule_region".to_owned(),
+            r#type: "region".to_owned(),
+            anchor_selector: Some("h1".to_owned()),
+            anchor_text_regex: Some("(".to_owned()),
+            stop_selector: Some("h2".to_owned()),
+            ..Default::default()
+        }];
+        definition.content_hash = None;
+
+        let error = validate_definition(&definition).expect_err("bad region regex should fail");
+        assert!(error.contains("invalid anchor_text_regex regex"));
     }
 
     #[test]

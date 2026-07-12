@@ -711,7 +711,9 @@ pub fn dsl_json_schema() -> String {
                     "sheet": { "type": "string" },
                     "range": { "type": "string" },
                     "anchor_selector": { "type": "string" },
+                    "anchor_text_regex": { "type": "string" },
                     "stop_selector": { "type": "string" },
+                    "stop_text_regex": { "type": "string" },
                     "continue_past": {
                         "type": "array",
                         "items": { "type": "string", "minLength": 1 },
@@ -924,7 +926,9 @@ assertions:
 
         assert!(extract_type_enum.contains(&Value::String("region".to_owned())));
         assert!(properties.contains_key("anchor_selector"));
+        assert!(properties.contains_key("anchor_text_regex"));
         assert!(properties.contains_key("stop_selector"));
+        assert!(properties.contains_key("stop_text_regex"));
         assert!(properties.contains_key("continue_past"));
     }
 

@@ -340,6 +340,181 @@ fn rgn_e02_continue_past_suppresses_running_header_stop_candidate() {
 }
 
 #[test]
+fn rgn_e03_text_filters_select_real_section_start_and_exclude_stop_page() {
+    let file = make_temp_html(
+        r#"
+        <html>
+          <body>
+            <div id="toc"></div>
+            <hr style="page-break-after:always" />
+            <div style="min-height:72pt;width:100%">
+              <div>Issuer Name</div>
+              <div>Consolidated Schedule of Investments</div>
+              <div>As of September 30, 2025</div>
+            </div>
+            <table>
+              <tr><th>Portfolio Company</th><th>Fair Value</th></tr>
+              <tr><td>Alpha</td><td>10</td></tr>
+            </table>
+            <hr style="page-break-after:always" />
+            <div style="min-height:42pt;width:100%"><div><br /></div></div>
+            <div><span>Derivative Instruments</span></div>
+            <table>
+              <tr><th>Outside</th></tr>
+              <tr><td>Excluded</td></tr>
+            </table>
+          </body>
+        </html>
+        "#,
+    );
+    let mut section = region_section(
+        "soi_region",
+        r#"div[id] + hr + div[style*="min-height"]"#,
+        r#"hr + div[style*="min-height"] + div"#,
+    );
+    section.anchor_text_regex = Some(r"(?i)schedules?\s+of\s+investments".to_owned());
+    section.stop_text_regex = Some(r"(?i)derivative\s+instruments".to_owned());
+
+    let region = region_value(file.path(), section).expect("region should be extracted");
+
+    assert_eq!(region["table_indices"], serde_json::json!([0]));
+    assert_eq!(region["page_span"], serde_json::json!([2, 2]));
+    assert_eq!(region["as_of"], serde_json::json!("2025-09-30"));
+    assert_region_has_only_bounds_strings(
+        &region,
+        &[
+            r#"div[id] + hr + div[style*="min-height"]"#,
+            r#"hr + div[style*="min-height"] + div"#,
+        ],
+    );
+}
+
+#[test]
+fn rgn_e04_same_date_running_headers_merge_without_continued_marker() {
+    let file = make_temp_html(
+        r#"
+        <html>
+          <body>
+            <section data-page-number="11">
+              <div class="page-header">Condensed Consolidated Schedule of Investments September 30, 2025</div>
+              <table>
+                <tr><th>Portfolio Company</th><th>Fair Value</th></tr>
+                <tr><td>Alpha</td><td>10</td></tr>
+              </table>
+            </section>
+            <section data-page-number="12">
+              <div class="page-header">Condensed Consolidated Schedule of Investments September 30, 2025</div>
+              <table>
+                <tr><th>Portfolio Company</th><th>Fair Value</th></tr>
+                <tr><td>Beta</td><td>20</td></tr>
+              </table>
+            </section>
+            <section data-page-number="13">
+              <div class="page-header">Condensed Consolidated Schedule of Investments December 31, 2024</div>
+              <table>
+                <tr><th>Portfolio Company</th><th>Fair Value</th></tr>
+                <tr><td>Prior</td><td>30</td></tr>
+              </table>
+            </section>
+          </body>
+        </html>
+        "#,
+    );
+    let mut section = region_section("soi_region", ".page-header", ".page-header");
+    section.anchor_text_regex = Some(r"(?i)schedules?\s+of\s+investments".to_owned());
+    section.stop_text_regex = Some(r"(?i)schedules?\s+of\s+investments".to_owned());
+
+    let region = region_value(file.path(), section).expect("region should be extracted");
+    let regions = region["regions"].as_array().expect("regions array");
+
+    assert_eq!(regions.len(), 2);
+    assert_eq!(regions[0]["as_of"], serde_json::json!("2025-09-30"));
+    assert_eq!(regions[0]["table_indices"], serde_json::json!([0, 1]));
+    assert_eq!(regions[0]["page_span"], serde_json::json!([11, 12]));
+    assert_eq!(regions[1]["as_of"], serde_json::json!("2024-12-31"));
+    assert_eq!(regions[1]["table_indices"], serde_json::json!([2]));
+}
+
+#[test]
+fn rgn_e05_dom_node_location_does_not_resolve_to_toc_duplicate_text() {
+    let file = make_temp_html(
+        r##"
+        <html>
+          <body>
+            <table id="toc">
+              <tr>
+                <td><a href="#consolidated_schedules_investments">Consolidated Schedules of Investments as of September 30, 2023</a></td>
+              </tr>
+            </table>
+            <hr style="page-break-after:always" />
+            <p>Preface page</p>
+            <hr style="page-break-after:always" />
+            <p id="consolidated_schedules_investments" style="text-align:center">
+              <span>Consolidated Schedu</span><span>les of Investments</span>
+              <span>September 30, 2023</span>
+            </p>
+            <table id="current">
+              <tr><th>Portfolio Company</th><th>Fair Value</th></tr>
+              <tr><td>Alpha</td><td>10</td></tr>
+            </table>
+            <p style="text-align:center"><span>Consolidated Schedules of Investments</span></p>
+            <p style="text-align:center"><span>December 31, 2022</span></p>
+            <table id="prior">
+              <tr><th>Portfolio Company</th><th>Fair Value</th></tr>
+              <tr><td>Prior</td><td>5</td></tr>
+            </table>
+          </body>
+        </html>
+        "##,
+    );
+    let mut section = region_section(
+        "soi_region",
+        "p[id*='schedules'][id*='investments'], p[style*='text-align:center'] > span",
+        "p[style*='text-align:center'] > span",
+    );
+    section.anchor_text_regex = Some(r"(?i)schedu\s*les?\s+of\s+investments".to_owned());
+    section.stop_text_regex = Some(r"(?i)schedu\s*les?\s+of\s+investments".to_owned());
+
+    let region = region_value(file.path(), section).expect("region should be extracted");
+    let regions = region["regions"].as_array().expect("regions array");
+
+    assert_eq!(regions[0]["as_of"], serde_json::json!("2023-09-30"));
+    assert_eq!(regions[0]["page_span"], serde_json::json!([3, 3]));
+    assert_eq!(regions[0]["table_indices"], serde_json::json!([1]));
+    assert_eq!(regions[1]["as_of"], serde_json::json!("2022-12-31"));
+    assert_eq!(regions[1]["table_indices"], serde_json::json!([2]));
+}
+
+#[test]
+fn rgn_e06_region_table_indices_are_raw_dom_table_order() {
+    let file = make_temp_html(
+        r#"
+        <html>
+          <body>
+            <h1 class="anchor">Schedule of Investments September 30, 2025</h1>
+            <table id="outer">
+              <tr>
+                <td>
+                  <table id="inner">
+                    <tr><th>Nested</th></tr>
+                    <tr><td>Still a raw DOM table</td></tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+            <h2>Notes</h2>
+          </body>
+        </html>
+        "#,
+    );
+
+    let region = region_value(file.path(), region_section("soi_region", ".anchor", "h2"))
+        .expect("region should be extracted");
+
+    assert_eq!(region["table_indices"], serde_json::json!([0, 1]));
+}
+
+#[test]
 fn rgn_u03_no_anchor_omits_region_without_error() {
     let file = make_temp_html(
         r#"

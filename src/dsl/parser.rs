@@ -34,7 +34,11 @@ pub struct ExtractSection {
     #[serde(default)]
     pub anchor_selector: Option<String>,
     #[serde(default)]
+    pub anchor_text_regex: Option<String>,
+    #[serde(default)]
     pub stop_selector: Option<String>,
+    #[serde(default)]
+    pub stop_text_regex: Option<String>,
     #[serde(default)]
     pub continue_past: Vec<String>,
 }
