@@ -28,6 +28,10 @@ instead of creating ad hoc temp HTML inside tests.
   ambiguity handling and future router discrimination.
 - `minimal_empty_shell.html` — minimal HTML shell with no headings or tables for
   negative/refusal-path assertions.
+- `styled_heading_ares.html` — styled SOI title with no semantic heading tags,
+  used by selector-native assertion tests.
+- `oxsq_pagebreaks.html` — compact page-break marker fixture for CSS
+  attribute-substring selector tests.
 
 ## Content-hash mutation set
 

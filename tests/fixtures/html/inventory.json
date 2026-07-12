@@ -110,11 +110,29 @@
       "expected_pages": 0
     },
     {
+      "id": "oxsq_pagebreaks",
+      "path": "tests/fixtures/html/oxsq_pagebreaks.html",
+      "categories": ["selector", "page-breaks"],
+      "family": null,
+      "expected_headings": 0,
+      "expected_tables": 0,
+      "expected_pages": 0
+    },
+    {
       "id": "span_edge_cases",
       "path": "tests/fixtures/html/span_edge_cases.html",
       "categories": ["table-spans", "shared"],
       "family": null,
       "expected_headings": 1,
+      "expected_tables": 1,
+      "expected_pages": 0
+    },
+    {
+      "id": "styled_heading_ares",
+      "path": "tests/fixtures/html/styled_heading_ares.html",
+      "categories": ["selector", "styled-heading"],
+      "family": null,
+      "expected_headings": 0,
       "expected_tables": 1,
       "expected_pages": 0
     }

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 pub struct HtmlDocument {
     pub path: PathBuf,
     pub raw: String,
+    pub dom: Html,
     pub normalized: String,
     pub headings: Vec<Heading>,
     pub sections: Vec<Section>,
@@ -68,6 +69,13 @@ impl HtmlDocument {
         let raw = String::from_utf8_lossy(&raw_bytes).into_owned();
         Ok(parse_html_document(path, raw))
     }
+
+    /// Select elements from the original HTML DOM in deterministic document order.
+    pub fn select_nodes<'a>(&'a self, selector: &str) -> Result<Vec<ElementRef<'a>>, String> {
+        let parsed = scraper::Selector::parse(selector)
+            .map_err(|error| format!("invalid CSS selector '{selector}': {error:?}"))?;
+        Ok(self.dom.select(&parsed).collect())
+    }
 }
 
 fn parse_html_document(path: &Path, raw: String) -> HtmlDocument {
@@ -83,6 +91,7 @@ fn parse_html_document(path: &Path, raw: String) -> HtmlDocument {
     HtmlDocument {
         path: path.to_path_buf(),
         raw,
+        dom: document,
         normalized,
         headings,
         sections,

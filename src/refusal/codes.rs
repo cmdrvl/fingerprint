@@ -21,6 +21,9 @@ pub enum RefusalCode {
     /// Child fingerprint references a parent not loaded in --fp.
     #[serde(rename = "E_ORPHAN_CHILD")]
     OrphanChild,
+    /// Malformed CSS selector in a loaded fingerprint definition.
+    #[serde(rename = "E_INVALID_SELECTOR")]
+    InvalidSelector,
 }
 
 /// Compile-mode refusal codes.
@@ -35,6 +38,9 @@ pub enum CompileRefusalCode {
     /// Required field missing from DSL.
     #[serde(rename = "E_MISSING_FIELD")]
     MissingField,
+    /// Malformed CSS selector in a fingerprint definition.
+    #[serde(rename = "E_INVALID_SELECTOR")]
+    InvalidSelector,
 }
 
 impl fmt::Display for RefusalCode {
@@ -45,6 +51,7 @@ impl fmt::Display for RefusalCode {
             Self::DuplicateFpId => "Duplicate fingerprint ID discovered",
             Self::UntrustedFp => "Fingerprint provider not allowlisted",
             Self::OrphanChild => "Child fingerprint references unloaded parent",
+            Self::InvalidSelector => "Invalid CSS selector in fingerprint definition",
         };
 
         f.write_str(message)
@@ -193,6 +200,10 @@ mod tests {
             serde_json::to_value(RefusalCode::OrphanChild).expect("serialize code"),
             json!("E_ORPHAN_CHILD")
         );
+        assert_eq!(
+            serde_json::to_value(RefusalCode::InvalidSelector).expect("serialize code"),
+            json!("E_INVALID_SELECTOR")
+        );
     }
 
     #[test]
@@ -208,6 +219,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(CompileRefusalCode::MissingField).expect("serialize code"),
             json!("E_MISSING_FIELD")
+        );
+        assert_eq!(
+            serde_json::to_value(CompileRefusalCode::InvalidSelector).expect("serialize code"),
+            json!("E_INVALID_SELECTOR")
         );
     }
 

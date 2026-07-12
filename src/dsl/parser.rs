@@ -136,6 +136,24 @@ fn assertion_base_name(assertion: &crate::dsl::assertions::Assertion) -> String 
             format!("full_width_row__{}", regex_excerpt(pattern, 20))
         }
         Assertion::PageSectionCount { .. } => "page_section_count".to_owned(),
+        Assertion::NodeExists { selector } => {
+            format!("node_exists__{}", literal_excerpt(selector, 20, true))
+        }
+        Assertion::NodeCount { selector, .. } => {
+            format!("node_count__{}", literal_excerpt(selector, 20, true))
+        }
+        Assertion::NodeTextRegex {
+            selector, pattern, ..
+        } => format!(
+            "node_text_regex__{}__{}",
+            literal_excerpt(selector, 16, true),
+            regex_excerpt(pattern, 16)
+        ),
+        Assertion::AttrRegex { selector, attr, .. } => format!(
+            "attr_regex__{}__{}",
+            literal_excerpt(selector, 16, true),
+            literal_excerpt(attr, 16, true)
+        ),
         Assertion::SheetExists(sheet) => {
             format!("sheet_exists__{}", literal_excerpt(sheet, 20, false))
         }
@@ -319,13 +337,19 @@ content_hash:
                 assert_eq!(cell, "A3");
                 assert_eq!(value, "Market Leasing Assumptions");
             }
-            other => panic!("expected Assertion::CellEq, got {other:?}"),
+            other => assert!(
+                matches!(other, Assertion::CellEq { .. }),
+                "expected Assertion::CellEq, got {other:?}"
+            ),
         }
         match &parsed.assertions[1].assertion {
             Assertion::HeadingRegex { pattern } => {
                 assert_eq!(pattern, "(?i)rent roll");
             }
-            other => panic!("expected Assertion::HeadingRegex, got {other:?}"),
+            other => assert!(
+                matches!(other, Assertion::HeadingRegex { .. }),
+                "expected Assertion::HeadingRegex, got {other:?}"
+            ),
         }
         match &parsed.assertions[2].assertion {
             Assertion::TextNear {
@@ -337,7 +361,10 @@ content_hash:
                 assert_eq!(pattern, "\\d+\\.\\d+%");
                 assert_eq!(*within_chars, 200);
             }
-            other => panic!("expected Assertion::TextNear, got {other:?}"),
+            other => assert!(
+                matches!(other, Assertion::TextNear { .. }),
+                "expected Assertion::TextNear, got {other:?}"
+            ),
         }
         match &parsed.assertions[3].assertion {
             Assertion::TableShape {
@@ -357,7 +384,10 @@ content_hash:
                         .collect::<Vec<_>>()
                 );
             }
-            other => panic!("expected Assertion::TableShape, got {other:?}"),
+            other => assert!(
+                matches!(other, Assertion::TableShape { .. }),
+                "expected Assertion::TableShape, got {other:?}"
+            ),
         }
 
         assert_eq!(parsed.extract.len(), 3);
@@ -496,7 +526,10 @@ assertions:
                 assert_eq!(pattern, "(?i)watch\\s?list|WATL");
                 assert_eq!(bind.as_deref(), Some("$watl_sheet"));
             }
-            other => panic!("expected Assertion::SheetNameRegex, got {other:?}"),
+            other => assert!(
+                matches!(other, Assertion::SheetNameRegex { .. }),
+                "expected Assertion::SheetNameRegex, got {other:?}"
+            ),
         }
 
         match &parsed.assertions[1].assertion {
@@ -511,7 +544,10 @@ assertions:
                 assert_eq!(row_range, "1:20");
                 assert!(pattern.contains("CREFC Investor Reporting"));
             }
-            other => panic!("expected Assertion::ColumnSearch, got {other:?}"),
+            other => assert!(
+                matches!(other, Assertion::ColumnSearch { .. }),
+                "expected Assertion::ColumnSearch, got {other:?}"
+            ),
         }
 
         match &parsed.assertions[2].assertion {
@@ -526,7 +562,10 @@ assertions:
                 assert_eq!(*min_match, 5);
                 assert_eq!(columns.len(), 7);
             }
-            other => panic!("expected Assertion::HeaderRowMatch, got {other:?}"),
+            other => assert!(
+                matches!(other, Assertion::HeaderRowMatch { .. }),
+                "expected Assertion::HeaderRowMatch, got {other:?}"
+            ),
         }
     }
 
@@ -581,7 +620,10 @@ assertions:
                 assert_eq!(*max_matches, None);
                 assert_eq!(tokens.len(), 2);
             }
-            other => panic!("expected Assertion::HeaderTokenSearch, got {other:?}"),
+            other => assert!(
+                matches!(other, Assertion::HeaderTokenSearch { .. }),
+                "expected Assertion::HeaderTokenSearch, got {other:?}"
+            ),
         }
 
         match &parsed.assertions[1].assertion {
@@ -594,7 +636,84 @@ assertions:
                 assert_eq!(*tolerance, 1);
                 assert_eq!(*sample_pages, 4);
             }
-            other => panic!("expected Assertion::DominantColumnCount, got {other:?}"),
+            other => assert!(
+                matches!(other, Assertion::DominantColumnCount { .. }),
+                "expected Assertion::DominantColumnCount, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn parse_supports_selector_assertions_and_defaults() {
+        let yaml = r#"
+fingerprint_id: selector-test.v1
+format: html
+assertions:
+  - node_exists:
+      selector: 'div[style*="text-align:center"]'
+  - node_count:
+      selector: "table"
+      min: 2
+      max: 200
+  - node_text_regex:
+      selector: 'div[style*="text-align:center"]'
+      pattern: "(?i)schedules? of investments"
+  - attr_regex:
+      selector: "p"
+      attr: "class"
+      pattern: "(?i)RRH"
+"#;
+        let mut file = NamedTempFile::new().expect("create temp file");
+        std::io::Write::write_all(&mut file, yaml.as_bytes()).expect("write yaml");
+        std::io::Write::flush(&mut file).expect("flush yaml");
+
+        let parsed = parse(file.path()).expect("parse selector assertions");
+        let names: Vec<&str> = parsed
+            .assertions
+            .iter()
+            .map(|assertion| assertion.name.as_deref().expect("generated name"))
+            .collect();
+
+        assert_eq!(names[0], "node_exists__div_style_text_align");
+        assert_eq!(names[1], "node_count__table");
+        assert_eq!(
+            names[2],
+            "node_text_regex__div_style_text_a__schedules_of_inv"
+        );
+        assert_eq!(names[3], "attr_regex__p__class");
+
+        match &parsed.assertions[2].assertion {
+            Assertion::NodeTextRegex {
+                selector,
+                pattern,
+                min_matches,
+            } => {
+                assert_eq!(selector, "div[style*=\"text-align:center\"]");
+                assert!(pattern.contains("investments"));
+                assert_eq!(*min_matches, 1);
+            }
+            other => assert!(
+                matches!(other, Assertion::NodeTextRegex { .. }),
+                "expected Assertion::NodeTextRegex, got {other:?}"
+            ),
+        }
+
+        match &parsed.assertions[3].assertion {
+            Assertion::AttrRegex {
+                selector,
+                attr,
+                pattern,
+                min_matches,
+            } => {
+                assert_eq!(selector, "p");
+                assert_eq!(attr, "class");
+                assert_eq!(pattern, "(?i)RRH");
+                assert_eq!(*min_matches, 1);
+            }
+            other => assert!(
+                matches!(other, Assertion::AttrRegex { .. }),
+                "expected Assertion::AttrRegex, got {other:?}"
+            ),
         }
     }
 

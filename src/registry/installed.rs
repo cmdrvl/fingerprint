@@ -5,12 +5,16 @@ use crate::dsl::extract::extract;
 use crate::dsl::parser::FingerprintDefinition;
 use crate::registry::core::{Fingerprint, FingerprintInfo, FingerprintResult};
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 
 /// A fingerprint backed by a parsed DSL definition, evaluated at runtime.
 struct DslFingerprint {
     def: FingerprintDefinition,
 }
+
+type InstalledFingerprint = (Box<dyn Fingerprint>, FingerprintInfo);
+type InstalledDiscoveryResult = Result<Vec<InstalledFingerprint>, InstalledDefinitionError>;
 
 impl Fingerprint for DslFingerprint {
     fn id(&self) -> &str {
@@ -71,27 +75,49 @@ fn definitions_dir() -> PathBuf {
     })
 }
 
+#[derive(Debug, Clone)]
+pub struct InstalledDefinitionError {
+    path: PathBuf,
+    fingerprint_id: Option<String>,
+    error: String,
+}
+
+impl fmt::Display for InstalledDefinitionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.fingerprint_id {
+            Some(fingerprint_id) => write!(
+                f,
+                "{} in fingerprint '{}': {}",
+                self.path.display(),
+                fingerprint_id,
+                self.error
+            ),
+            None => write!(f, "{}: {}", self.path.display(), self.error),
+        }
+    }
+}
+
 /// Discover installed fingerprint definitions from the canonical config root.
 ///
 /// Scans the definitions directory for `.fp.yaml` files, parses each one,
 /// and returns fingerprint implementations with metadata.
 ///
 /// Override the scan directory with the `FINGERPRINT_DEFINITIONS` environment variable.
-pub fn discover_installed() -> Vec<(Box<dyn Fingerprint>, FingerprintInfo)> {
+pub fn discover_installed() -> InstalledDiscoveryResult {
     discover_from_dir(&definitions_dir())
 }
 
 /// Scan a directory for `.fp.yaml` fingerprint definitions.
-fn discover_from_dir(dir: &std::path::Path) -> Vec<(Box<dyn Fingerprint>, FingerprintInfo)> {
+fn discover_from_dir(dir: &std::path::Path) -> InstalledDiscoveryResult {
     if !dir.is_dir() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let mut discovered = Vec::new();
 
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
-        Err(_) => return Vec::new(),
+        Err(_) => return Ok(Vec::new()),
     };
 
     for entry in entries.flatten() {
@@ -120,6 +146,22 @@ fn discover_from_dir(dir: &std::path::Path) -> Vec<(Box<dyn Fingerprint>, Finger
             }
         };
 
+        if let Err(error) = crate::compile::validate::validate_definition(&def) {
+            if error.contains("invalid CSS selector") {
+                return Err(InstalledDefinitionError {
+                    path,
+                    fingerprint_id: Some(def.fingerprint_id),
+                    error,
+                });
+            }
+            eprintln!(
+                "Warning: skipping invalid definition '{}': {}",
+                path.display(),
+                error
+            );
+            continue;
+        }
+
         let filename = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -141,7 +183,7 @@ fn discover_from_dir(dir: &std::path::Path) -> Vec<(Box<dyn Fingerprint>, Finger
         ));
     }
 
-    discovered
+    Ok(discovered)
 }
 
 #[cfg(test)]
@@ -154,7 +196,8 @@ mod tests {
     fn discover_returns_empty_when_directory_missing() {
         let result = discover_from_dir(std::path::Path::new(
             "/tmp/fingerprint-test-nonexistent-dir",
-        ));
+        ))
+        .expect("missing definitions dir should not fail");
         assert!(result.is_empty());
     }
 
@@ -173,7 +216,7 @@ assertions:
         // Also write a non-fp file that should be ignored
         fs::write(tmp.path().join("notes.yaml"), "not a fingerprint").expect("write decoy file");
 
-        let result = discover_from_dir(tmp.path());
+        let result = discover_from_dir(tmp.path()).expect("discover definitions");
 
         assert_eq!(result.len(), 1);
         let (fp, info) = &result[0];
@@ -181,6 +224,31 @@ assertions:
         assert_eq!(fp.format(), "csv");
         assert_eq!(info.id, "test-discover.v1");
         assert_eq!(info.source, "installed:test-discover.v1");
+    }
+
+    #[test]
+    fn discover_rejects_installed_definition_with_invalid_selector() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let yaml = r#"
+fingerprint_id: bad-selector.v1
+format: html
+assertions:
+  - node_exists:
+      selector: "div["
+"#;
+        fs::write(tmp.path().join("bad-selector.fp.yaml"), yaml).expect("write test definition");
+
+        let result = discover_from_dir(tmp.path());
+        assert!(result.is_err(), "invalid selector should fail load");
+        let error = result.err().expect("checked invalid selector error");
+        assert!(
+            error.to_string().contains("invalid CSS selector"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.to_string().contains("bad-selector.v1"),
+            "error should identify fingerprint id: {error}"
+        );
     }
 
     #[test]

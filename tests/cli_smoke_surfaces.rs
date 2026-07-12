@@ -176,6 +176,10 @@ assertions:
         "assertion_dominant_column_count",
         "assertion_full_width_row",
         "assertion_page_section_count",
+        "assertion_node_exists",
+        "assertion_node_count",
+        "assertion_node_text_regex",
+        "assertion_attr_regex",
     ] {
         assert!(
             compile_schema_json["$defs"].get(key).is_some(),

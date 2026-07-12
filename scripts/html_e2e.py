@@ -662,7 +662,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="mode", required=True)
 
-    for mode in ("smoke", "matrix", "diagnose"):
+    for mode in ("smoke", "matrix", "diagnose", "selector"):
         subparser = subparsers.add_parser(mode)
         subparser.add_argument("--artifact-root", default=str(DEFAULT_ARTIFACT_ROOT))
         subparser.add_argument("--label", default=mode)

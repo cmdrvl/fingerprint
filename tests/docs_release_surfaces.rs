@@ -81,6 +81,10 @@ fn compile_schema_surface_advertises_html_assertions() {
         "assertion_dominant_column_count",
         "assertion_full_width_row",
         "assertion_page_section_count",
+        "assertion_node_exists",
+        "assertion_node_count",
+        "assertion_node_text_regex",
+        "assertion_attr_regex",
     ] {
         assert!(
             defs.contains_key(key),
@@ -126,8 +130,9 @@ fn documented_bdc_html_command_smoke_selects_expected_child_route() {
 fn docs_publish_html_workflow_verification_and_compatibility() {
     let readme = fs::read_to_string(repo_path("README.md")).expect("read README.md");
     for required in [
-        "30 assertion types",
+        "Deterministic assertions across every document structure",
         "header_token_search",
+        "node_exists",
         "child_routing",
         "bdc-soi.v1",
         "fingerprint compile --schema",

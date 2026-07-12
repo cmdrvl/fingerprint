@@ -71,6 +71,10 @@ pub fn dsl_json_schema() -> String {
                     { "$ref": "#/$defs/assertion_dominant_column_count" },
                     { "$ref": "#/$defs/assertion_full_width_row" },
                     { "$ref": "#/$defs/assertion_page_section_count" },
+                    { "$ref": "#/$defs/assertion_node_exists" },
+                    { "$ref": "#/$defs/assertion_node_count" },
+                    { "$ref": "#/$defs/assertion_node_text_regex" },
+                    { "$ref": "#/$defs/assertion_attr_regex" },
                     { "$ref": "#/$defs/assertion_page_count" },
                     { "$ref": "#/$defs/assertion_metadata_regex" },
                 ],
@@ -577,6 +581,81 @@ pub fn dsl_json_schema() -> String {
                     },
                 },
             },
+            "assertion_node_exists": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["node_exists"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "node_exists": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["selector"],
+                        "properties": {
+                            "selector": { "type": "string", "minLength": 1 },
+                        },
+                    },
+                },
+            },
+            "assertion_node_count": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["node_count"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "node_count": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["selector"],
+                        "properties": {
+                            "selector": { "type": "string", "minLength": 1 },
+                            "min": { "type": "integer", "minimum": 0 },
+                            "max": { "type": "integer", "minimum": 0 },
+                        },
+                        "anyOf": [
+                            { "required": ["min"] },
+                            { "required": ["max"] },
+                        ],
+                    },
+                },
+            },
+            "assertion_node_text_regex": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["node_text_regex"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "node_text_regex": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["selector", "pattern"],
+                        "properties": {
+                            "selector": { "type": "string", "minLength": 1 },
+                            "pattern": { "type": "string", "minLength": 1 },
+                            "min_matches": { "type": "integer", "minimum": 1, "default": 1 },
+                        },
+                    },
+                },
+            },
+            "assertion_attr_regex": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["attr_regex"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "attr_regex": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["selector", "attr", "pattern"],
+                        "properties": {
+                            "selector": { "type": "string", "minLength": 1 },
+                            "attr": { "type": "string", "minLength": 1 },
+                            "pattern": { "type": "string", "minLength": 1 },
+                            "min_matches": { "type": "integer", "minimum": 1, "default": 1 },
+                        },
+                    },
+                },
+            },
             "assertion_page_count": {
                 "type": "object",
                 "additionalProperties": false,
@@ -721,6 +800,10 @@ mod tests {
             "assertion_dominant_column_count",
             "assertion_full_width_row",
             "assertion_page_section_count",
+            "assertion_node_exists",
+            "assertion_node_count",
+            "assertion_node_text_regex",
+            "assertion_attr_regex",
         ] {
             assert!(defs.contains_key(key), "missing definition: {key}");
         }
@@ -782,6 +865,18 @@ assertions:
       min_cells: 6
   - page_section_count:
       min: 2
+  - node_exists:
+      selector: "h1"
+  - node_count:
+      selector: "table"
+      min: 1
+  - node_text_regex:
+      selector: "h1"
+      pattern: "(?i)schedule"
+  - attr_regex:
+      selector: "section"
+      attr: "data-page-number"
+      pattern: "^1$"
 "#;
 
         let supported_assertions = named_assertion_keys(&parsed);

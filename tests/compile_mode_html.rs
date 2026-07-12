@@ -68,6 +68,18 @@ assertions:
   - page_section_count:
       min: 3
       max: 3
+  - node_exists:
+      selector: "h1"
+  - node_count:
+      selector: "table"
+      min: 2
+  - node_text_regex:
+      selector: "h1"
+      pattern: "(?i)schedule of investments"
+  - attr_regex:
+      selector: "section"
+      attr: "data-page-number"
+      pattern: "^1$"
 extract:
   - name: schedule_table
     type: table
@@ -199,9 +211,16 @@ fn cargo_build_harness(manifest_path: &Path, target_dir: &Path) {
     assert_success(&output, "cargo build parity harness");
 }
 
-fn run_parity_harness(binary_path: &Path, doc_path: &Path) -> Value {
-    let output = Command::new(binary_path)
+fn run_parity_harness(manifest_path: &Path, target_dir: &Path, doc_path: &Path) -> Value {
+    let output = Command::new("cargo")
+        .arg("run")
+        .arg("--offline")
+        .arg("--quiet")
+        .arg("--manifest-path")
+        .arg(manifest_path)
+        .arg("--")
         .arg(doc_path)
+        .env("CARGO_TARGET_DIR", target_dir)
         .output()
         .expect("run parity harness");
     assert_success(&output, "execute parity harness");
@@ -227,6 +246,10 @@ fn compile_mode_html_stdout_is_deterministic_for_same_rule() {
     assert!(generated.contains("DominantColumnCount"));
     assert!(generated.contains("FullWidthRow"));
     assert!(generated.contains("PageSectionCount"));
+    assert!(generated.contains("NodeExists"));
+    assert!(generated.contains("NodeCount"));
+    assert!(generated.contains("NodeTextRegex"));
+    assert!(generated.contains("AttrRegex"));
     assert!(generated.contains("fn format(&self) -> &str {\n        \"html\""));
 }
 
@@ -263,14 +286,15 @@ fn compile_mode_html_crate_builds_and_matches_dsl_runtime() {
     let matching_doc = fixture("tests/fixtures/html/bdc_soi_ares_like.html");
     let non_matching_doc = fixture("tests/fixtures/html/bdc_soi_pennant_like.html");
 
-    let compiled_match = run_parity_harness(&binary_path, &matching_doc);
+    let manifest_path = harness_dir.join("Cargo.toml");
+    let compiled_match = run_parity_harness(&manifest_path, &target_dir, &matching_doc);
     let dsl_match = evaluate_dsl(yaml.path(), &matching_doc);
     assert_eq!(
         compiled_match, dsl_match,
         "compiled html fingerprint must match DSL runtime on matching fixture"
     );
 
-    let compiled_non_match = run_parity_harness(&binary_path, &non_matching_doc);
+    let compiled_non_match = run_parity_harness(&manifest_path, &target_dir, &non_matching_doc);
     let dsl_non_match = evaluate_dsl(yaml.path(), &non_matching_doc);
     assert_eq!(
         compiled_non_match, dsl_non_match,
@@ -361,5 +385,39 @@ assertions:
             .as_str()
             .expect("invalid yaml detail error")
             .contains("requires at least one of 'min' or 'max'")
+    );
+}
+
+#[test]
+fn compile_mode_emits_invalid_selector_refusal_code() {
+    let invalid_selector = write_yaml(
+        r#"
+fingerprint_id: invalid-selector.v1
+format: html
+assertions:
+  - node_exists:
+      selector: "div["
+"#
+        .trim(),
+    );
+
+    let output = run_fingerprint(&[
+        "compile",
+        invalid_selector
+            .path()
+            .to_str()
+            .expect("invalid selector path"),
+        "--check",
+    ]);
+
+    assert_failure(&output, "compile invalid selector");
+    let refusal: Value =
+        serde_json::from_slice(&output.stdout).expect("parse invalid selector refusal");
+    assert_eq!(refusal["refusal"]["code"], "E_INVALID_SELECTOR");
+    assert!(
+        refusal["refusal"]["detail"]["error"]
+            .as_str()
+            .expect("invalid selector detail")
+            .contains("invalid CSS selector")
     );
 }

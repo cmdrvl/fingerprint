@@ -480,6 +480,7 @@ fn compile_parse_refusal(error: String) -> refusal::codes::CompileRefusalEnvelop
         CompileRefusalCode::UnknownAssertion => "Unsupported assertion in fingerprint definition",
         CompileRefusalCode::InvalidYaml => "Failed to parse fingerprint definition",
         CompileRefusalCode::MissingField => unreachable!("handled above"),
+        CompileRefusalCode::InvalidSelector => unreachable!("selectors are validation errors"),
     };
     let next_command = match code {
         CompileRefusalCode::UnknownAssertion => {
@@ -487,6 +488,7 @@ fn compile_parse_refusal(error: String) -> refusal::codes::CompileRefusalEnvelop
         }
         CompileRefusalCode::InvalidYaml => Some("Check YAML syntax and schema".to_owned()),
         CompileRefusalCode::MissingField => unreachable!("handled above"),
+        CompileRefusalCode::InvalidSelector => unreachable!("selectors are validation errors"),
     };
 
     build_compile_envelope(
@@ -505,16 +507,33 @@ fn compile_parse_refusal(error: String) -> refusal::codes::CompileRefusalEnvelop
 fn compile_validation_refusal(error: String) -> refusal::codes::CompileRefusalEnvelope {
     use refusal::codes::{BadInputDetail, CompileRefusalCode, build_compile_envelope};
 
+    let is_invalid_selector = error.contains("invalid CSS selector");
+    let code = if is_invalid_selector {
+        CompileRefusalCode::InvalidSelector
+    } else {
+        CompileRefusalCode::InvalidYaml
+    };
+    let message = if is_invalid_selector {
+        "Fingerprint definition contains an invalid CSS selector"
+    } else {
+        "Fingerprint definition failed validation"
+    };
+    let next_command = if is_invalid_selector {
+        "Fix the selector and rerun fingerprint compile"
+    } else {
+        "Fix the fingerprint definition and rerun fingerprint compile"
+    };
+
     build_compile_envelope(
-        CompileRefusalCode::InvalidYaml,
-        "Fingerprint definition failed validation",
+        code,
+        message,
         BadInputDetail {
             line: 1,
             error: Some(error),
             missing_field: None,
             version: None,
         },
-        Some("Fix the fingerprint definition and rerun fingerprint compile".to_owned()),
+        Some(next_command.to_owned()),
     )
 }
 
@@ -973,7 +992,19 @@ fn build_registry() -> Result<registry::FingerprintRegistry, refusal::codes::Ref
     }
 
     // Discover and register installed fingerprint definitions
-    for (installed, info) in registry::installed::discover_installed() {
+    for (installed, info) in registry::installed::discover_installed().map_err(|error| {
+        build_envelope(
+            RefusalCode::InvalidSelector,
+            "Installed fingerprint definition contains an invalid CSS selector",
+            RefusalDetail::BadInput(refusal::codes::BadInputDetail {
+                line: 0,
+                error: Some(error.to_string()),
+                missing_field: None,
+                version: None,
+            }),
+            Some("Fix the selector in the installed .fp.yaml definition".to_owned()),
+        )
+    })? {
         registry.register_with_info(installed, info);
     }
 

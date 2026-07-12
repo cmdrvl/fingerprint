@@ -169,6 +169,7 @@ For focused work, use the narrow tests first, then the full gate:
 ```bash
 cargo test --test peek
 cargo test doctor
+cargo test --test selector_assertions
 ```
 
 ## Beads And Agent Mail
@@ -216,6 +217,7 @@ Before ending a session with repo changes:
 ## Minimum Coverage Areas
 
 - Assertion engine: each DSL assertion type (sheet_exists, cell_eq, cell_regex, range_non_null, sheet_min_rows, filename_regex, sheet_name_regex, heading_exists, heading_regex, text_contains, text_regex, text_near, section_non_empty, section_min_lines, table_exists, table_columns, table_shape, table_min_rows, page_count, metadata_regex)
+- HTML selector assertions: node_exists, node_count, node_text_regex, attr_regex
 - Match/no-match/partial outcome routing and exit codes
 - Multiple `--fp` evaluation order (first match wins)
 - Content hash determinism (same content → same hash)

@@ -192,7 +192,7 @@ For cases the DSL can't express, write Rust directly against the `Fingerprint` t
 
 ---
 
-## 30 assertion types across every document structure
+## Deterministic assertions across every document structure
 
 Fingerprint doesn't just check filenames and magic bytes. It understands the internal structure of spreadsheets, HTML, PDFs, markdown, and plain text.
 
@@ -239,6 +239,15 @@ Fingerprint doesn't just check filenames and magic bytes. It understands the int
 | `dominant_column_count` | The dominant HTML table width across early pages matches the expected layout |
 | `full_width_row` | HTML tables contain full-span classification rows such as industry or asset-class separators |
 | `page_section_count` | `<section data-page-number>` or equivalent page partitions stay within expected bounds |
+
+### HTML selector assertions
+
+| Assertion | What it checks |
+|-----------|---------------|
+| `node_exists` | CSS selector matches at least one DOM node |
+| `node_count` | CSS selector match count stays within `min`/`max` bounds |
+| `node_text_regex` | Text of selected DOM nodes matches a regex at least `min_matches` times |
+| `attr_regex` | Attribute value on selected DOM nodes matches a regex at least `min_matches` times |
 
 ### Universal
 
@@ -519,6 +528,7 @@ fingerprint doctor --robot-triage
 | `E_INVALID_YAML` | YAML parse error (compile mode) | Fix the `.fp.yaml` file |
 | `E_UNKNOWN_ASSERTION` | Unrecognized assertion type | Check supported types above |
 | `E_MISSING_FIELD` | Required field missing from DSL | Add missing field |
+| `E_INVALID_SELECTOR` | Malformed CSS selector in a fingerprint definition | Fix the selector |
 
 Every refusal includes a concrete `next_command` when mechanical recovery is possible.
 
@@ -726,6 +736,7 @@ cargo test \
   --test chained_fingerprint_scenarios \
   --test chained_fingerprints \
   --test content_assertion_edge_cases \
+  --test selector_assertions \
   --test infer_mode \
   --test infer_schema_mode \
   --test infer_subcommand \

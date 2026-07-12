@@ -462,6 +462,43 @@ fn codegen_assertion(assertion: &crate::dsl::assertions::Assertion) -> String {
                 opt_u64(*max)
             )
         }
+        Assertion::NodeExists { selector } => {
+            format!("NodeExists {{ selector: {} }}", s(selector))
+        }
+        Assertion::NodeCount { selector, min, max } => {
+            format!(
+                "NodeCount {{ selector: {}, min: {}, max: {} }}",
+                s(selector),
+                opt_u(*min),
+                opt_u(*max)
+            )
+        }
+        Assertion::NodeTextRegex {
+            selector,
+            pattern,
+            min_matches,
+        } => {
+            format!(
+                "NodeTextRegex {{ selector: {}, pattern: {}, min_matches: {} }}",
+                s(selector),
+                s(pattern),
+                min_matches
+            )
+        }
+        Assertion::AttrRegex {
+            selector,
+            attr,
+            pattern,
+            min_matches,
+        } => {
+            format!(
+                "AttrRegex {{ selector: {}, attr: {}, pattern: {}, min_matches: {} }}",
+                s(selector),
+                s(attr),
+                s(pattern),
+                min_matches
+            )
+        }
         Assertion::PageCount { min, max } => {
             format!(
                 "PageCount {{ min: {}, max: {} }}",

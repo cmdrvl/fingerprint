@@ -95,6 +95,41 @@ fn validate_assertion(format: &str, assertion: &NamedAssertion) -> Result<(), St
             require_html_format("page_section_count", format)?;
             validate_bounds("page_section_count", *min, *max)?;
         }
+        Assertion::NodeExists { selector } => {
+            require_selector_html_format("node_exists", format)?;
+            validate_selector("node_exists.selector", selector)?;
+        }
+        Assertion::NodeCount { selector, min, max } => {
+            require_selector_html_format("node_count", format)?;
+            validate_selector("node_count.selector", selector)?;
+            validate_usize_bounds("node_count", *min, *max)?;
+        }
+        Assertion::NodeTextRegex {
+            selector,
+            min_matches,
+            ..
+        } => {
+            require_selector_html_format("node_text_regex", format)?;
+            validate_selector("node_text_regex.selector", selector)?;
+            if *min_matches == 0 {
+                return Err("node_text_regex.min_matches must be >= 1".to_owned());
+            }
+        }
+        Assertion::AttrRegex {
+            selector,
+            attr,
+            min_matches,
+            ..
+        } => {
+            require_selector_html_format("attr_regex", format)?;
+            validate_selector("attr_regex.selector", selector)?;
+            if attr.trim().is_empty() {
+                return Err("attr_regex.attr must not be empty".to_owned());
+            }
+            if *min_matches == 0 {
+                return Err("attr_regex.min_matches must be >= 1".to_owned());
+            }
+        }
         Assertion::PageCount { min, max } => {
             validate_bounds("page_count", *min, *max)?;
         }
@@ -114,7 +149,40 @@ fn require_html_format(assertion_name: &str, format: &str) -> Result<(), String>
     }
 }
 
+fn require_selector_html_format(assertion_name: &str, format: &str) -> Result<(), String> {
+    if format == "html" {
+        Ok(())
+    } else {
+        Err(format!(
+            "selector assertion '{assertion_name}' is html-only and requires format 'html', found '{format}'"
+        ))
+    }
+}
+
+fn validate_selector(field_name: &str, selector: &str) -> Result<(), String> {
+    if selector.trim().is_empty() {
+        return Err(format!("{field_name} must not be empty"));
+    }
+    scraper::Selector::parse(selector)
+        .map_err(|error| format!("invalid CSS selector in {field_name} '{selector}': {error:?}"))?;
+    Ok(())
+}
+
 fn validate_bounds(name: &str, min: Option<u64>, max: Option<u64>) -> Result<(), String> {
+    if min.is_none() && max.is_none() {
+        return Err(format!("{name} requires at least one of 'min' or 'max'"));
+    }
+
+    if let (Some(min), Some(max)) = (min, max)
+        && min > max
+    {
+        return Err(format!("{name}.min ({min}) must be <= {name}.max ({max})"));
+    }
+
+    Ok(())
+}
+
+fn validate_usize_bounds(name: &str, min: Option<usize>, max: Option<usize>) -> Result<(), String> {
     if min.is_none() && max.is_none() {
         return Err(format!("{name} requires at least one of 'min' or 'max'"));
     }
@@ -337,5 +405,90 @@ mod tests {
 
         let error = validate_definition(&definition).expect_err("missing bounds should fail");
         assert!(error.contains("requires at least one of 'min' or 'max'"));
+    }
+
+    #[test]
+    fn validate_definition_accepts_selector_assertions() {
+        let mut definition = base_html_definition();
+        definition.assertions = vec![
+            NamedAssertion {
+                name: Some("node_exists".to_owned()),
+                assertion: Assertion::NodeExists {
+                    selector: "div[style*=\"text-align:center\"]".to_owned(),
+                },
+            },
+            NamedAssertion {
+                name: Some("node_count".to_owned()),
+                assertion: Assertion::NodeCount {
+                    selector: "table".to_owned(),
+                    min: Some(1),
+                    max: Some(200),
+                },
+            },
+            NamedAssertion {
+                name: Some("node_text_regex".to_owned()),
+                assertion: Assertion::NodeTextRegex {
+                    selector: "div".to_owned(),
+                    pattern: "(?i)schedule of investments".to_owned(),
+                    min_matches: 1,
+                },
+            },
+            NamedAssertion {
+                name: Some("attr_regex".to_owned()),
+                assertion: Assertion::AttrRegex {
+                    selector: "p".to_owned(),
+                    attr: "class".to_owned(),
+                    pattern: "(?i)RRH".to_owned(),
+                    min_matches: 1,
+                },
+            },
+        ];
+
+        validate_definition(&definition).expect("selector definition should validate");
+    }
+
+    #[test]
+    fn validate_definition_rejects_malformed_selector() {
+        let mut definition = base_html_definition();
+        definition.assertions = vec![NamedAssertion {
+            name: Some("bad_selector".to_owned()),
+            assertion: Assertion::NodeExists {
+                selector: "div[".to_owned(),
+            },
+        }];
+
+        let error = validate_definition(&definition).expect_err("bad selector should fail");
+        assert!(error.contains("invalid CSS selector"));
+    }
+
+    #[test]
+    fn validate_definition_rejects_selector_assertions_on_non_html_format() {
+        let mut definition = base_html_definition();
+        definition.format = "xlsx".to_owned();
+        definition.assertions = vec![NamedAssertion {
+            name: Some("selector_on_xlsx".to_owned()),
+            assertion: Assertion::NodeExists {
+                selector: "h1".to_owned(),
+            },
+        }];
+
+        let error = validate_definition(&definition).expect_err("selector on xlsx should fail");
+        assert!(error.contains("html-only"));
+    }
+
+    #[test]
+    fn validate_definition_rejects_invalid_selector_assertion_parameters() {
+        let mut definition = base_html_definition();
+        definition.assertions = vec![NamedAssertion {
+            name: Some("invalid_node_count".to_owned()),
+            assertion: Assertion::NodeCount {
+                selector: "table".to_owned(),
+                min: Some(5),
+                max: Some(2),
+            },
+        }];
+
+        let error = validate_definition(&definition).expect_err("invalid node_count should fail");
+        assert!(error.contains("node_count.min (5) must be <= node_count.max (2)"));
     }
 }

@@ -153,6 +153,27 @@ pub enum Assertion {
         min: Option<u64>,
         max: Option<u64>,
     },
+    NodeExists {
+        selector: String,
+    },
+    NodeCount {
+        selector: String,
+        min: Option<usize>,
+        max: Option<usize>,
+    },
+    NodeTextRegex {
+        selector: String,
+        pattern: String,
+        #[serde(default = "default_min_matches")]
+        min_matches: usize,
+    },
+    AttrRegex {
+        selector: String,
+        attr: String,
+        pattern: String,
+        #[serde(default = "default_min_matches")]
+        min_matches: usize,
+    },
     PageCount {
         min: Option<u64>,
         max: Option<u64>,
@@ -183,6 +204,10 @@ pub struct NamedAssertion {
 
 fn default_sample_pages() -> u32 {
     4
+}
+
+fn default_min_matches() -> usize {
+    1
 }
 
 /// Evaluate a named assertion and preserve its DSL-level name in output.
@@ -433,6 +458,21 @@ fn diagnostic_context(
         Assertion::PageSectionCount { min, max } => {
             page_section_count_diagnostic_context(doc, *min, *max)
         }
+        Assertion::NodeExists { selector } => selector_diagnostic_context(doc, selector),
+        Assertion::NodeCount { selector, min, max } => {
+            selector_count_diagnostic_context(doc, selector, *min, *max)
+        }
+        Assertion::NodeTextRegex {
+            selector,
+            pattern,
+            min_matches,
+        } => selector_text_regex_diagnostic_context(doc, selector, pattern, *min_matches),
+        Assertion::AttrRegex {
+            selector,
+            attr,
+            pattern,
+            min_matches,
+        } => selector_attr_regex_diagnostic_context(doc, selector, attr, pattern, *min_matches),
         Assertion::ColumnSearch {
             sheet,
             column,
@@ -770,6 +810,118 @@ fn page_section_count_diagnostic_context(
     }))
 }
 
+fn selector_diagnostic_context(doc: &Document, selector: &str) -> Option<Value> {
+    let html = get_html_document(doc).ok()?;
+    let nodes = html.select_nodes(selector).ok()?;
+    Some(json!({
+        "selector": selector,
+        "matched_node_count": nodes.len(),
+        "text_excerpts": selector_text_excerpts(&nodes, 5),
+    }))
+}
+
+fn selector_count_diagnostic_context(
+    doc: &Document,
+    selector: &str,
+    min: Option<usize>,
+    max: Option<usize>,
+) -> Option<Value> {
+    let html = get_html_document(doc).ok()?;
+    let nodes = html.select_nodes(selector).ok()?;
+    Some(json!({
+        "selector": selector,
+        "matched_node_count": nodes.len(),
+        "min": min,
+        "max": max,
+        "text_excerpts": selector_text_excerpts(&nodes, 5),
+    }))
+}
+
+fn selector_text_regex_diagnostic_context(
+    doc: &Document,
+    selector: &str,
+    pattern: &str,
+    min_matches: usize,
+) -> Option<Value> {
+    let html = get_html_document(doc).ok()?;
+    let regex = Regex::new(pattern).ok()?;
+    let nodes = html.select_nodes(selector).ok()?;
+    let matching_excerpts: Vec<String> = nodes
+        .iter()
+        .filter_map(|node| {
+            let text = selector_node_text(*node);
+            regex.is_match(&text).then(|| truncate_excerpt(&text, 160))
+        })
+        .take(5)
+        .collect();
+    Some(json!({
+        "selector": selector,
+        "pattern": pattern,
+        "min_matches": min_matches,
+        "matched_node_count": nodes.len(),
+        "matching_text_excerpts": matching_excerpts,
+        "text_excerpts": selector_text_excerpts(&nodes, 5),
+    }))
+}
+
+fn selector_attr_regex_diagnostic_context(
+    doc: &Document,
+    selector: &str,
+    attr: &str,
+    pattern: &str,
+    min_matches: usize,
+) -> Option<Value> {
+    let html = get_html_document(doc).ok()?;
+    let regex = Regex::new(pattern).ok()?;
+    let nodes = html.select_nodes(selector).ok()?;
+    let matching_attr_values: Vec<String> = nodes
+        .iter()
+        .filter_map(|node| node.value().attr(attr))
+        .filter(|value| regex.is_match(value))
+        .map(|value| truncate_excerpt(value, 160))
+        .take(5)
+        .collect();
+    Some(json!({
+        "selector": selector,
+        "attr": attr,
+        "pattern": pattern,
+        "min_matches": min_matches,
+        "matched_node_count": nodes.len(),
+        "matching_attr_values": matching_attr_values,
+        "text_excerpts": selector_text_excerpts(&nodes, 5),
+    }))
+}
+
+fn selector_text_excerpts(nodes: &[scraper::ElementRef<'_>], limit: usize) -> Vec<String> {
+    nodes
+        .iter()
+        .map(|node| selector_node_text(*node))
+        .filter(|text| !text.is_empty())
+        .map(|text| truncate_excerpt(&text, 160))
+        .take(limit)
+        .collect()
+}
+
+fn selector_node_text(node: scraper::ElementRef<'_>) -> String {
+    collapse_inline_whitespace(&node.text().collect::<Vec<_>>().join(" "))
+}
+
+fn collapse_inline_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_excerpt(text: &str, max_chars: usize) -> String {
+    let mut output = String::new();
+    for (index, character) in text.chars().enumerate() {
+        if index >= max_chars {
+            output.push('…');
+            break;
+        }
+        output.push(character);
+    }
+    output
+}
+
 fn content_source_text(doc: &Document) -> Option<&str> {
     match doc {
         Document::Html(html) => Some(html.normalized.as_str()),
@@ -931,6 +1083,10 @@ fn is_content_assertion(assertion: &Assertion) -> bool {
             | Assertion::DominantColumnCount { .. }
             | Assertion::FullWidthRow { .. }
             | Assertion::PageSectionCount { .. }
+            | Assertion::NodeExists { .. }
+            | Assertion::NodeCount { .. }
+            | Assertion::NodeTextRegex { .. }
+            | Assertion::AttrRegex { .. }
     )
 }
 
@@ -983,6 +1139,21 @@ fn evaluate_content_assertion(assertion: &Assertion, doc: &Document) -> Result<(
             evaluate_full_width_row(doc, pattern, *min_cells)
         }
         Assertion::PageSectionCount { min, max } => evaluate_page_section_count(doc, *min, *max),
+        Assertion::NodeExists { selector } => evaluate_node_exists(doc, selector),
+        Assertion::NodeCount { selector, min, max } => {
+            evaluate_node_count(doc, selector, *min, *max)
+        }
+        Assertion::NodeTextRegex {
+            selector,
+            pattern,
+            min_matches,
+        } => evaluate_node_text_regex(doc, selector, pattern, *min_matches),
+        Assertion::AttrRegex {
+            selector,
+            attr,
+            pattern,
+            min_matches,
+        } => evaluate_attr_regex(doc, selector, attr, pattern, *min_matches),
         _ => Err(format!(
             "assertion '{}' is not implemented in v0.1",
             assertion_type_name(assertion)
@@ -1020,6 +1191,10 @@ fn assertion_type_name(assertion: &Assertion) -> &'static str {
         Assertion::DominantColumnCount { .. } => "dominant_column_count",
         Assertion::FullWidthRow { .. } => "full_width_row",
         Assertion::PageSectionCount { .. } => "page_section_count",
+        Assertion::NodeExists { .. } => "node_exists",
+        Assertion::NodeCount { .. } => "node_count",
+        Assertion::NodeTextRegex { .. } => "node_text_regex",
+        Assertion::AttrRegex { .. } => "attr_regex",
         Assertion::PageCount { .. } => "page_count",
         Assertion::MetadataRegex { .. } => "metadata_regex",
     }
@@ -2073,6 +2248,97 @@ fn evaluate_page_section_count(
     Ok(())
 }
 
+fn evaluate_node_exists(doc: &Document, selector: &str) -> Result<(), String> {
+    let html = get_html_document(doc)?;
+    let count = html.select_nodes(selector)?.len();
+    if count > 0 {
+        Ok(())
+    } else {
+        Err(format!("selector '{selector}' matched no nodes"))
+    }
+}
+
+fn evaluate_node_count(
+    doc: &Document,
+    selector: &str,
+    min: Option<usize>,
+    max: Option<usize>,
+) -> Result<(), String> {
+    let html = get_html_document(doc)?;
+    let count = html.select_nodes(selector)?.len();
+
+    if min.is_none() && max.is_none() {
+        return Err("node_count requires at least one of 'min' or 'max'".to_owned());
+    }
+    if let Some(min) = min
+        && count < min
+    {
+        return Err(format!(
+            "selector '{selector}' matched {count} nodes, expected at least {min}"
+        ));
+    }
+    if let Some(max) = max
+        && count > max
+    {
+        return Err(format!(
+            "selector '{selector}' matched {count} nodes, expected at most {max}"
+        ));
+    }
+
+    Ok(())
+}
+
+fn evaluate_node_text_regex(
+    doc: &Document,
+    selector: &str,
+    pattern: &str,
+    min_matches: usize,
+) -> Result<(), String> {
+    let html = get_html_document(doc)?;
+    let regex =
+        Regex::new(pattern).map_err(|error| format!("invalid regex '{pattern}': {error}"))?;
+    let nodes = html.select_nodes(selector)?;
+    let match_count = nodes
+        .iter()
+        .map(|node| selector_node_text(*node))
+        .filter(|text| regex.is_match(text))
+        .count();
+
+    if match_count >= min_matches {
+        Ok(())
+    } else {
+        Err(format!(
+            "selector '{selector}' text matched pattern '{pattern}' {match_count} times, expected at least {min_matches}"
+        ))
+    }
+}
+
+fn evaluate_attr_regex(
+    doc: &Document,
+    selector: &str,
+    attr: &str,
+    pattern: &str,
+    min_matches: usize,
+) -> Result<(), String> {
+    let html = get_html_document(doc)?;
+    let regex =
+        Regex::new(pattern).map_err(|error| format!("invalid regex '{pattern}': {error}"))?;
+    let nodes = html.select_nodes(selector)?;
+    let match_count = nodes
+        .iter()
+        .filter_map(|node| node.value().attr(attr))
+        .filter(|value| regex.is_match(value))
+        .count();
+
+    if match_count >= min_matches {
+        Ok(())
+    } else {
+        Err(format!(
+            "selector '{selector}' attr '{attr}' matched pattern '{pattern}' {match_count} times, expected at least {min_matches}"
+        ))
+    }
+}
+
 fn get_html_document(doc: &Document) -> Result<&HtmlDocument, String> {
     match doc {
         Document::Html(html) => Ok(html),
@@ -2165,7 +2431,7 @@ fn full_width_row_text(row: &[String]) -> Option<String> {
         .map(|cell| cell.trim())
         .filter(|cell| !cell.is_empty());
     let first = non_empty.next()?.to_owned();
-    if non_empty.all(|cell| cell == first) {
+    if non_empty.all(|cell| cell.eq(first.as_str())) {
         Some(first)
     } else {
         None
@@ -2431,9 +2697,7 @@ mod tests {
         document.trailer.set("Info", info_id);
 
         document.compress();
-        document
-            .save(path)
-            .unwrap_or_else(|error| panic!("save pdf fixture '{}': {error}", path.display()));
+        document.save(path).expect("save pdf fixture");
     }
 
     #[test]

@@ -433,6 +433,23 @@ Content assertions operate on structured text — typically the output of a docu
 | `page_count` | PDF has N pages (structural, no text needed) | `page_count: { min: 100, max: 500 }` |
 | `metadata_regex` | PDF metadata field matches regex | `metadata_regex: { key: "Creator", pattern: "(?i)cbre" }` |
 
+#### HTML DOM selector assertions
+
+Selector assertions are `format: html` only. They target the original parsed HTML
+DOM with deterministic CSS selectors in document order. They are added alongside
+the normalized heading/section/table model; they must not add new heuristics to
+the content normalizer.
+
+| Assertion | Purpose | Example |
+|-----------|---------|---------|
+| `node_exists` | CSS selector matches at least one DOM node | `node_exists: { selector: "div[style*='text-align:center']" }` |
+| `node_count` | CSS selector match count is within optional `min`/`max` bounds | `node_count: { selector: "table", min: 2, max: 200 }` |
+| `node_text_regex` | Text of selected DOM nodes matches regex at least `min_matches` times | `node_text_regex: { selector: "div.title", pattern: "(?i)schedule of investments", min_matches: 1 }` |
+| `attr_regex` | Attribute value on selected DOM nodes matches regex at least `min_matches` times | `attr_regex: { selector: "p", attr: "class", pattern: "(?i)RRH" }` |
+
+Malformed selector strings are definition errors, not no-matches. Compile/check
+and installed-definition load surface them as `E_INVALID_SELECTOR`.
+
 ### Diagnostic context (`--diagnose`)
 
 When `--diagnose` is set and an assertion fails, the assertion result includes a `context` field showing what the document actually contains. This turns "your regex didn't match" into "here's what you should have written."
@@ -444,6 +461,7 @@ When `--diagnose` is set and an assertion fails, the assertion result includes a
 | `text_near` | `anchor_found`: whether the anchor was found; `matches_outside_range`: matches that exist but were beyond `within_chars` |
 | `table_exists` / `table_columns` / `table_shape` | `tables_found`: tables under the heading (with columns and row counts); `heading_found`: whether the heading itself was found |
 | `section_non_empty` / `section_min_lines` | `section_lines`: actual line count; `heading_found`: whether the heading was found |
+| `node_exists` / `node_count` / `node_text_regex` / `attr_regex` | `selector`, `matched_node_count`, and bounded text/attribute excerpts |
 
 Example diagnostic output:
 ```json
@@ -592,6 +610,7 @@ The generated crate embeds:
 | `E_INVALID_YAML` | YAML parse error or schema violation | Fix the `.fp.yaml` file |
 | `E_UNKNOWN_ASSERTION` | Assertion type not recognized | Check supported assertion types |
 | `E_MISSING_FIELD` | Required field missing from DSL | Add the required field |
+| `E_INVALID_SELECTOR` | CSS selector is malformed | Fix the selector |
 
 ---
 
@@ -724,6 +743,7 @@ Per-file IO/parse failures are NOT refusals. They are recorded as `_skipped: tru
 | `E_DUPLICATE_FP_ID` | Same `fingerprint_id` discovered from multiple sources during registry load | Remove duplicate packs or pin to one source |
 | `E_UNTRUSTED_FP` | External fingerprint crate/plugin is not allowlisted | Add to allowlist or use built-in fingerprints |
 | `E_ORPHAN_CHILD` | Child fingerprint references a parent not loaded in `--fp` | Add the parent fingerprint to `--fp` |
+| `E_INVALID_SELECTOR` | Installed fingerprint definition contains a malformed CSS selector | Fix the selector in the installed `.fp.yaml` definition |
 
 Per-code `detail` schemas:
 
@@ -746,6 +766,9 @@ E_UNTRUSTED_FP:
 
 E_ORPHAN_CHILD:
   { "child_id": "cbre-appraisal.v1/rent-roll.v1", "parent_id": "cbre-appraisal.v1", "loaded": ["csv.v0", "xlsx.v0"] }
+
+E_INVALID_SELECTOR:
+  { "line": 0, "error": "path/to/rule.fp.yaml in fingerprint 'rule.v1': invalid CSS selector ..." }
 ```
 
 Refusal envelope (emitted to stdout):
