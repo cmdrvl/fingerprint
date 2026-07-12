@@ -70,18 +70,22 @@ fn region_value(path: &Path, section: ExtractSection) -> Option<Value> {
     extracted.remove("soi_region")
 }
 
-fn assert_region_has_no_strings(value: &Value) {
+fn assert_region_has_only_bounds_strings(value: &Value, allowed_selectors: &[&str]) {
     assert!(
-        !region_contains_disallowed_string(value),
+        !region_contains_disallowed_string(value, allowed_selectors),
         "region output must not contain document-text string values"
     );
 }
 
-fn region_contains_disallowed_string(value: &Value) -> bool {
+fn region_contains_disallowed_string(value: &Value, allowed_selectors: &[&str]) -> bool {
     match value {
-        Value::String(text) => !is_iso_date(text),
-        Value::Array(items) => items.iter().any(region_contains_disallowed_string),
-        Value::Object(map) => map.values().any(region_contains_disallowed_string),
+        Value::String(text) => !is_iso_date(text) && !allowed_selectors.contains(&text.as_str()),
+        Value::Array(items) => items
+            .iter()
+            .any(|item| region_contains_disallowed_string(item, allowed_selectors)),
+        Value::Object(map) => map
+            .values()
+            .any(|item| region_contains_disallowed_string(item, allowed_selectors)),
         Value::Null | Value::Bool(_) | Value::Number(_) => false,
     }
 }
@@ -295,7 +299,7 @@ fn rgn_e01_selector_region_covers_contiguous_tables_and_data_pages() {
         region["start_line"].as_u64().expect("start line")
             < region["end_line"].as_u64().expect("end line")
     );
-    assert_region_has_no_strings(&region);
+    assert_region_has_only_bounds_strings(&region, &[".anchor", ".major"]);
 }
 
 #[test]
@@ -332,7 +336,7 @@ fn rgn_e02_continue_past_suppresses_running_header_stop_candidate() {
 
     assert_eq!(region["table_indices"], serde_json::json!([0, 1]));
     assert_eq!(region["page_span"], serde_json::json!([5, 6]));
-    assert_region_has_no_strings(&region);
+    assert_region_has_only_bounds_strings(&region, &[".anchor", ".major"]);
 }
 
 #[test]
@@ -379,7 +383,7 @@ fn rgn_u04_nested_lower_rank_divider_does_not_truncate_region() {
     .expect("region should be extracted");
 
     assert_eq!(region["table_indices"], serde_json::json!([0, 1]));
-    assert_region_has_no_strings(&region);
+    assert_region_has_only_bounds_strings(&region, &["h1.anchor", "h1.major"]);
 }
 
 #[test]
@@ -408,7 +412,7 @@ fn rgn_u05_region_output_is_deterministic_with_duplicate_text() {
     let second_bytes = serde_json::to_vec(&second).expect("serialize second region");
 
     assert_eq!(first_bytes, second_bytes);
-    assert_region_has_no_strings(&first);
+    assert_region_has_only_bounds_strings(&first, &[".anchor", ".major"]);
 }
 
 #[test]
@@ -501,7 +505,7 @@ fn date_e03_multiple_anchor_regions_emit_document_order_regions_with_local_as_of
         serde_json::to_vec(&region).unwrap(),
         serde_json::to_vec(&second).unwrap()
     );
-    assert_region_has_no_strings(&region);
+    assert_region_has_only_bounds_strings(&region, &["h1.soi", "h2.notes"]);
 }
 
 #[test]
@@ -531,7 +535,7 @@ fn date_e04_single_anchor_keeps_single_object_shape_with_as_of() {
     assert!(region.get("regions").is_none());
     assert_eq!(region["as_of"], serde_json::json!("2025-09-30"));
     assert_eq!(region["table_indices"], serde_json::json!([0]));
-    assert_region_has_no_strings(&region);
+    assert_region_has_only_bounds_strings(&region, &["h1.soi", "h2.notes"]);
 }
 
 #[test]
@@ -602,7 +606,120 @@ extract:
         default_regions.get(1).expect("comparative region")["as_of"],
         "2024-12-31"
     );
-    assert_region_has_no_strings(&default_tz);
+    assert_region_has_only_bounds_strings(&default_tz, &["h1.soi", "h2.notes"]);
+}
+
+#[test]
+fn bnd_g01_multi_region_bounds_record_is_golden_stable() {
+    let region = region_value(
+        &fixture("tests/fixtures/html/ares_multi_soi.html"),
+        region_section("soi_region", "h1.soi", "h2.notes"),
+    )
+    .expect("fixture region should be extracted");
+
+    assert_eq!(
+        region,
+        serde_json::json!({
+            "regions": [
+                {
+                    "anchor_selector": "h1.soi",
+                    "stop_selector": "h2.notes",
+                    "start_line": 1,
+                    "end_line": 6,
+                    "table_indices": [0],
+                    "page_span": [5, 5],
+                    "byte_offsets": { "start": 57, "end": 370 },
+                    "as_of": "2025-09-30",
+                },
+                {
+                    "anchor_selector": "h1.soi",
+                    "stop_selector": "h2.notes",
+                    "start_line": 6,
+                    "end_line": 11,
+                    "table_indices": [1],
+                    "page_span": [68, 68],
+                    "byte_offsets": { "start": 370, "end": 681 },
+                    "as_of": "2024-12-31",
+                },
+            ],
+        })
+    );
+}
+
+#[test]
+fn bnd_g02_region_bounds_do_not_emit_document_text() {
+    let region = region_value(
+        &fixture("tests/fixtures/html/ares_multi_soi.html"),
+        region_section("soi_region", "h1.soi", "h2.notes"),
+    )
+    .expect("fixture region should be extracted");
+
+    assert_region_has_only_bounds_strings(&region, &["h1.soi", "h2.notes"]);
+}
+
+#[test]
+fn bnd_u03_present_byte_offsets_point_into_raw_source() {
+    let html_path = fixture("tests/fixtures/html/ares_multi_soi.html");
+    let document = HtmlDocument::open(&html_path).expect("open html fixture");
+    let region = region_value(
+        &html_path,
+        region_section("soi_region", "h1.soi", "h2.notes"),
+    )
+    .expect("fixture region should be extracted");
+    let regions = region["regions"].as_array().expect("regions array");
+    let first_region = regions.first().expect("first region");
+    let offsets = first_region["byte_offsets"]
+        .as_object()
+        .expect("byte_offsets object");
+    let start = offsets["start"].as_u64().expect("offset start") as usize;
+    let end = offsets["end"].as_u64().expect("offset end") as usize;
+    let raw_slice = document.raw.get(start..end).expect("offsets index raw");
+    let anchor_html = document
+        .select_nodes("h1.soi")
+        .expect("select anchor")
+        .first()
+        .expect("anchor node")
+        .html();
+    let contains_anchor = raw_slice.contains(anchor_html.as_str());
+
+    eprintln!("BND-U03 byte_offsets start={start} end={end}");
+    assert!(
+        contains_anchor,
+        "byte_offsets span should contain the anchor node"
+    );
+}
+
+#[test]
+fn bnd_u04_unlocatable_raw_nodes_keep_authoritative_line_bounds() {
+    let file = make_temp_html(
+        r#"
+        <HTML>
+          <BODY>
+            <SECTION data-page-number=5>
+              <H1 class=soi>Schedule of Investments September 30, 2025</H1>
+              <table><tr><th>Company</th></tr><tr><td>Alpha</td></tr></table>
+            </SECTION>
+            <SECTION data-page-number=6>
+              <H2 class=notes>Notes to Financial Statements</H2>
+            </SECTION>
+          </BODY>
+        </HTML>
+        "#,
+    );
+    let region = region_value(
+        file.path(),
+        region_section("soi_region", "h1.soi", "h2.notes"),
+    )
+    .expect("region should be extracted even when raw spans cannot be located");
+
+    assert_eq!(region["byte_offsets"], Value::Null);
+    assert_eq!(region["anchor_selector"], "h1.soi");
+    assert_eq!(region["stop_selector"], "h2.notes");
+    assert_eq!(region["table_indices"], serde_json::json!([0]));
+    assert!(
+        region["start_line"].as_u64().expect("start line")
+            < region["end_line"].as_u64().expect("end line")
+    );
 }
 
 #[test]

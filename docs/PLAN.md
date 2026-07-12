@@ -589,14 +589,14 @@ Content extract rules specify how to locate and delimit content regions for hash
 | `section` | `anchor_heading` | All content from heading to next heading at equal/lesser depth | `{ "start_line": 30, "end_line": 90, "heading": "Income Capitalization Approach" }` |
 | `text_match` | `anchor`, `pattern`, `within_chars` | The matched text and its location | `{ "line": 12, "char_offset": 45, "matched": "June 15, 2024" }` |
 | `range` | `sheet`, `range` | Spreadsheet cell range (xlsx/csv only) | `{ "range": "A3:D10", "row_count": 8 }` |
-| `region` | `anchor_selector`, `stop_selector`, `continue_past` | HTML selector-delimited bounds, contained table/page indices, and deterministic `as_of` tag | `{ "start_line": 30, "end_line": 180, "table_indices": [0, 1], "page_span": [5, 6], "as_of": "2025-09-30" }` |
+| `region` | `anchor_selector`, `stop_selector`, `continue_past` | HTML selector-delimited bounds, contained table/page indices, deterministic `as_of` tag, and best-effort raw byte offsets | `{ "anchor_selector": "h1.soi", "stop_selector": "h2.notes", "start_line": 30, "end_line": 180, "table_indices": [0, 1], "page_span": [5, 6], "byte_offsets": { "start": 1024, "end": 8192 }, "as_of": "2025-09-30" }` |
 
 **Invariants:**
 - Extract rules run only when all assertions pass (`matched: true`).
 - The `extracted` field in the output record reports the anchor location, not the content itself (zero-retention). Downstream tools use the anchor to perform their own extraction.
 - Content hashes are computed over the raw bytes of the matched content region (the actual text, not the anchor metadata).
 - If an extract rule cannot locate its target (e.g., table not found at the expected index), the rule is omitted from `extracted` with a warning, but the match still holds (extract failure is non-fatal).
-- `region` is HTML-only. Malformed `anchor_selector` or `stop_selector` values are definition errors; `continue_past` regexes suppress broad stop candidates such as repeated `(continued)` running headers. Region output must not include copied document text. One anchor emits one region object; multiple anchors emit `{ "regions": [...] }` in document order with per-region `as_of` dates or `null`.
+- `region` is HTML-only. Malformed `anchor_selector` or `stop_selector` values are definition errors; `continue_past` regexes suppress broad stop candidates such as repeated `(continued)` running headers. Region output must not include copied document text. One anchor emits one region object; multiple anchors emit `{ "regions": [...] }` in document order with per-region `as_of` dates or `null`. `byte_offsets` indexes the original HTML source when scraper-serialized nodes can be located by a deterministic monotonic cursor; otherwise it is `null` and the line/table-index bounds remain authoritative.
 
 ### Compiling DSL to Rust
 

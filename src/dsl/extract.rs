@@ -229,6 +229,25 @@ struct LocatedElement {
     line: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct RawElementSpan {
+    start: usize,
+    end: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RegionAnchor<'a> {
+    node: scraper::ElementRef<'a>,
+    normalized: LocatedElement,
+    raw_span: Option<RawElementSpan>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RegionBoundary {
+    normalized: LocatedElement,
+    raw_span: Option<RawElementSpan>,
+}
+
 fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Value>, String> {
     let Document::Html(html) = doc else {
         return Ok(None);
@@ -253,13 +272,22 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut anchor_search_start = 0usize;
+    let mut raw_anchor_search_start = 0usize;
     let anchors = html
         .select_nodes(anchor_selector)?
         .into_iter()
         .filter_map(|node| {
             let located = locate_element(html, node, anchor_search_start)?;
             anchor_search_start = located.byte_end;
-            Some((node, located))
+            let raw_span = locate_raw_element(html, node, raw_anchor_search_start);
+            if let Some(span) = raw_span {
+                raw_anchor_search_start = span.end;
+            }
+            Some(RegionAnchor {
+                node,
+                normalized: located,
+                raw_span,
+            })
         })
         .collect::<Vec<_>>();
     if anchors.is_empty() {
@@ -268,31 +296,62 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
 
     let stop_nodes = html.select_nodes(stop_selector)?;
     let mut regions = Vec::new();
-    for (index, (anchor_node, anchor)) in anchors.iter().enumerate() {
-        let stop = first_region_stop(html, &stop_nodes, *anchor, &continue_past);
-        let next_anchor = anchors.get(index + 1).map(|(_, located)| *located);
+    for (index, anchor) in anchors.iter().enumerate() {
+        let stop = first_region_stop(
+            html,
+            &stop_nodes,
+            anchor.normalized,
+            anchor.raw_span.map(|span| span.end),
+            &continue_past,
+        );
+        let next_anchor = anchors.get(index + 1).map(|anchor| RegionBoundary {
+            normalized: anchor.normalized,
+            raw_span: anchor.raw_span,
+        });
         let boundary = earlier_boundary(stop, next_anchor);
         let end_line = boundary
-            .map(|boundary| boundary.line)
+            .map(|boundary| boundary.normalized.line)
             .unwrap_or_else(|| html.normalized.lines().count() + 1)
-            .max(anchor.line + 1);
-        let boundary_order = boundary.map(|boundary| boundary.order);
+            .max(anchor.normalized.line + 1);
+        let boundary_order = boundary.map(|boundary| boundary.normalized.order);
 
         let table_indices = html
             .tables
             .iter()
-            .filter(|table| table.start_line >= anchor.line && table.start_line < end_line)
+            .filter(|table| {
+                table.start_line >= anchor.normalized.line && table.start_line < end_line
+            })
             .map(|table| table.index)
             .collect::<Vec<_>>();
-        let page_span =
-            region_page_span(html, anchor.line, end_line, anchor.order, boundary_order)?;
-        let as_of = parse_as_of_date(&region_date_text(html, *anchor_node, anchor.line, end_line));
+        let page_span = region_page_span(
+            html,
+            anchor.normalized.line,
+            end_line,
+            anchor.normalized.order,
+            boundary_order,
+        )?;
+        let as_of = parse_as_of_date(&region_date_text(
+            html,
+            anchor.node,
+            anchor.normalized.line,
+            end_line,
+        ));
+        let byte_offsets =
+            region_byte_offsets(anchor.raw_span, boundary, html.raw.len()).map(|span| {
+                json!({
+                    "start": span.start,
+                    "end": span.end,
+                })
+            });
 
         regions.push(json!({
-            "start_line": anchor.line,
+            "anchor_selector": anchor_selector,
+            "stop_selector": stop_selector,
+            "start_line": anchor.normalized.line,
             "end_line": end_line,
             "table_indices": table_indices,
             "page_span": page_span,
+            "byte_offsets": byte_offsets,
             "as_of": as_of,
         }));
     }
@@ -308,8 +367,9 @@ fn first_region_stop(
     html: &HtmlDocument,
     stop_nodes: &[scraper::ElementRef<'_>],
     anchor: LocatedElement,
+    raw_search_start: Option<usize>,
     continue_past: &[Regex],
-) -> Option<LocatedElement> {
+) -> Option<RegionBoundary> {
     stop_nodes
         .iter()
         .copied()
@@ -325,16 +385,21 @@ fn first_region_stop(
             {
                 return None;
             }
-            locate_element(html, node, anchor.byte_end)
+            locate_element(html, node, anchor.byte_end).map(|located| RegionBoundary {
+                normalized: located,
+                raw_span: raw_search_start.and_then(|start| locate_raw_element(html, node, start)),
+            })
         })
 }
 
 fn earlier_boundary(
-    stop: Option<LocatedElement>,
-    next_anchor: Option<LocatedElement>,
-) -> Option<LocatedElement> {
+    stop: Option<RegionBoundary>,
+    next_anchor: Option<RegionBoundary>,
+) -> Option<RegionBoundary> {
     match (stop, next_anchor) {
-        (Some(stop), Some(next_anchor)) if next_anchor.order < stop.order => Some(next_anchor),
+        (Some(stop), Some(next_anchor)) if next_anchor.normalized.order < stop.normalized.order => {
+            Some(next_anchor)
+        }
         (Some(stop), _) => Some(stop),
         (None, Some(next_anchor)) => Some(next_anchor),
         (None, None) => None,
@@ -366,6 +431,37 @@ fn locate_element(
         byte_end,
         line,
     })
+}
+
+fn locate_raw_element(
+    html: &HtmlDocument,
+    element: scraper::ElementRef<'_>,
+    search_start: usize,
+) -> Option<RawElementSpan> {
+    let needle = element.html();
+    if needle.is_empty() {
+        return None;
+    }
+    let bounded_start = search_start.min(html.raw.len());
+    let relative_start = html.raw[bounded_start..].find(needle.as_str())?;
+    let start = bounded_start + relative_start;
+    Some(RawElementSpan {
+        start,
+        end: start + needle.len(),
+    })
+}
+
+fn region_byte_offsets(
+    anchor_span: Option<RawElementSpan>,
+    boundary: Option<RegionBoundary>,
+    raw_len: usize,
+) -> Option<RawElementSpan> {
+    let start = anchor_span?.start;
+    let end = match boundary {
+        Some(boundary) => boundary.raw_span?.start,
+        None => raw_len,
+    };
+    (start <= end).then_some(RawElementSpan { start, end })
 }
 
 fn selector_node_text(node: scraper::ElementRef<'_>) -> String {

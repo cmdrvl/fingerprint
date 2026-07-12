@@ -249,11 +249,14 @@ Fingerprint doesn't just check filenames and magic bytes. It understands the int
 | `node_text_regex` | Text of selected DOM nodes matches a regex at least `min_matches` times |
 | `attr_regex` | Attribute value on selected DOM nodes matches a regex at least `min_matches` times |
 
-HTML fingerprints can also use selector-anchored `type: region` extracts. A
-region starts at the first `anchor_selector` match, ends before the next
+HTML fingerprints can also use selector-anchored `type: region` extracts. Each
+region starts at an `anchor_selector` match, ends before the next
 `stop_selector` match, and emits only bounds/indices:
-`start_line`, `end_line`, `table_indices`, `page_span`, and `as_of`. Multiple
-anchor matches emit `{ "regions": [...] }` in document order.
+`anchor_selector`, `stop_selector`, `start_line`, `end_line`, `table_indices`,
+`page_span`, `byte_offsets`, and `as_of`. `byte_offsets` is a best-effort raw
+HTML `[start,end)` span and is `null` when the source node cannot be located
+deterministically. Multiple anchor matches emit `{ "regions": [...] }` in
+document order.
 
 ### Universal
 
