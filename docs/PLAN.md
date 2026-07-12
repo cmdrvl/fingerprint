@@ -461,6 +461,27 @@ author through selector assertions or selector-anchored extract definitions, not
 by adding visual-heading, page-break, or “looks like structure” heuristics to the
 normalizer.
 
+#### PDF authoring under the normalizer freeze
+
+Decision: **Option B — PDF fingerprints stay on the frozen normalized text path.**
+
+PDFs do not have an HTML DOM, so CSS selector assertions and selector-bounded
+`region` extracts are HTML-only. A `format: pdf` definition may use native PDF
+structural assertions (`page_count`, `metadata_regex`) against `path`, and may
+use heading/text/section/table assertions and extracts against a pre-extracted
+`text_path` supplied by an upstream extractor such as Docling. Fingerprint does
+not infer new PDF structure from layout styling, font size, visual headings, or
+page rendering heuristics.
+
+Rationale: richer PDF structure is the extractor's job. If a workflow needs
+Docling JSON reading order, table geometry, or another structured PDF model, the
+right design is a new extractor-targeting surface over that native upstream
+artifact, not additional guesses in fingerprint's frozen normalizer. Until that
+surface exists, PDF authors should write explicit `text_regex`, `heading_regex`,
+`table_*`, `section_*`, `page_count`, and `metadata_regex` assertions. A
+selector assertion or `region` extract under `format: pdf` is a validation error
+with an html-only guidance message.
+
 ### Diagnostic context (`--diagnose`)
 
 When `--diagnose` is set and an assertion fails, the assertion result includes a `context` field showing what the document actually contains. This turns "your regex didn't match" into "here's what you should have written."

@@ -27,6 +27,12 @@ fn run_fingerprint_with_rules(args: &[&str]) -> Output {
         .expect("run fingerprint binary with repo rules")
 }
 
+fn write_yaml(contents: &str) -> NamedTempFile {
+    let file = NamedTempFile::new().expect("create temp yaml");
+    fs::write(file.path(), contents).expect("write temp yaml");
+    file
+}
+
 fn html_manifest_for_fixture(relative: &str) -> NamedTempFile {
     let manifest = NamedTempFile::new().expect("create temp manifest");
     let record = serde_json::json!({
@@ -55,6 +61,127 @@ fn assert_success(output: &Output, context: &str) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
+}
+
+#[test]
+fn pdf_authoring_decision_under_normalizer_freeze_is_recorded() {
+    let plan = fs::read_to_string(repo_path("docs/PLAN.md")).expect("read docs/PLAN.md");
+    for required in [
+        "PDF authoring under the normalizer freeze",
+        "Decision: **Option B",
+        "PDF fingerprints stay on the frozen normalized text path",
+        "selector assertion or `region` extract under `format: pdf` is a validation error",
+        "page_count",
+        "metadata_regex",
+        "text_path",
+    ] {
+        assert!(
+            plan.contains(required),
+            "docs/PLAN.md should record the PDF authoring decision phrase '{required}'"
+        );
+    }
+}
+
+#[test]
+fn pdf_selector_and_region_definitions_are_rejected_with_boundary_message() {
+    let selector_yaml = write_yaml(
+        r#"
+fingerprint_id: pdf-selector-rejected.v1
+format: pdf
+assertions:
+  - node_exists:
+      selector: "h1"
+"#
+        .trim(),
+    );
+    let selector_output = run_fingerprint(&[
+        "compile",
+        selector_yaml.path().to_str().expect("selector yaml path"),
+        "--check",
+    ]);
+    assert!(
+        !selector_output.status.success(),
+        "pdf selector definition should fail validation"
+    );
+    let selector_refusal: Value =
+        serde_json::from_slice(&selector_output.stdout).expect("parse selector refusal");
+    assert_eq!(selector_refusal["refusal"]["code"], "E_INVALID_YAML");
+    let selector_error = selector_refusal["refusal"]["detail"]["error"]
+        .as_str()
+        .expect("selector detail error");
+    assert!(selector_error.contains("html-only"));
+    assert!(selector_error.contains("For pdf fingerprints, use text_regex/heading_regex"));
+
+    let region_yaml = write_yaml(
+        r#"
+fingerprint_id: pdf-region-rejected.v1
+format: pdf
+assertions:
+  - filename_regex:
+      pattern: '.*\.pdf$'
+extract:
+  - name: schedule_region
+    type: region
+    anchor_selector: "h1"
+    stop_selector: "h2"
+"#
+        .trim(),
+    );
+    let region_output = run_fingerprint(&[
+        "compile",
+        region_yaml.path().to_str().expect("region yaml path"),
+        "--check",
+    ]);
+    assert!(
+        !region_output.status.success(),
+        "pdf region definition should fail validation"
+    );
+    let region_refusal: Value =
+        serde_json::from_slice(&region_output.stdout).expect("parse region refusal");
+    assert_eq!(region_refusal["refusal"]["code"], "E_INVALID_YAML");
+    let region_error = region_refusal["refusal"]["detail"]["error"]
+        .as_str()
+        .expect("region detail error");
+    assert!(region_error.contains("html-only"));
+    assert!(region_error.contains("text_path-backed section/table/text_match extracts"));
+}
+
+#[test]
+fn pdf_native_structural_and_text_path_definition_still_compiles() {
+    let pdf_yaml = write_yaml(
+        r#"
+fingerprint_id: pdf-frozen-path-ok.v1
+format: pdf
+assertions:
+  - page_count:
+      min: 1
+      max: 500
+  - metadata_regex:
+      key: "Creator"
+      pattern: "(?i)(docling|pdf)"
+  - text_regex:
+      pattern: "(?i)income capitalization approach"
+extract:
+  - name: income_section
+    type: section
+    anchor_heading: "(?i)income capitalization approach"
+  - name: as_of_date
+    type: text_match
+    anchor: "(?i)as of"
+    pattern: "\\w+ \\d{1,2},? \\d{4}"
+    within_chars: 100
+content_hash:
+  algorithm: blake3
+  over: [income_section]
+"#
+        .trim(),
+    );
+    let output = run_fingerprint(&[
+        "compile",
+        pdf_yaml.path().to_str().expect("pdf yaml path"),
+        "--check",
+    ]);
+    assert_success(&output, "pdf frozen-path definition compile --check");
 }
 
 #[test]

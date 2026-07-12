@@ -723,7 +723,9 @@ Ledger location: `~/.cmdrvl/state/witness/witness.jsonl` (override with `EPISTEM
 
 ## Spec and development
 
-The full specification is [`docs/PLAN.md`](./docs/PLAN.md). Benchmarks in [`docs/BENCHMARK_BASELINE.md`](./docs/BENCHMARK_BASELINE.md).
+The full specification is [`docs/PLAN.md`](./docs/PLAN.md). Fingerprint authors
+should start with the self-contained [`docs/DSL_REFERENCE.md`](./docs/DSL_REFERENCE.md).
+Benchmarks in [`docs/BENCHMARK_BASELINE.md`](./docs/BENCHMARK_BASELINE.md).
 
 ### HTML verification surface
 
@@ -751,6 +753,7 @@ cargo test \
   --test normalizer_freeze \
   --test selector_region \
   --test html_parity_audit \
+  --test docs_dsl_reference \
   --test infer_mode \
   --test infer_schema_mode \
   --test infer_subcommand \

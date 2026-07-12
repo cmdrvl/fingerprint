@@ -179,6 +179,7 @@ cargo test --test selector_assertions
 cargo test --test normalizer_freeze
 cargo test --test selector_region
 cargo test --test html_parity_audit
+cargo test --test docs_dsl_reference
 bash scripts/selector_region_e2e.sh
 ```
 

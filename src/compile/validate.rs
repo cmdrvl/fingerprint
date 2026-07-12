@@ -154,7 +154,7 @@ fn require_selector_html_format(assertion_name: &str, format: &str) -> Result<()
         Ok(())
     } else {
         Err(format!(
-            "selector assertion '{assertion_name}' is html-only and requires format 'html', found '{format}'"
+            "selector assertion '{assertion_name}' is html-only and requires format 'html', found '{format}'. For pdf fingerprints, use text_regex/heading_regex/table assertions over text_path plus page_count/metadata_regex, or supply richer structure from an upstream extractor instead of adding fingerprint heuristics."
         ))
     }
 }
@@ -266,7 +266,7 @@ fn require_region_html_format(format: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "extract type 'region' is html-only and requires format 'html', found '{format}'"
+            "extract type 'region' is html-only and requires format 'html', found '{format}'. For pdf fingerprints, use text_path-backed section/table/text_match extracts plus page_count/metadata_regex, or supply richer structure from an upstream extractor instead of adding fingerprint heuristics."
         ))
     }
 }
