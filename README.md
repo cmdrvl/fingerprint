@@ -252,7 +252,8 @@ Fingerprint doesn't just check filenames and magic bytes. It understands the int
 HTML fingerprints can also use selector-anchored `type: region` extracts. A
 region starts at the first `anchor_selector` match, ends before the next
 `stop_selector` match, and emits only bounds/indices:
-`start_line`, `end_line`, `table_indices`, and `page_span`.
+`start_line`, `end_line`, `table_indices`, `page_span`, and `as_of`. Multiple
+anchor matches emit `{ "regions": [...] }` in document order.
 
 ### Universal
 

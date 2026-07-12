@@ -7,7 +7,8 @@ use fingerprint::dsl::parser::{ExtractSection, FingerprintDefinition};
 use serde_json::Value;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use tempfile::NamedTempFile;
+use std::process::Command;
+use tempfile::{NamedTempFile, tempdir};
 
 fn fixture(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
@@ -23,6 +24,25 @@ fn make_temp_html(contents: &str) -> NamedTempFile {
         .expect("write temporary html fixture");
     file.flush().expect("flush temporary html fixture");
     file
+}
+
+fn write_jsonl(records: &[Value]) -> NamedTempFile {
+    let mut file = NamedTempFile::new().expect("create temporary JSONL manifest");
+    for record in records {
+        serde_json::to_writer(&mut file, record).expect("write JSONL record");
+        file.write_all(b"\n").expect("write JSONL newline");
+    }
+    file.flush().expect("flush JSONL manifest");
+    file
+}
+
+fn parse_jsonl(stdout: &[u8]) -> Vec<Value> {
+    String::from_utf8(stdout.to_vec())
+        .expect("stdout should be UTF-8")
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("parse JSONL line"))
+        .collect()
 }
 
 fn hard_break_count(document: &HtmlDocument, selector: &str) -> usize {
@@ -52,18 +72,33 @@ fn region_value(path: &Path, section: ExtractSection) -> Option<Value> {
 
 fn assert_region_has_no_strings(value: &Value) {
     assert!(
-        !region_contains_string(value),
-        "region output must not contain string values"
+        !region_contains_disallowed_string(value),
+        "region output must not contain document-text string values"
     );
 }
 
-fn region_contains_string(value: &Value) -> bool {
+fn region_contains_disallowed_string(value: &Value) -> bool {
     match value {
-        Value::String(_) => true,
-        Value::Array(items) => items.iter().any(region_contains_string),
-        Value::Object(map) => map.values().any(region_contains_string),
+        Value::String(text) => !is_iso_date(text),
+        Value::Array(items) => items.iter().any(region_contains_disallowed_string),
+        Value::Object(map) => map.values().any(region_contains_disallowed_string),
         Value::Null | Value::Bool(_) | Value::Number(_) => false,
     }
+}
+
+fn is_iso_date(value: &str) -> bool {
+    matches!(
+        value.as_bytes(),
+        [y0, y1, y2, y3, b'-', m0, m1, b'-', d0, d1]
+            if y0.is_ascii_digit()
+                && y1.is_ascii_digit()
+                && y2.is_ascii_digit()
+                && y3.is_ascii_digit()
+                && m0.is_ascii_digit()
+                && m1.is_ascii_digit()
+                && d0.is_ascii_digit()
+                && d1.is_ascii_digit()
+    )
 }
 
 #[test]
@@ -212,7 +247,7 @@ fn rgn_e01_selector_region_covers_contiguous_tables_and_data_pages() {
         <html>
           <body>
             <section data-page-number="5">
-              <div class="major">Schedule of Investments</div>
+              <div class="major anchor">Schedule of Investments</div>
               <table>
                 <tr><th>Company</th><th>Fair Value</th></tr>
                 <tr><td>Alpha</td><td>10</td></tr>
@@ -239,7 +274,7 @@ fn rgn_e01_selector_region_covers_contiguous_tables_and_data_pages() {
 
     let region = region_value(
         file.path(),
-        region_section("soi_region", ".major", ".major"),
+        region_section("soi_region", ".anchor", ".major"),
     )
     .expect("region should be extracted");
 
@@ -270,7 +305,7 @@ fn rgn_e02_continue_past_suppresses_running_header_stop_candidate() {
         <html>
           <body>
             <section data-page-number="5">
-              <div class="major">Schedule of Investments</div>
+              <div class="major anchor">Schedule of Investments</div>
               <table>
                 <tr><th>Company</th></tr>
                 <tr><td>Alpha</td></tr>
@@ -290,7 +325,7 @@ fn rgn_e02_continue_past_suppresses_running_header_stop_candidate() {
         </html>
         "#,
     );
-    let mut section = region_section("soi_region", ".major", ".major");
+    let mut section = region_section("soi_region", ".anchor", ".major");
     section.continue_past = vec![r"(?i)^\(continued\)$".to_owned()];
 
     let region = region_value(file.path(), section).expect("region should be extracted");
@@ -327,7 +362,7 @@ fn rgn_u04_nested_lower_rank_divider_does_not_truncate_region() {
         r#"
         <html>
           <body>
-            <h1 class="major">Schedule of Investments</h1>
+            <h1 class="major anchor">Schedule of Investments</h1>
             <table><tr><th>Company</th></tr><tr><td>Alpha</td></tr></table>
             <h2 class="minor">Healthcare</h2>
             <table><tr><th>Company</th></tr><tr><td>Beta</td></tr></table>
@@ -339,7 +374,7 @@ fn rgn_u04_nested_lower_rank_divider_does_not_truncate_region() {
 
     let region = region_value(
         file.path(),
-        region_section("soi_region", "h1.major", "h1.major"),
+        region_section("soi_region", "h1.anchor", "h1.major"),
     )
     .expect("region should be extracted");
 
@@ -354,7 +389,7 @@ fn rgn_u05_region_output_is_deterministic_with_duplicate_text() {
         <html>
           <body>
             <section data-page-number="1">
-              <div class="major">Schedule of Investments</div>
+              <div class="major anchor">Schedule of Investments</div>
               <p>Schedule of Investments</p>
               <table><tr><th>Company</th></tr><tr><td>Alpha</td></tr></table>
             </section>
@@ -365,7 +400,7 @@ fn rgn_u05_region_output_is_deterministic_with_duplicate_text() {
         </html>
         "#,
     );
-    let section = region_section("soi_region", ".major", ".major");
+    let section = region_section("soi_region", ".anchor", ".major");
 
     let first = region_value(file.path(), section.clone()).expect("first region");
     let second = region_value(file.path(), section).expect("second region");
@@ -410,6 +445,193 @@ fn rgn_u06_region_is_html_scoped_at_runtime_and_validation() {
     let error = validate_definition(&definition).expect_err("markdown region should fail");
 
     assert!(error.contains("html-only"));
+}
+
+#[test]
+fn date_e03_multiple_anchor_regions_emit_document_order_regions_with_local_as_of_tags() {
+    let file = make_temp_html(
+        r#"
+        <html>
+          <body>
+            <section data-page-number="5">
+              <h1 class="soi">CONSOLIDATED SCHEDULE OF INVESTMENTS September 30, 2025</h1>
+              <table>
+                <tr><th>Company</th></tr>
+                <tr><td>Alpha</td></tr>
+              </table>
+            </section>
+            <section data-page-number="82">
+              <h1 class="soi">CONSOLIDATED SCHEDULE OF INVESTMENTS December 31, 2024</h1>
+              <table>
+                <tr><th>Company</th></tr>
+                <tr><td>Beta</td></tr>
+              </table>
+            </section>
+            <section data-page-number="90">
+              <h2 class="notes">Notes to Financial Statements</h2>
+            </section>
+          </body>
+        </html>
+        "#,
+    );
+
+    let region = region_value(
+        file.path(),
+        region_section("soi_region", "h1.soi", "h2.notes"),
+    )
+    .expect("multi-region wrapper should be extracted");
+    let regions = region["regions"].as_array().expect("regions array");
+    let current = regions.first().expect("current region");
+    let comparative = regions.get(1).expect("comparative region");
+
+    assert_eq!(regions.len(), 2);
+    assert_eq!(current["as_of"], serde_json::json!("2025-09-30"));
+    assert_eq!(comparative["as_of"], serde_json::json!("2024-12-31"));
+    assert_eq!(current["table_indices"], serde_json::json!([0]));
+    assert_eq!(comparative["table_indices"], serde_json::json!([1]));
+    assert_eq!(current["page_span"], serde_json::json!([5, 5]));
+    assert_eq!(comparative["page_span"], serde_json::json!([82, 82]));
+
+    let second = region_value(
+        file.path(),
+        region_section("soi_region", "h1.soi", "h2.notes"),
+    )
+    .expect("second multi-region extraction");
+    assert_eq!(
+        serde_json::to_vec(&region).unwrap(),
+        serde_json::to_vec(&second).unwrap()
+    );
+    assert_region_has_no_strings(&region);
+}
+
+#[test]
+fn date_e04_single_anchor_keeps_single_object_shape_with_as_of() {
+    let file = make_temp_html(
+        r#"
+        <html>
+          <body>
+            <section data-page-number="1">
+              <h1 class="soi">Schedule of Investments Sep 30, 2025</h1>
+              <table><tr><th>Company</th></tr><tr><td>Alpha</td></tr></table>
+            </section>
+            <section data-page-number="2">
+              <h2 class="notes">Notes to Financial Statements</h2>
+            </section>
+          </body>
+        </html>
+        "#,
+    );
+
+    let region = region_value(
+        file.path(),
+        region_section("soi_region", "h1.soi", "h2.notes"),
+    )
+    .expect("single region should be extracted");
+
+    assert!(region.get("regions").is_none());
+    assert_eq!(region["as_of"], serde_json::json!("2025-09-30"));
+    assert_eq!(region["table_indices"], serde_json::json!([0]));
+    assert_region_has_no_strings(&region);
+}
+
+#[test]
+fn date_u02_run_mode_region_as_of_is_timezone_independent() {
+    let definitions_dir = tempdir().expect("create definitions dir");
+    std::fs::write(
+        definitions_dir.path().join("tz-region.fp.yaml"),
+        r#"
+fingerprint_id: tz-region.v1
+format: html
+assertions:
+  - node_exists:
+      selector: "h1.soi"
+extract:
+  - name: soi_region
+    type: region
+    anchor_selector: "h1.soi"
+    stop_selector: "h2.notes"
+"#,
+    )
+    .expect("write timezone test definition");
+    let trust_file = NamedTempFile::new().expect("create trust file");
+    std::fs::write(trust_file.path(), "trust:\n  - \"installed:*\"\n").expect("write trust file");
+    let html_path = fixture("tests/fixtures/html/ares_multi_soi.html");
+    let manifest = write_jsonl(&[serde_json::json!({
+        "version": "hash.v0",
+        "path": html_path.display().to_string(),
+        "extension": ".html",
+        "bytes_hash": "blake3:ares-multi-soi",
+        "tool_versions": { "hash": "0.1.0" }
+    })]);
+
+    let run_with_tz = |timezone: Option<&str>| -> Value {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fingerprint"));
+        command
+            .arg(manifest.path())
+            .args(["--fp", "tz-region.v1", "--no-witness"])
+            .env("FINGERPRINT_DEFINITIONS", definitions_dir.path())
+            .env("FINGERPRINT_TRUST", trust_file.path())
+            .current_dir(env!("CARGO_MANIFEST_DIR"));
+        if let Some(timezone) = timezone {
+            command.env("TZ", timezone);
+        }
+        let output = command.output().expect("run fingerprint binary");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "stdout={}\nstderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let records = parse_jsonl(&output.stdout);
+        let record = records.first().expect("one output record");
+        record["fingerprint"]["extracted"]["soi_region"].clone()
+    };
+
+    let default_tz = run_with_tz(None);
+    let asia_kolkata = run_with_tz(Some("Asia/Kolkata"));
+
+    assert_eq!(default_tz, asia_kolkata);
+    let default_regions = default_tz["regions"].as_array().expect("regions array");
+    assert_eq!(
+        default_regions.first().expect("current region")["as_of"],
+        "2025-09-30"
+    );
+    assert_eq!(
+        default_regions.get(1).expect("comparative region")["as_of"],
+        "2024-12-31"
+    );
+    assert_region_has_no_strings(&default_tz);
+}
+
+#[test]
+fn date_u05_as_of_current_is_not_resolved_by_fingerprint() {
+    let definition: FingerprintDefinition = serde_yaml::from_str(
+        r#"
+fingerprint_id: ignored-current.v1
+format: html
+assertions: []
+extract:
+  - name: soi_region
+    type: region
+    anchor_selector: "h1"
+    stop_selector: "h2"
+    as_of: current
+"#,
+    )
+    .expect("parse definition with unsupported as_of key");
+
+    validate_definition(&definition).expect("unknown as_of key is ignored, not resolved");
+    let serialized_extract = serde_json::to_value(
+        definition
+            .extract
+            .first()
+            .expect("definition should contain one extract"),
+    )
+    .expect("serialize extract section");
+
+    assert!(serialized_extract.get("as_of").is_none());
 }
 
 #[test]

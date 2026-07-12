@@ -32,6 +32,8 @@ instead of creating ad hoc temp HTML inside tests.
   used by selector-native assertion tests.
 - `oxsq_pagebreaks.html` — compact page-break marker fixture for CSS
   attribute-substring selector tests.
+- `ares_multi_soi.html` — two Schedule of Investments regions with distinct
+  `as_of` dates for selector-region multi-anchor tests.
 
 ## Content-hash mutation set
 

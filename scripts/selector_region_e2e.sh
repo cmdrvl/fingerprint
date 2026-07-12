@@ -13,15 +13,15 @@ fingerprint_id: selector-region.v1
 format: html
 assertions:
   - node_exists:
-      selector: "h1"
+      selector: "h1.soi"
   - node_count:
       selector: "table"
-      min: 1
+      min: 2
 extract:
   - name: soi_region
     type: region
-    anchor_selector: "h1"
-    stop_selector: "h2"
+    anchor_selector: "h1.soi"
+    stop_selector: "h2.notes"
 YAML
 
 cat > "${REPO_ROOT}/${DEFINITIONS_DIR}/selector-pagebreaks.fp.yaml" <<'YAML'
@@ -40,7 +40,7 @@ python3 "${SCRIPT_DIR}/html_e2e.py" selector \
   --definitions-dir "${DEFINITIONS_DIR}" \
   --fp selector-region.v1 \
   --fp selector-pagebreaks.v1 \
-  --fixture-id bdc_soi_ares_like \
+  --fixture-id ares_multi_soi \
   --fixture-id oxsq_pagebreaks \
   "$@"
 
@@ -67,49 +67,66 @@ region_records = [
 if len(region_records) != 1:
     raise SystemExit(f"expected one selector-region match, found {len(region_records)}")
 
-region = (
+region_payload = (
     region_records[0]
     .get("fingerprint", {})
     .get("extracted", {})
     .get("soi_region")
 )
-if not isinstance(region, dict):
+if not isinstance(region_payload, dict):
     raise SystemExit("selector-region match did not emit fingerprint.extracted.soi_region")
 
+regions = region_payload.get("regions")
+if not isinstance(regions, list):
+    regions = [region_payload]
+if len(regions) != 2:
+    raise SystemExit(f"expected two selector regions, found {len(regions)}")
+
 required = {"start_line", "end_line", "table_indices", "page_span"}
-missing = sorted(required - set(region))
-if missing:
-    raise SystemExit(f"region missing required keys: {missing}")
-if not isinstance(region["start_line"], int) or not isinstance(region["end_line"], int):
-    raise SystemExit("region start_line/end_line must be integers")
-if region["start_line"] >= region["end_line"]:
-    raise SystemExit("region start_line must be less than end_line")
-if not all(isinstance(item, int) for item in region["table_indices"]):
-    raise SystemExit("region table_indices must contain only integers")
-if (
-    not isinstance(region["page_span"], list)
-    or len(region["page_span"]) != 2
-    or not all(isinstance(item, int) for item in region["page_span"])
-):
-    raise SystemExit("region page_span must be a two-integer array")
+dates = []
+for index, region in enumerate(regions):
+    missing = sorted(required - set(region))
+    if missing:
+        raise SystemExit(f"region {index} missing required keys: {missing}")
+    if not isinstance(region["start_line"], int) or not isinstance(region["end_line"], int):
+        raise SystemExit(f"region {index} start_line/end_line must be integers")
+    if region["start_line"] >= region["end_line"]:
+        raise SystemExit(f"region {index} start_line must be less than end_line")
+    if not all(isinstance(item, int) for item in region["table_indices"]):
+        raise SystemExit(f"region {index} table_indices must contain only integers")
+    if (
+        not isinstance(region["page_span"], list)
+        or len(region["page_span"]) != 2
+        or not all(isinstance(item, int) for item in region["page_span"])
+    ):
+        raise SystemExit(f"region {index} page_span must be a two-integer array")
+    as_of = region.get("as_of")
+    if not isinstance(as_of, str) or len(as_of) != 10:
+        raise SystemExit(f"region {index} as_of must be an ISO date string")
+    dates.append(as_of)
+
+if sorted(dates) != ["2024-12-31", "2025-09-30"]:
+    raise SystemExit(f"unexpected region as_of dates: {dates}")
 
 def contains_string(value):
     if isinstance(value, str):
-        return True
+        return len(value) != 10 or value[4] != "-" or value[7] != "-"
     if isinstance(value, list):
         return any(contains_string(item) for item in value)
     if isinstance(value, dict):
         return any(contains_string(item) for item in value.values())
     return False
 
-if contains_string(region):
-    raise SystemExit("region output must not contain string values")
+for index, region in enumerate(regions):
+    if contains_string(region):
+        raise SystemExit(f"region {index} output must not contain document-text string values")
 
-summary["region_table_count"] = len(region["table_indices"])
-summary["region_page_span"] = region["page_span"]
+summary["region_table_count"] = sum(len(region["table_indices"]) for region in regions)
+summary["region_page_spans"] = [region["page_span"] for region in regions]
+summary["region_as_of_dates"] = dates
 summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 print(
     f"[selector] region_table_count={summary['region_table_count']} "
-    f"page_span={summary['region_page_span']}"
+    f"as_of_dates={summary['region_as_of_dates']}"
 )
 PY

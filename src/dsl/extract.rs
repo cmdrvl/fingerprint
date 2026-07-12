@@ -2,6 +2,7 @@ use crate::document::html::{HtmlDocument, is_hard_page_break};
 use crate::document::{Document, StructuredDocument};
 use crate::dsl::parser::ExtractSection;
 use calamine::{Reader, open_workbook_auto};
+use chrono::NaiveDate;
 use regex::Regex;
 use serde_json::Value;
 use serde_json::json;
@@ -242,14 +243,6 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
         .as_deref()
         .ok_or_else(|| "region extract requires 'stop_selector'".to_owned())?;
 
-    let anchor_nodes = html.select_nodes(anchor_selector)?;
-    let Some(anchor) = anchor_nodes.first().copied() else {
-        return Ok(None);
-    };
-    let Some(anchor) = locate_element(html, anchor, 0) else {
-        return Ok(None);
-    };
-
     let continue_past = section
         .continue_past
         .iter()
@@ -259,9 +252,67 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let stop_nodes = html.select_nodes(stop_selector)?;
-    let stop = stop_nodes
+    let mut anchor_search_start = 0usize;
+    let anchors = html
+        .select_nodes(anchor_selector)?
         .into_iter()
+        .filter_map(|node| {
+            let located = locate_element(html, node, anchor_search_start)?;
+            anchor_search_start = located.byte_end;
+            Some((node, located))
+        })
+        .collect::<Vec<_>>();
+    if anchors.is_empty() {
+        return Ok(None);
+    }
+
+    let stop_nodes = html.select_nodes(stop_selector)?;
+    let mut regions = Vec::new();
+    for (index, (anchor_node, anchor)) in anchors.iter().enumerate() {
+        let stop = first_region_stop(html, &stop_nodes, *anchor, &continue_past);
+        let next_anchor = anchors.get(index + 1).map(|(_, located)| *located);
+        let boundary = earlier_boundary(stop, next_anchor);
+        let end_line = boundary
+            .map(|boundary| boundary.line)
+            .unwrap_or_else(|| html.normalized.lines().count() + 1)
+            .max(anchor.line + 1);
+        let boundary_order = boundary.map(|boundary| boundary.order);
+
+        let table_indices = html
+            .tables
+            .iter()
+            .filter(|table| table.start_line >= anchor.line && table.start_line < end_line)
+            .map(|table| table.index)
+            .collect::<Vec<_>>();
+        let page_span =
+            region_page_span(html, anchor.line, end_line, anchor.order, boundary_order)?;
+        let as_of = parse_as_of_date(&region_date_text(html, *anchor_node, anchor.line, end_line));
+
+        regions.push(json!({
+            "start_line": anchor.line,
+            "end_line": end_line,
+            "table_indices": table_indices,
+            "page_span": page_span,
+            "as_of": as_of,
+        }));
+    }
+
+    if regions.len() == 1 {
+        Ok(regions.pop())
+    } else {
+        Ok(Some(json!({ "regions": regions })))
+    }
+}
+
+fn first_region_stop(
+    html: &HtmlDocument,
+    stop_nodes: &[scraper::ElementRef<'_>],
+    anchor: LocatedElement,
+    continue_past: &[Regex],
+) -> Option<LocatedElement> {
+    stop_nodes
+        .iter()
+        .copied()
         .filter_map(|node| {
             let order = html.element_order_index(&node)?;
             (order > anchor.order).then_some((order, node))
@@ -275,28 +326,19 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
                 return None;
             }
             locate_element(html, node, anchor.byte_end)
-        });
+        })
+}
 
-    let end_line = stop
-        .map(|stop| stop.line)
-        .unwrap_or_else(|| html.normalized.lines().count() + 1);
-    let end_line = end_line.max(anchor.line + 1);
-    let stop_order = stop.map(|stop| stop.order);
-
-    let table_indices = html
-        .tables
-        .iter()
-        .filter(|table| table.start_line >= anchor.line && table.start_line < end_line)
-        .map(|table| table.index)
-        .collect::<Vec<_>>();
-    let page_span = region_page_span(html, anchor.line, end_line, anchor.order, stop_order)?;
-
-    Ok(Some(json!({
-        "start_line": anchor.line,
-        "end_line": end_line,
-        "table_indices": table_indices,
-        "page_span": page_span,
-    })))
+fn earlier_boundary(
+    stop: Option<LocatedElement>,
+    next_anchor: Option<LocatedElement>,
+) -> Option<LocatedElement> {
+    match (stop, next_anchor) {
+        (Some(stop), Some(next_anchor)) if next_anchor.order < stop.order => Some(next_anchor),
+        (Some(stop), _) => Some(stop),
+        (None, Some(next_anchor)) => Some(next_anchor),
+        (None, None) => None,
+    }
 }
 
 fn locate_element(
@@ -333,6 +375,85 @@ fn selector_node_text(node: scraper::ElementRef<'_>) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn region_date_text(
+    html: &HtmlDocument,
+    anchor_node: scraper::ElementRef<'_>,
+    start_line: usize,
+    end_line: usize,
+) -> String {
+    let mut parts = vec![selector_node_text(anchor_node)];
+    let start_index = start_line.saturating_sub(1);
+    let line_count = end_line.saturating_sub(start_line).clamp(1, 6);
+    parts.extend(
+        html.normalized
+            .lines()
+            .skip(start_index)
+            .take(line_count)
+            .map(str::to_owned),
+    );
+    parts.join(" ")
+}
+
+fn parse_as_of_date(region_text: &str) -> Option<String> {
+    let month_date = Regex::new(r"(?i)\b([a-z]+)\s+([0-9]{1,2}),\s*([0-9]{4})\b").ok()?;
+    if let Some(date) = month_date
+        .captures_iter(region_text)
+        .find_map(|captures| parse_month_day_year(&captures[1], &captures[2], &captures[3]))
+    {
+        return Some(format_iso_date(date));
+    }
+
+    let slash_date = Regex::new(r"\b([0-9]{1,2})/([0-9]{1,2})/([0-9]{4})\b").ok()?;
+    if let Some(date) = slash_date
+        .captures_iter(region_text)
+        .find_map(|captures| parse_numeric_date(&captures[3], &captures[1], &captures[2]))
+    {
+        return Some(format_iso_date(date));
+    }
+
+    let iso_date = Regex::new(r"\b([0-9]{4})-([0-9]{2})-([0-9]{2})\b").ok()?;
+    iso_date
+        .captures_iter(region_text)
+        .find_map(|captures| parse_numeric_date(&captures[1], &captures[2], &captures[3]))
+        .map(format_iso_date)
+}
+
+fn parse_month_day_year(month: &str, day: &str, year: &str) -> Option<NaiveDate> {
+    let year = year.parse::<i32>().ok()?;
+    let month = month_number(month)?;
+    let day = day.parse::<u32>().ok()?;
+    NaiveDate::from_ymd_opt(year, month, day)
+}
+
+fn parse_numeric_date(year: &str, month: &str, day: &str) -> Option<NaiveDate> {
+    let year = year.parse::<i32>().ok()?;
+    let month = month.parse::<u32>().ok()?;
+    let day = day.parse::<u32>().ok()?;
+    NaiveDate::from_ymd_opt(year, month, day)
+}
+
+fn month_number(month: &str) -> Option<u32> {
+    match month.to_ascii_lowercase().as_str() {
+        "january" | "jan" => Some(1),
+        "february" | "feb" => Some(2),
+        "march" | "mar" => Some(3),
+        "april" | "apr" => Some(4),
+        "may" => Some(5),
+        "june" | "jun" => Some(6),
+        "july" | "jul" => Some(7),
+        "august" | "aug" => Some(8),
+        "september" | "sept" | "sep" => Some(9),
+        "october" | "oct" => Some(10),
+        "november" | "nov" => Some(11),
+        "december" | "dec" => Some(12),
+        _ => None,
+    }
+}
+
+fn format_iso_date(date: NaiveDate) -> String {
+    date.format("%Y-%m-%d").to_string()
 }
 
 fn region_page_span(
@@ -557,6 +678,37 @@ mod tests {
         file.flush().expect("flush html fixture");
         let html = HtmlDocument::open(file.path()).expect("open html fixture");
         Document::Html(html)
+    }
+
+    #[test]
+    fn parse_as_of_date_supports_fixed_ordered_patterns() {
+        let cases = [
+            (
+                "CONSOLIDATED SCHEDULE OF INVESTMENTS September 30, 2025",
+                Some("2025-09-30"),
+            ),
+            (
+                "Schedule of Investments September 05, 2025",
+                Some("2025-09-05"),
+            ),
+            ("Schedule of Investments Sep 30, 2025", Some("2025-09-30")),
+            ("Schedule of Investments 09/30/2025", Some("2025-09-30")),
+            ("Schedule of Investments 2025-09-30", Some("2025-09-30")),
+            ("no date here", None),
+        ];
+
+        for (input, expected) in cases {
+            let parsed = parse_as_of_date(input);
+            eprintln!("parse_as_of_date({input:?}) -> {parsed:?}");
+            assert_eq!(parsed.as_deref(), expected);
+        }
+    }
+
+    #[test]
+    fn parse_as_of_date_is_pure_and_deterministic() {
+        let input = "CONSOLIDATED SCHEDULE OF INVESTMENTS September 30, 2025";
+
+        assert_eq!(parse_as_of_date(input), parse_as_of_date(input));
     }
 
     #[test]

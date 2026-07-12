@@ -51,6 +51,22 @@ const EXPECTED_HTML_SNAPSHOTS: &[ExpectedHtmlSnapshot] = &[
         page_sections: 0,
     },
     ExpectedHtmlSnapshot {
+        id: "ares_multi_soi",
+        normalized_hash: "f6e71ab8a1c21206f6f4e7870efd080bc889364437db75803776303bcf8a3cdb",
+        headings: &[
+            "h1:CONSOLIDATED SCHEDULE OF INVESTMENTS September 30, 2025@1",
+            "h1:CONSOLIDATED SCHEDULE OF INVESTMENTS December 31, 2024@6",
+            "h2:Notes to Financial Statements@11",
+        ],
+        section_ranges: &[
+            "CONSOLIDATED SCHEDULE OF INVESTMENTS September 30, 2025:1-5:Some(5)",
+            "CONSOLIDATED SCHEDULE OF INVESTMENTS December 31, 2024:6-13:Some(68)",
+            "Notes to Financial Statements:11-13:Some(90)",
+        ],
+        table_count: 2,
+        page_sections: 3,
+    },
+    ExpectedHtmlSnapshot {
         id: "bdc_soi_ares_like",
         normalized_hash: "f6a6de8c93b5152c6b4367e8eadd00da9c6b091625c5631dcc8da8ef0e19e442",
         headings: &[

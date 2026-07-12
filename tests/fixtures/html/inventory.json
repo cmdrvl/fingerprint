@@ -11,6 +11,15 @@
       "expected_pages": 0
     },
     {
+      "id": "ares_multi_soi",
+      "path": "tests/fixtures/html/ares_multi_soi.html",
+      "categories": ["selector", "multi-region", "page-sections"],
+      "family": "ares",
+      "expected_headings": 3,
+      "expected_tables": 2,
+      "expected_pages": 3
+    },
+    {
       "id": "bdc_soi_ares_like",
       "path": "tests/fixtures/html/bdc_soi_ares_like.html",
       "categories": ["bdc-family", "page-sections"],

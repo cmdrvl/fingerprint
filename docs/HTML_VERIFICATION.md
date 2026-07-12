@@ -26,8 +26,8 @@ bash scripts/selector_region_e2e.sh
 ```
 
 The wrapper writes artifacts under `artifacts/html-e2e/region/selector/`, uses
-the existing HTML e2e harness, and records `region_table_count` plus
-`region_page_span` in `run.summary.json`.
+the existing HTML e2e harness, and records `region_table_count`,
+`region_page_spans`, and `region_as_of_dates` in `run.summary.json`.
 
 ## Legacy parity audit
 
