@@ -177,6 +177,7 @@ cargo test --test peek
 cargo test doctor
 cargo test --test selector_assertions
 cargo test --test normalizer_freeze
+cargo test --test selector_region
 ```
 
 ## Beads And Agent Mail

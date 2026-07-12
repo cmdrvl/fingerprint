@@ -78,6 +78,27 @@ impl HtmlDocument {
     }
 }
 
+/// Return true when an inline style declaration represents an intentional hard
+/// page boundary. This is not wired into the global normalizer; selector-region
+/// extraction uses it as a local filter when deriving region page spans.
+pub fn is_hard_page_break(style: &str) -> bool {
+    style.split(';').any(|declaration| {
+        let Some((property, value)) = declaration.split_once(':') else {
+            return false;
+        };
+        let property = property.trim().to_ascii_lowercase();
+        let value = value.trim().to_ascii_lowercase();
+
+        matches!(
+            (property.as_str(), value.as_str()),
+            ("page-break-after", "always")
+                | ("page-break-before", "always")
+                | ("break-after", "page")
+                | ("break-before", "page")
+        )
+    })
+}
+
 fn parse_html_document(path: &Path, raw: String) -> HtmlDocument {
     let document = Html::parse_document(&raw);
     let mut blocks = Vec::new();
@@ -800,6 +821,25 @@ mod tests {
         assert_eq!(document.sections[2].page, Some(2));
         assert!(document.normalized.contains("Intro block"));
         assert!(document.normalized.contains("Second page text"));
+    }
+
+    #[test]
+    fn hard_page_break_style_detection_is_polarity_and_whitespace_safe() {
+        assert!(is_hard_page_break("page-break-after:always"));
+        assert!(is_hard_page_break("page-break-before: always"));
+        assert!(is_hard_page_break("page-break-after :  always"));
+        assert!(is_hard_page_break("break-after: page"));
+        assert!(is_hard_page_break("break-before : page"));
+        assert!(is_hard_page_break(
+            "font-weight:700; page-break-after: always; color:black"
+        ));
+
+        assert!(!is_hard_page_break("page-break-after:auto"));
+        assert!(!is_hard_page_break("page-break-after: avoid"));
+        assert!(!is_hard_page_break("break-after: auto"));
+        assert!(!is_hard_page_break("break-before: avoid"));
+        assert!(!is_hard_page_break("font-weight:700"));
+        assert!(!is_hard_page_break("page-break-after"));
     }
 
     #[test]
