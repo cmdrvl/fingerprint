@@ -30,6 +30,32 @@ the existing HTML e2e harness, and records `region_table_count`,
 `region_page_spans`, `region_as_of_dates`, and
 `region_byte_offsets_present` in `run.summary.json`.
 
+## SOI region parity
+
+Compare selector-bounded Schedule of Investments regions against legacy SOI
+metrics and emit mismatch details under `artifacts/html-e2e/parity/<label>/`.
+
+Prepare a JSONL file with one row per filing. The committed CI fixture uses
+`period_end`, `table_count`, `page_span`, and `holding_row_count`:
+
+```json
+{"path":"/abs/path/to/filing.html","period_end":"2025-09-30","table_count":1,"page_span":[5,5],"holding_row_count":1}
+```
+
+Then run:
+
+```bash
+bash scripts/soi_parity.sh \
+  --definitions-dir rules \
+  --legacy-results /tmp/soi-legacy.jsonl \
+  --artifact-root artifacts/html-e2e \
+  --label soi-parity
+```
+
+For an external real-filing corpus, pass `--manifest /path/to/corpus.jsonl` and
+`--legacy-command-template 'python3 /path/to/extract_schedule_sections.py {path}'`.
+The command must emit a JSON object with the same metric keys.
+
 ## Legacy parity audit
 
 Compare `fingerprint` family routing to a legacy route source and emit mismatch

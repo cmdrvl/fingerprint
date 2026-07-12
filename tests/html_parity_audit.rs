@@ -82,6 +82,26 @@ fn write_legacy_results(path: &Path, rows: &[(&str, &str)]) {
     fs::write(path, format!("{payload}\n")).expect("write legacy results");
 }
 
+fn write_soi_legacy_results(path: &Path, rows: &[(&str, &str, i64, [i64; 2], i64)]) {
+    let payload = rows
+        .iter()
+        .map(
+            |(fixture_id, period_end, table_count, page_span, holding_row_count)| {
+                json!({
+                    "path": fixture_path(fixture_id).display().to_string(),
+                    "period_end": period_end,
+                    "table_count": table_count,
+                    "page_span": page_span,
+                    "holding_row_count": holding_row_count,
+                })
+            },
+        )
+        .map(|row| serde_json::to_string(&row).expect("serialize soi json row"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(path, format!("{payload}\n")).expect("write SOI legacy results");
+}
+
 const FAMILY_CASES: &[(&str, &str)] = &[
     ("bdc_soi_ares_like", "ares"),
     ("bdc_soi_bxsl_like", "bxsl"),
@@ -258,4 +278,128 @@ print(json.dumps({"family": family}))
     let summary = read_json(&dir.join("parity.summary.json"));
     assert_eq!(summary["parity_match_count"], 1);
     assert_eq!(summary["mismatch_count"], 0);
+}
+
+#[test]
+fn soi_parity_committed_fixture_happy_path_writes_artifacts() {
+    let artifacts = TempDir::new().expect("create artifacts dir");
+    let legacy_results = artifacts.path().join("soi-legacy.jsonl");
+    write_soi_legacy_results(
+        &legacy_results,
+        &[("ares_multi_soi", "2025-09-30", 1, [5, 5], 1)],
+    );
+
+    let output = run_script(
+        "soi_parity.sh",
+        &[
+            "--definitions-dir",
+            &rules_dir().display().to_string(),
+            "--legacy-results",
+            &legacy_results.display().to_string(),
+            "--artifact-root",
+            &artifacts.path().join("artifacts").display().to_string(),
+            "--label",
+            "soi-fixture",
+            "--fixture-id",
+            "ares_multi_soi",
+        ],
+    );
+    assert_success(&output, "SOI parity happy path");
+
+    let dir = artifact_dir(&artifacts.path().join("artifacts"), "parity", "soi-fixture");
+    let summary = read_json(&dir.join("parity.summary.json"));
+    assert_eq!(summary["selected_count"], 1);
+    assert_eq!(summary["region_found_count"], 1);
+    assert_eq!(summary["parity_match_count"], 1);
+    assert_eq!(summary["mismatch_count"], 0);
+    assert_eq!(
+        summary["rows"][0]["observed"]["selected_as_of"],
+        "2025-09-30"
+    );
+    assert_eq!(summary["rows"][0]["observed"]["byte_offsets_present"], true);
+
+    let mismatches = read_jsonl(&dir.join("parity.mismatches.jsonl"));
+    assert!(mismatches.is_empty(), "expected no SOI parity mismatches");
+}
+
+#[test]
+fn soi_parity_reports_metric_mismatches() {
+    let artifacts = TempDir::new().expect("create artifacts dir");
+    let legacy_results = artifacts.path().join("soi-legacy-bad.jsonl");
+    write_soi_legacy_results(
+        &legacy_results,
+        &[("ares_multi_soi", "2025-09-30", 2, [5, 5], 1)],
+    );
+
+    let output = run_script(
+        "soi_parity.sh",
+        &[
+            "--definitions-dir",
+            &rules_dir().display().to_string(),
+            "--legacy-results",
+            &legacy_results.display().to_string(),
+            "--artifact-root",
+            &artifacts.path().join("artifacts").display().to_string(),
+            "--label",
+            "soi-mismatch",
+            "--fixture-id",
+            "ares_multi_soi",
+        ],
+    );
+    assert_failure(&output, "SOI parity mismatch path", 1);
+
+    let dir = artifact_dir(
+        &artifacts.path().join("artifacts"),
+        "parity",
+        "soi-mismatch",
+    );
+    let summary = read_json(&dir.join("parity.summary.json"));
+    assert_eq!(summary["parity_match_count"], 0);
+    assert_eq!(summary["mismatch_count"], 1);
+
+    let mismatches = read_jsonl(&dir.join("parity.mismatches.jsonl"));
+    assert_eq!(mismatches.len(), 1);
+    assert!(
+        mismatches[0]["mismatches"]
+            .as_array()
+            .expect("metric mismatch array")
+            .iter()
+            .any(|entry| entry["field"] == "table_count"),
+        "expected table_count mismatch to be enumerated"
+    );
+}
+
+#[test]
+fn soi_parity_summary_is_deterministic_for_same_inputs() {
+    let artifacts = TempDir::new().expect("create artifacts dir");
+    let legacy_results = artifacts.path().join("soi-legacy-deterministic.jsonl");
+    write_soi_legacy_results(
+        &legacy_results,
+        &[("ares_multi_soi", "2025-09-30", 1, [5, 5], 1)],
+    );
+    let artifact_root = artifacts.path().join("artifacts");
+    let args = [
+        "--definitions-dir",
+        &rules_dir().display().to_string(),
+        "--legacy-results",
+        &legacy_results.display().to_string(),
+        "--artifact-root",
+        &artifact_root.display().to_string(),
+        "--label",
+        "soi-deterministic",
+        "--fixture-id",
+        "ares_multi_soi",
+    ];
+
+    let first = run_script("soi_parity.sh", &args);
+    assert_success(&first, "SOI parity deterministic first run");
+    let summary_path =
+        artifact_dir(&artifact_root, "parity", "soi-deterministic").join("parity.summary.json");
+    let first_summary = fs::read_to_string(&summary_path).expect("read first summary");
+
+    let second = run_script("soi_parity.sh", &args);
+    assert_success(&second, "SOI parity deterministic second run");
+    let second_summary = fs::read_to_string(&summary_path).expect("read second summary");
+
+    assert_eq!(first_summary, second_summary);
 }

@@ -1,0 +1,21 @@
+fingerprint_id: soi-schedule.v1
+format: html
+
+assertions:
+  - name: schedule_heading_text
+    node_text_regex:
+      selector: "h1, h2, div, p, span"
+      pattern: "(?i)schedules?\\s+of\\s+investments"
+      min_matches: 1
+  - name: schedule_tables_present
+    node_count:
+      selector: "table"
+      min: 1
+
+extract:
+  - name: schedule_region
+    type: region
+    anchor_selector: "h1, div[style*='text-align:center'][style*='font-weight:bold'], div[style*='text-align: center'][style*='font-weight: bold'], p[style*='text-align:center'][style*='font-weight:bold'], p[style*='text-align: center'][style*='font-weight: bold']"
+    stop_selector: "h1, h2.notes, div[style*='text-align:center'][style*='font-weight:bold'], div[style*='text-align: center'][style*='font-weight: bold'], p[style*='text-align:center'][style*='font-weight:bold'], p[style*='text-align: center'][style*='font-weight: bold']"
+    continue_past:
+      - "(?i)\\(continued\\)"

@@ -733,6 +733,7 @@ The HTML rollout ships with non-interactive verification entrypoints and detaile
 - `bash scripts/html_smoke.sh ...`, `bash scripts/html_diagnose.sh ...`, and `bash scripts/html_family_matrix.sh ...` write per-run artifacts under `artifacts/html-e2e/`.
 - `bash scripts/selector_region_e2e.sh` verifies selector-addressable region extraction and page-break boundaries, then writes artifacts under `artifacts/html-e2e/region/`.
 - `bash scripts/html_parity_audit.sh ...` compares routed family results against a legacy route source and writes mismatch diagnostics under `artifacts/html-e2e/parity/`.
+- `bash scripts/soi_parity.sh ...` compares selector-bounded SOI regions against legacy SOI metrics and writes `parity.summary.json` plus mismatches under `artifacts/html-e2e/parity/`.
 
 See [`docs/HTML_VERIFICATION.md`](./docs/HTML_VERIFICATION.md) for the command matrix and artifact layout. The shared harness writes parsed `--progress` events to `stderr.events.json`, `fingerprint.diagnostics` aggregates to `diagnostics.json`, and per-document routing outcomes land in `fixture.summary.jsonl` and `run.summary.json` with fields such as `child_routing_status`, `selected_child_fingerprint_id`, and `ambiguous_route_count`.
 
@@ -749,6 +750,7 @@ cargo test \
   --test selector_assertions \
   --test normalizer_freeze \
   --test selector_region \
+  --test html_parity_audit \
   --test infer_mode \
   --test infer_schema_mode \
   --test infer_subcommand \
