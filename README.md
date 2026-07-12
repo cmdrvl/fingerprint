@@ -737,6 +737,7 @@ cargo test \
   --test chained_fingerprints \
   --test content_assertion_edge_cases \
   --test selector_assertions \
+  --test normalizer_freeze \
   --test infer_mode \
   --test infer_schema_mode \
   --test infer_subcommand \

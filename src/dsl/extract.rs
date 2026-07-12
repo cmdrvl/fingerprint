@@ -223,6 +223,9 @@ fn content_document(doc: &Document) -> Option<StructuredDocument<'_>> {
     match doc {
         Document::Html(html) => Some(StructuredDocument::from_html(html)),
         Document::Markdown(markdown) => Some(StructuredDocument::from_markdown(markdown)),
+        // PDF content assertions ride the frozen markdown normalizer. Richer
+        // PDF structure is a separate authoring decision (bd-yw9), not a place
+        // to add new heuristic normalization here.
         Document::Pdf(pdf) => pdf.text.as_ref().map(StructuredDocument::from_markdown),
         _ => None,
     }

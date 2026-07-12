@@ -196,6 +196,10 @@ fn should_ignore_element(name: &str) -> bool {
     )
 }
 
+// FROZEN under SCP-0043/bd-2ht: do not add new heading, section, or page
+// heuristics here. Route new HTML structural cues to the selector assertion
+// surface in `src/dsl/assertions.rs` (`node_exists`, `node_count`,
+// `node_text_regex`, `attr_regex`).
 fn heading_level(name: &str) -> Option<u8> {
     match name {
         "h1" => Some(1),
@@ -588,6 +592,11 @@ fn row_is_separator(row: &[String]) -> bool {
     saw_non_empty
 }
 
+// FROZEN under SCP-0043/bd-2ht: this materialization layer preserves the
+// existing normalized heading/section/table model for compatibility. Do not
+// synthesize new visual headings, page models, or inferred sections here; route
+// new HTML structural cues to selector assertions and selector-anchored extract
+// definitions instead.
 fn materialize_blocks(blocks: &[HtmlBlock]) -> (String, Vec<Heading>, Vec<Section>, Vec<Table>) {
     let mut lines = Vec::new();
     let mut line_pages = Vec::new();

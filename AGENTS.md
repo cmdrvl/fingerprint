@@ -142,6 +142,12 @@ Ambient witness semantics must match spine conventions:
 - Do not put raw cell values into JSON output, refusal details, stderr warnings, test names, or witness params.
 - If a parser error happens, return a generic parse refusal with path and error class only.
 
+### 9. Normalizer freeze
+
+- The HTML/Markdown/PDF content normalizers are frozen for compatibility. Do not add new visual-heading, page-break, or “looks like structure” heuristics.
+- Route new HTML structural cues through selector assertions (`node_exists`, `node_count`, `node_text_regex`, `attr_regex`) and selector-anchored extract definitions.
+- Existing markdown passes, including bold-as-heading promotion for Docling artifacts, are grandfathered but must not expand without a superseding SCP.
+
 ## Repo Ownership Boundaries
 
 This repo owns template recognition, fingerprint DSL compilation, deterministic inference, row-shape sensing, and witness records for those operations. It does not own profile slicing, row-level reconciliation, lockfile semantics, packaging, or Homebrew tap policy beyond the release workflow files in this repo.
@@ -170,6 +176,7 @@ For focused work, use the narrow tests first, then the full gate:
 cargo test --test peek
 cargo test doctor
 cargo test --test selector_assertions
+cargo test --test normalizer_freeze
 ```
 
 ## Beads And Agent Mail
@@ -218,6 +225,7 @@ Before ending a session with repo changes:
 
 - Assertion engine: each DSL assertion type (sheet_exists, cell_eq, cell_regex, range_non_null, sheet_min_rows, filename_regex, sheet_name_regex, heading_exists, heading_regex, text_contains, text_regex, text_near, section_non_empty, section_min_lines, table_exists, table_columns, table_shape, table_min_rows, page_count, metadata_regex)
 - HTML selector assertions: node_exists, node_count, node_text_regex, attr_regex
+- Normalizer freeze guards: no styled-heading promotion, no synthesized page model, and golden stability for existing HTML normalization
 - Match/no-match/partial outcome routing and exit codes
 - Multiple `--fp` evaluation order (first match wins)
 - Content hash determinism (same content → same hash)

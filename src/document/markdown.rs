@@ -61,6 +61,9 @@ impl MarkdownDocument {
     }
 }
 
+// FROZEN under SCP-0043/bd-2ht: the existing normalization passes below are
+// grandfathered for compatibility, including Docling-style bold-as-heading
+// promotion. Do not add new passes or heuristics without a superseding SCP.
 fn normalize_markdown(content: &str) -> String {
     let mut result = content.to_string();
 

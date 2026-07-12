@@ -450,6 +450,17 @@ the content normalizer.
 Malformed selector strings are definition errors, not no-matches. Compile/check
 and installed-definition load surface them as `E_INVALID_SELECTOR`.
 
+#### Content normalizer freeze
+
+The HTML/Markdown/PDF content normalizers are frozen for compatibility. Existing
+behavior remains supported: HTML headings come only from semantic `h1`-`h6`
+tags, HTML page sections come only from existing `data-page-number` sections,
+and Markdown keeps its current setext, bold-as-heading, whitespace, and table
+normalization passes. New real-world structural cues must be expressed by the
+author through selector assertions or selector-anchored extract definitions, not
+by adding visual-heading, page-break, or “looks like structure” heuristics to the
+normalizer.
+
 ### Diagnostic context (`--diagnose`)
 
 When `--diagnose` is set and an assertion fails, the assertion result includes a `context` field showing what the document actually contains. This turns "your regex didn't match" into "here's what you should have written."
