@@ -76,6 +76,16 @@ impl HtmlDocument {
             .map_err(|error| format!("invalid CSS selector '{selector}': {error:?}"))?;
         Ok(self.dom.select(&parsed).collect())
     }
+
+    /// Return the zero-based document-order index for an element from this DOM.
+    pub fn element_order_index(&self, target: &ElementRef<'_>) -> Option<usize> {
+        self.dom
+            .tree
+            .root()
+            .descendants()
+            .filter_map(ElementRef::wrap)
+            .position(|element| element.id() == target.id())
+    }
 }
 
 /// Return true when an inline style declaration represents an intentional hard

@@ -19,7 +19,7 @@ pub struct FingerprintDefinition {
 }
 
 /// A named content extraction section.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct ExtractSection {
     pub name: String,
     #[serde(rename = "type")]
@@ -31,6 +31,12 @@ pub struct ExtractSection {
     pub within_chars: Option<u32>,
     pub sheet: Option<String>,
     pub range: Option<String>,
+    #[serde(default)]
+    pub anchor_selector: Option<String>,
+    #[serde(default)]
+    pub stop_selector: Option<String>,
+    #[serde(default)]
+    pub continue_past: Vec<String>,
 }
 
 /// Content hash configuration.

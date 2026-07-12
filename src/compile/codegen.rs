@@ -535,6 +535,9 @@ fn generate_extracted_code(extract: &[ExtractSection]) -> String {
                     anchor: {anchor},
                     pattern: {pattern},
                     within_chars: {within_chars},
+                    anchor_selector: {anchor_selector},
+                    stop_selector: {stop_selector},
+                    continue_past: {continue_past},
                 }}"#,
             name = format_args!("{:?}", section.name),
             typ = format_args!("{:?}", section.r#type),
@@ -545,6 +548,9 @@ fn generate_extracted_code(extract: &[ExtractSection]) -> String {
             anchor = codegen_option_string(section.anchor.as_deref()),
             pattern = codegen_option_string(section.pattern.as_deref()),
             within_chars = codegen_option_display(section.within_chars),
+            anchor_selector = codegen_option_string(section.anchor_selector.as_deref()),
+            stop_selector = codegen_option_string(section.stop_selector.as_deref()),
+            continue_past = codegen_string_vec(&section.continue_past),
         ));
     }
 
@@ -593,6 +599,16 @@ fn codegen_option_display<T: std::fmt::Display>(value: Option<T>) -> String {
         Some(v) => format!("Some({})", v),
         None => "None".to_owned(),
     }
+}
+
+/// Generate Rust source for `Vec<String>`.
+fn codegen_string_vec(values: &[String]) -> String {
+    let entries = values
+        .iter()
+        .map(|value| format!("{value:?}.to_owned()"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("vec![{entries}]")
 }
 
 #[cfg(test)]

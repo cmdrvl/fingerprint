@@ -479,7 +479,14 @@ fn header_token_search_candidate(
     let tokens = exemplar
         .tokens
         .iter()
-        .filter(|token| token_support.get(*token).copied().unwrap_or(0) == max_token_support)
+        .filter(|token| {
+            token_support
+                .get(*token)
+                .copied()
+                .unwrap_or(0)
+                .cmp(&max_token_support)
+                .is_eq()
+        })
         .take(2)
         .map(|token| format!("(?i){}", regex::escape(token)))
         .collect::<Vec<_>>();
@@ -596,6 +603,7 @@ fn suggested_extract(
                 within_chars: None,
                 sheet: Some(sheet),
                 range: Some("A1:D20".to_owned()),
+                ..Default::default()
             });
         }
     } else if format == "csv" {
@@ -609,6 +617,7 @@ fn suggested_extract(
             within_chars: None,
             sheet: Some("Sheet1".to_owned()),
             range: Some("A1:D20".to_owned()),
+            ..Default::default()
         });
     } else if format == "html"
         && let Some(heading) = observations
@@ -626,6 +635,7 @@ fn suggested_extract(
             within_chars: None,
             sheet: None,
             range: None,
+            ..Default::default()
         });
         sections.push(ExtractSection {
             name: "primary_section".to_owned(),
@@ -637,6 +647,7 @@ fn suggested_extract(
             within_chars: None,
             sheet: None,
             range: None,
+            ..Default::default()
         });
     }
 
@@ -899,7 +910,7 @@ mod tests {
         assert!(profile.assertions.iter().any(|entry| {
             matches!(
                 &entry.assertion.assertion,
-                Assertion::FilenameRegex { pattern } if pattern == "(?i).*\\.xls$"
+                Assertion::FilenameRegex { pattern } if matches!(pattern.as_str(), "(?i).*\\.xls$")
             )
         }));
     }

@@ -114,6 +114,7 @@ pub fn infer_schema(
             within_chars: Some(400),
             sheet: None,
             range: None,
+            ..Default::default()
         });
     }
 

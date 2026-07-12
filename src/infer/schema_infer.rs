@@ -193,6 +193,7 @@ fn locate_in_markdown(
             within_chars: Some(400),
             sheet: None,
             range: None,
+            ..Default::default()
         }),
     })
 }
@@ -243,6 +244,7 @@ fn locate_in_text(
             within_chars: Some(400),
             sheet: None,
             range: None,
+            ..Default::default()
         }),
     })
 }
@@ -272,6 +274,7 @@ fn locate_in_csv(csv: &crate::document::CsvDocument, field: &SchemaField) -> Opt
                         within_chars: None,
                         sheet: Some("Sheet1".to_owned()),
                         range: Some(format!("{cell}:{cell}")),
+                        ..Default::default()
                     }),
                 });
             }
@@ -310,6 +313,7 @@ fn locate_in_xlsx(
                             within_chars: None,
                             sheet: Some(sheet.clone()),
                             range: Some(format!("{cell}:{cell}")),
+                            ..Default::default()
                         }),
                     });
                 }

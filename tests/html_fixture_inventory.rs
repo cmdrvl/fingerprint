@@ -79,6 +79,7 @@ fn hash_extract_sections() -> Vec<ExtractSection> {
             within_chars: None,
             sheet: None,
             range: None,
+            ..Default::default()
         },
         ExtractSection {
             name: "income_cap".to_owned(),
@@ -90,6 +91,7 @@ fn hash_extract_sections() -> Vec<ExtractSection> {
             within_chars: None,
             sheet: None,
             range: None,
+            ..Default::default()
         },
         ExtractSection {
             name: "cap_rate".to_owned(),
@@ -101,6 +103,7 @@ fn hash_extract_sections() -> Vec<ExtractSection> {
             within_chars: Some(12),
             sheet: None,
             range: None,
+            ..Default::default()
         },
     ]
 }
@@ -276,7 +279,10 @@ fn html_fixture_hash_pairs_capture_stable_and_changed_content() {
                     pair.variant
                 );
             }
-            other => panic!("unexpected hash-pair expectation '{other}'"),
+            other => assert!(
+                matches!(other, "stable" | "changed"),
+                "unexpected hash-pair expectation '{other}'"
+            ),
         }
     }
 }

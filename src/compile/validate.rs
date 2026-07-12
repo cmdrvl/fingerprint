@@ -3,7 +3,7 @@ use crate::dsl::parser::{ContentHashConfig, ExtractSection, FingerprintDefinitio
 use std::collections::BTreeSet;
 
 const SUPPORTED_FORMATS: &[&str] = &["xlsx", "csv", "pdf", "markdown", "text", "html"];
-const SUPPORTED_EXTRACT_TYPES: &[&str] = &["range", "table", "section", "text_match"];
+const SUPPORTED_EXTRACT_TYPES: &[&str] = &["range", "table", "section", "text_match", "region"];
 
 pub fn validate_definition(definition: &FingerprintDefinition) -> Result<(), String> {
     validate_format(&definition.format)?;
@@ -12,7 +12,7 @@ pub fn validate_definition(definition: &FingerprintDefinition) -> Result<(), Str
         validate_assertion(&definition.format, assertion)?;
     }
 
-    validate_extract_sections(&definition.extract)?;
+    validate_extract_sections(&definition.format, &definition.extract)?;
     validate_content_hash(&definition.extract, definition.content_hash.as_ref())?;
 
     Ok(())
@@ -196,7 +196,7 @@ fn validate_usize_bounds(name: &str, min: Option<usize>, max: Option<usize>) -> 
     Ok(())
 }
 
-fn validate_extract_sections(extract: &[ExtractSection]) -> Result<(), String> {
+fn validate_extract_sections(format: &str, extract: &[ExtractSection]) -> Result<(), String> {
     for section in extract {
         if section.name.trim().is_empty() {
             return Err("extract.name must not be empty".to_owned());
@@ -220,6 +220,35 @@ fn validate_extract_sections(extract: &[ExtractSection]) -> Result<(), String> {
                     ));
                 }
             }
+            "region" => {
+                require_region_html_format(format)?;
+                require_extract_field(
+                    section,
+                    section.anchor_selector.as_ref(),
+                    "anchor_selector",
+                )?;
+                require_extract_field(section, section.stop_selector.as_ref(), "stop_selector")?;
+                if let Some(selector) = &section.anchor_selector {
+                    validate_selector("region.anchor_selector", selector)?;
+                }
+                if let Some(selector) = &section.stop_selector {
+                    validate_selector("region.stop_selector", selector)?;
+                }
+                for pattern in &section.continue_past {
+                    if pattern.trim().is_empty() {
+                        return Err(format!(
+                            "extract '{}' of type 'region' has empty continue_past pattern",
+                            section.name
+                        ));
+                    }
+                    regex::Regex::new(pattern).map_err(|error| {
+                        format!(
+                            "extract '{}' of type 'region' has invalid continue_past regex '{}': {error}",
+                            section.name, pattern
+                        )
+                    })?;
+                }
+            }
             other => {
                 return Err(format!(
                     "unsupported extract type '{other}'; supported extract types are {}",
@@ -230,6 +259,16 @@ fn validate_extract_sections(extract: &[ExtractSection]) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn require_region_html_format(format: &str) -> Result<(), String> {
+    if format == "html" {
+        Ok(())
+    } else {
+        Err(format!(
+            "extract type 'region' is html-only and requires format 'html', found '{format}'"
+        ))
+    }
 }
 
 fn require_extract_field(
@@ -336,6 +375,7 @@ mod tests {
                 within_chars: None,
                 sheet: None,
                 range: None,
+                ..Default::default()
             }],
             content_hash: Some(ContentHashConfig {
                 algorithm: "blake3".to_owned(),

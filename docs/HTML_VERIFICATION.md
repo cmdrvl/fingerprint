@@ -15,17 +15,19 @@ bash scripts/html_verify.sh
 
 This is the non-interactive command intended for CI or local pre-merge checks.
 
-## Selector-addressable page-breaks
+## Selector-addressable regions and page-breaks
 
-Verify that raw HTML page-break boundaries remain addressable through selector
-assertions without adding a synthesized page model:
+Verify that selector-anchored HTML regions emit only bounds/indices and that raw
+HTML page-break boundaries remain addressable without adding a synthesized page
+model:
 
 ```bash
 bash scripts/selector_region_e2e.sh
 ```
 
-The wrapper writes artifacts under `artifacts/html-e2e/region/selector/` and
-uses the existing HTML e2e harness.
+The wrapper writes artifacts under `artifacts/html-e2e/region/selector/`, uses
+the existing HTML e2e harness, and records `region_table_count` plus
+`region_page_span` in `run.summary.json`.
 
 ## Legacy parity audit
 

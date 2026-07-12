@@ -701,7 +701,7 @@ pub fn dsl_json_schema() -> String {
                     "name": { "type": "string", "minLength": 1 },
                     "type": {
                         "type": "string",
-                        "enum": ["range", "table", "section", "text_match"]
+                        "enum": ["range", "table", "section", "text_match", "region"]
                     },
                     "anchor_heading": { "type": "string" },
                     "index": { "type": "integer", "minimum": 0 },
@@ -710,6 +710,12 @@ pub fn dsl_json_schema() -> String {
                     "within_chars": { "type": "integer", "minimum": 0 },
                     "sheet": { "type": "string" },
                     "range": { "type": "string" },
+                    "anchor_selector": { "type": "string" },
+                    "stop_selector": { "type": "string" },
+                    "continue_past": {
+                        "type": "array",
+                        "items": { "type": "string", "minLength": 1 },
+                    },
                 },
             },
             "contentHashConfig": {
@@ -902,6 +908,24 @@ assertions:
                 assertion_key
             );
         }
+    }
+
+    #[test]
+    fn schema_supports_region_extract_type() {
+        let parsed: Value =
+            serde_json::from_str(&dsl_json_schema()).expect("schema should be valid JSON");
+        let extract_section = &parsed["$defs"]["extractSection"];
+        let extract_type_enum = extract_section["properties"]["type"]["enum"]
+            .as_array()
+            .expect("extract type enum should be an array");
+        let properties = extract_section["properties"]
+            .as_object()
+            .expect("extract section properties should be an object");
+
+        assert!(extract_type_enum.contains(&Value::String("region".to_owned())));
+        assert!(properties.contains_key("anchor_selector"));
+        assert!(properties.contains_key("stop_selector"));
+        assert!(properties.contains_key("continue_past"));
     }
 
     #[test]

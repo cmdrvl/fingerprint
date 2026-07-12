@@ -178,6 +178,7 @@ cargo test doctor
 cargo test --test selector_assertions
 cargo test --test normalizer_freeze
 cargo test --test selector_region
+bash scripts/selector_region_e2e.sh
 ```
 
 ## Beads And Agent Mail

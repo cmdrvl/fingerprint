@@ -1,10 +1,11 @@
+use crate::document::html::{HtmlDocument, is_hard_page_break};
 use crate::document::{Document, StructuredDocument};
 use crate::dsl::parser::ExtractSection;
 use calamine::{Reader, open_workbook_auto};
 use regex::Regex;
 use serde_json::Value;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 type CellRef = (usize, usize);
@@ -34,6 +35,7 @@ fn extract_one(doc: &Document, section: &ExtractSection) -> Result<Option<Value>
         "section" => extract_section(doc, section),
         "table" => extract_table(doc, section),
         "text_match" => extract_text_match(doc, section),
+        "region" => extract_region(doc, section),
         other => Err(format!("unsupported extract type '{other}'")),
     }
 }
@@ -219,6 +221,176 @@ fn extract_text_match(doc: &Document, section: &ExtractSection) -> Result<Option
     })))
 }
 
+#[derive(Debug, Clone, Copy)]
+struct LocatedElement {
+    order: usize,
+    byte_end: usize,
+    line: usize,
+}
+
+fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Value>, String> {
+    let Document::Html(html) = doc else {
+        return Ok(None);
+    };
+
+    let anchor_selector = section
+        .anchor_selector
+        .as_deref()
+        .ok_or_else(|| "region extract requires 'anchor_selector'".to_owned())?;
+    let stop_selector = section
+        .stop_selector
+        .as_deref()
+        .ok_or_else(|| "region extract requires 'stop_selector'".to_owned())?;
+
+    let anchor_nodes = html.select_nodes(anchor_selector)?;
+    let Some(anchor) = anchor_nodes.first().copied() else {
+        return Ok(None);
+    };
+    let Some(anchor) = locate_element(html, anchor, 0) else {
+        return Ok(None);
+    };
+
+    let continue_past = section
+        .continue_past
+        .iter()
+        .map(|pattern| {
+            Regex::new(pattern)
+                .map_err(|error| format!("invalid continue_past regex '{pattern}': {error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let stop_nodes = html.select_nodes(stop_selector)?;
+    let stop = stop_nodes
+        .into_iter()
+        .filter_map(|node| {
+            let order = html.element_order_index(&node)?;
+            (order > anchor.order).then_some((order, node))
+        })
+        .find_map(|(_, node)| {
+            let text = selector_node_text(node);
+            if continue_past
+                .iter()
+                .any(|pattern| pattern.is_match(text.as_str()))
+            {
+                return None;
+            }
+            locate_element(html, node, anchor.byte_end)
+        });
+
+    let end_line = stop
+        .map(|stop| stop.line)
+        .unwrap_or_else(|| html.normalized.lines().count() + 1);
+    let end_line = end_line.max(anchor.line + 1);
+    let stop_order = stop.map(|stop| stop.order);
+
+    let table_indices = html
+        .tables
+        .iter()
+        .filter(|table| table.start_line >= anchor.line && table.start_line < end_line)
+        .map(|table| table.index)
+        .collect::<Vec<_>>();
+    let page_span = region_page_span(html, anchor.line, end_line, anchor.order, stop_order)?;
+
+    Ok(Some(json!({
+        "start_line": anchor.line,
+        "end_line": end_line,
+        "table_indices": table_indices,
+        "page_span": page_span,
+    })))
+}
+
+fn locate_element(
+    html: &HtmlDocument,
+    element: scraper::ElementRef<'_>,
+    search_start: usize,
+) -> Option<LocatedElement> {
+    let text = selector_node_text(element);
+    if text.is_empty() {
+        return None;
+    }
+    let bounded_start = search_start.min(html.normalized.len());
+    let relative_start = html.normalized[bounded_start..].find(text.as_str())?;
+    let byte_start = bounded_start + relative_start;
+    let byte_end = byte_start + text.len();
+    let line = html.normalized[..byte_start]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count()
+        + 1;
+    let order = html.element_order_index(&element)?;
+
+    Some(LocatedElement {
+        order,
+        byte_end,
+        line,
+    })
+}
+
+fn selector_node_text(node: scraper::ElementRef<'_>) -> String {
+    node.text()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn region_page_span(
+    html: &HtmlDocument,
+    start_line: usize,
+    end_line: usize,
+    start_order: usize,
+    stop_order: Option<usize>,
+) -> Result<[usize; 2], String> {
+    let mut data_pages = BTreeSet::new();
+    for section in &html.sections {
+        if ranges_overlap(
+            start_line,
+            end_line,
+            section.start_line,
+            section.end_line + 1,
+        ) && let Some(page) = section.page
+        {
+            data_pages.insert(page as usize);
+        }
+    }
+    for table in &html.tables {
+        if table.start_line >= start_line
+            && table.start_line < end_line
+            && let Some(page) = table.page
+        {
+            data_pages.insert(page as usize);
+        }
+    }
+    if let (Some(first), Some(last)) = (data_pages.first(), data_pages.last()) {
+        return Ok([*first, *last]);
+    }
+
+    let hard_break_orders = html
+        .select_nodes(r#"[style*="break"]"#)?
+        .into_iter()
+        .filter(|node| node.value().attr("style").is_some_and(is_hard_page_break))
+        .filter_map(|node| html.element_order_index(&node))
+        .collect::<Vec<_>>();
+    let before_start = hard_break_orders
+        .iter()
+        .filter(|order| **order < start_order)
+        .count();
+    let span_end_order = stop_order.unwrap_or(usize::MAX);
+    let within_span = hard_break_orders
+        .iter()
+        .filter(|order| **order >= start_order && **order < span_end_order)
+        .count();
+    let first_page = before_start + 1;
+    let last_page = first_page + within_span;
+
+    Ok([first_page, last_page])
+}
+
+fn ranges_overlap(start_a: usize, end_a: usize, start_b: usize, end_b: usize) -> bool {
+    start_a < end_b && start_b < end_a
+}
+
 fn content_document(doc: &Document) -> Option<StructuredDocument<'_>> {
     match doc {
         Document::Html(html) => Some(StructuredDocument::from_html(html)),
@@ -400,6 +572,7 @@ mod tests {
             within_chars: None,
             sheet: Some("Sheet1".to_owned()),
             range: Some("A1:C3".to_owned()),
+            ..Default::default()
         }];
 
         let extracted = extract(&doc, &sections).expect("extract range");
@@ -428,6 +601,7 @@ mod tests {
                 within_chars: None,
                 sheet: None,
                 range: None,
+                ..Default::default()
             },
             ExtractSection {
                 name: "income_cap_section".to_owned(),
@@ -439,6 +613,7 @@ mod tests {
                 within_chars: None,
                 sheet: None,
                 range: None,
+                ..Default::default()
             },
             ExtractSection {
                 name: "as_of_date".to_owned(),
@@ -450,6 +625,7 @@ mod tests {
                 within_chars: Some(100),
                 sheet: None,
                 range: None,
+                ..Default::default()
             },
         ];
 
@@ -486,6 +662,7 @@ mod tests {
             within_chars: None,
             sheet: None,
             range: None,
+            ..Default::default()
         }];
 
         let extracted = extract(&doc, &sections).expect("missing target should be non-fatal");
@@ -517,6 +694,7 @@ mod tests {
             within_chars: None,
             sheet: None,
             range: None,
+            ..Default::default()
         }];
 
         let extracted = extract(&doc, &sections).expect("extract section from pdf text");
@@ -551,6 +729,7 @@ mod tests {
                 within_chars: None,
                 sheet: None,
                 range: None,
+                ..Default::default()
             },
             ExtractSection {
                 name: "income_cap_section".to_owned(),
@@ -562,6 +741,7 @@ mod tests {
                 within_chars: None,
                 sheet: None,
                 range: None,
+                ..Default::default()
             },
             ExtractSection {
                 name: "as_of_date".to_owned(),
@@ -573,6 +753,7 @@ mod tests {
                 within_chars: Some(100),
                 sheet: None,
                 range: None,
+                ..Default::default()
             },
         ];
 

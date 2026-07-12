@@ -249,6 +249,11 @@ Fingerprint doesn't just check filenames and magic bytes. It understands the int
 | `node_text_regex` | Text of selected DOM nodes matches a regex at least `min_matches` times |
 | `attr_regex` | Attribute value on selected DOM nodes matches a regex at least `min_matches` times |
 
+HTML fingerprints can also use selector-anchored `type: region` extracts. A
+region starts at the first `anchor_selector` match, ends before the next
+`stop_selector` match, and emits only bounds/indices:
+`start_line`, `end_line`, `table_indices`, and `page_span`.
+
 ### Universal
 
 | Assertion | What it checks |
@@ -722,7 +727,7 @@ The HTML rollout ships with non-interactive verification entrypoints and detaile
 
 - `bash scripts/html_verify.sh` runs the local repository verification surface.
 - `bash scripts/html_smoke.sh ...`, `bash scripts/html_diagnose.sh ...`, and `bash scripts/html_family_matrix.sh ...` write per-run artifacts under `artifacts/html-e2e/`.
-- `bash scripts/selector_region_e2e.sh` verifies selector-addressable page-break boundaries and writes artifacts under `artifacts/html-e2e/region/`.
+- `bash scripts/selector_region_e2e.sh` verifies selector-addressable region extraction and page-break boundaries, then writes artifacts under `artifacts/html-e2e/region/`.
 - `bash scripts/html_parity_audit.sh ...` compares routed family results against a legacy route source and writes mismatch diagnostics under `artifacts/html-e2e/parity/`.
 
 See [`docs/HTML_VERIFICATION.md`](./docs/HTML_VERIFICATION.md) for the command matrix and artifact layout. The shared harness writes parsed `--progress` events to `stderr.events.json`, `fingerprint.diagnostics` aggregates to `diagnostics.json`, and per-document routing outcomes land in `fixture.summary.jsonl` and `run.summary.json` with fields such as `child_routing_status`, `selected_child_fingerprint_id`, and `ambiguous_route_count`.
