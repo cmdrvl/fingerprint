@@ -1,0 +1,29 @@
+fingerprint_id: soi-schedule.v2
+format: html
+
+assertions:
+  - name: schedule_heading_text
+    node_text_regex:
+      selector: "h1, h2, h3, div, p, span"
+      pattern: "(?i)schedu\\s*les?\\s+of\\s+(portfolio\\s+)?investments"
+      min_matches: 1
+  - name: schedule_tables_present
+    node_count:
+      selector: "table"
+      min: 1
+
+extract:
+  - name: schedule_region
+    type: region
+    # anchor on any element whose text is the SOI title (center-span titles, headings).
+    # Covers "(Consolidated|Condensed) Schedule of [Portfolio] Investments" title variants.
+    anchor_selector: "h1, h2, h3, p, span, div"
+    anchor_text_regex: "(?i)^\\s*(consolidated\\s+|condensed\\s+)?schedu\\s*les?\\s+of\\s+(portfolio\\s+)?investments"
+    # stop ONLY at a genuine section end: Notes to Financial Statements, or the next Item.
+    # Do NOT stop on a repeated 'Schedule of Investments' running header (that's a continuation).
+    stop_selector: "h1, h2, h3, p, span, div"
+    stop_text_regex: "(?i)^\\s*(notes\\s+to\\s+(the\\s+)?(unaudited\\s+)?(consolidated\\s+)?financial\\s+statements|item\\s+[0-9])"
+    continue_past:
+      - "(?i)\\(continued\\)"
+      - "(?i)\\bcontinued\\b"
+      - "(?i)^\\s*(consolidated\\s+|condensed\\s+)?schedu\\s*les?\\s+of\\s+(portfolio\\s+)?investments\\s*$"
