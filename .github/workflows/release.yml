@@ -176,6 +176,7 @@ jobs:
           DIST_DIR="dist/${TARGET}"
           mkdir -p "${DIST_DIR}"
           cp "target/${TARGET}/release/${BIN}" "${DIST_DIR}/fingerprint"
+          cp LICENSE "${DIST_DIR}/"
           tar -czf "fingerprint-${VERSION}-${TARGET}.tar.gz" -C "${DIST_DIR}" .
 
       - name: package archive (windows)
@@ -188,6 +189,7 @@ jobs:
           $DistDir = "dist/$Target"
           New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
           Copy-Item "target/$Target/release/$Bin" "$DistDir/fingerprint.exe"
+          Copy-Item LICENSE $DistDir
           Compress-Archive -Path "$DistDir/*" -DestinationPath "fingerprint-$Version-$Target.zip" -Force
 
       - name: upload build archive
