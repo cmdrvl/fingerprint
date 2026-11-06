@@ -714,6 +714,7 @@ pub fn dsl_json_schema() -> String {
                     "anchor_text_regex": { "type": "string" },
                     "stop_selector": { "type": "string" },
                     "stop_text_regex": { "type": "string" },
+                    "coalesce_by_as_of": { "type": "boolean", "default": true },
                     "continue_past": {
                         "type": "array",
                         "items": { "type": "string", "minLength": 1 },
@@ -930,6 +931,8 @@ assertions:
         assert!(properties.contains_key("stop_selector"));
         assert!(properties.contains_key("stop_text_regex"));
         assert!(properties.contains_key("continue_past"));
+        assert_eq!(properties["coalesce_by_as_of"]["type"], "boolean");
+        assert_eq!(properties["coalesce_by_as_of"]["default"], true);
     }
 
     #[test]
