@@ -10,6 +10,88 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::{NamedTempFile, tempdir};
 
+#[test]
+fn tokenized_region_offsets_preserve_exact_source_bytes() {
+    let raw = "<HTML><BODY>é🙂<H1 title='a > b' class=soi>Schedule of Investments</H1><table><tr><td>Alpha</td></tr></table><H2 class=notes>Notes</H2></BODY></HTML>";
+    let file = make_temp_html(raw);
+    let mut section = region_section("soi_region", "h1.soi", "h2.notes");
+    let legacy = region_value(file.path(), section.clone()).unwrap();
+    assert_eq!(legacy["byte_offsets"], Value::Null);
+    section.tokenized_byte_offsets = Some(false);
+    assert_eq!(region_value(file.path(), section.clone()).unwrap(), legacy);
+    section.tokenized_byte_offsets = Some(true);
+    let mapped = region_value(file.path(), section).unwrap();
+    let start = raw.find("<H1").unwrap();
+    let end = raw.find("<H2").unwrap();
+    assert_eq!(
+        mapped["byte_offsets"],
+        serde_json::json!({"start":start,"end":end})
+    );
+    assert_eq!(mapped["table_indices"], serde_json::json!([0]));
+    for field in ["start_line", "end_line", "page_span", "as_of"] {
+        assert_eq!(mapped[field], legacy[field]);
+    }
+    assert!(raw[start..end].contains("Alpha"));
+    assert!(!raw[start..end].contains("<H2"));
+}
+
+#[test]
+fn tokenized_offsets_bind_identical_heading_to_its_selected_ancestor() {
+    let raw = "<section class='decoy'><h1>Schedule</h1></section><section class='target'><h1>Schedule</h1><table><tr><td>Kept</td></tr></table></section><h2>Notes</h2>";
+    let file = make_temp_html(raw);
+    let mut section = region_section("soi_region", ".target h1", "h2");
+    section.tokenized_byte_offsets = Some(true);
+    let mapped = region_value(file.path(), section).unwrap();
+    assert_eq!(mapped["byte_offsets"]["start"], raw.rfind("<h1>").unwrap());
+    assert_eq!(mapped["byte_offsets"]["end"], raw.find("<h2>").unwrap());
+}
+
+#[test]
+fn tokenized_offsets_do_not_claim_lossy_utf8_positions() {
+    let mut file = NamedTempFile::with_suffix(".html").unwrap();
+    file.write_all(b"<html><body>\xff<h1>Schedule</h1><table><tr><td>Alpha</td></tr></table><h2>Notes</h2></body></html>").unwrap();
+    file.flush().unwrap();
+    let mut section = region_section("soi_region", "h1", "h2");
+    section.tokenized_byte_offsets = Some(true);
+    let mapped = region_value(file.path(), section).unwrap();
+    assert_eq!(mapped["byte_offsets"], Value::Null);
+    assert_eq!(mapped["table_indices"], serde_json::json!([0]));
+}
+
+#[test]
+fn tokenized_offsets_to_eof_are_deterministic() {
+    let raw = "<H1 class=soi>Schedule</H1><table><tr><td>Alpha</td></tr></table>";
+    let file = make_temp_html(raw);
+    let mut section = region_section("soi_region", "h1.soi", "h2.notes");
+    section.tokenized_byte_offsets = Some(true);
+    let first = region_value(file.path(), section.clone()).unwrap();
+    assert_eq!(
+        first["byte_offsets"],
+        serde_json::json!({"start":0,"end":raw.len()})
+    );
+    assert_eq!(first, region_value(file.path(), section).unwrap());
+}
+
+#[test]
+fn tokenized_option_roundtrips_without_changing_absent_serialization() {
+    let absent: ExtractSection = serde_yaml::from_str("name: region\ntype: region\n").unwrap();
+    assert!(
+        serde_json::to_value(&absent)
+            .unwrap()
+            .get("tokenized_byte_offsets")
+            .is_none()
+    );
+    let explicit: ExtractSection =
+        serde_yaml::from_str("name: region\ntype: region\ntokenized_byte_offsets: true\n").unwrap();
+    assert_eq!(explicit.tokenized_byte_offsets, Some(true));
+    assert!(
+        serde_yaml::from_str::<ExtractSection>(
+            "name: region\ntype: region\ntokenized_byte_offsets: invalid\n"
+        )
+        .is_err()
+    );
+}
+
 fn fixture(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
 }

@@ -1,0 +1,15 @@
+{
+  "Cargo.lock": "f6a58b1b2447153d5541e9b63fd5cd7e806cd4e99bb44e234e26186a3dd8b794",
+  "Cargo.toml": "ea7f4256ac55e22efff4169168918236bd074e5c0d12db9d2bffb179532c8b0a",
+  "docs/DSL_REFERENCE.md": "207bc66df8f400d68c61a137416ba70914a1b21cf8272685b5e00db638db0acf",
+  "docs/PLAN.md": "3082d0b386161aeda1c715678005824dadca6a04106c7a7aeb603ea7821d86fe",
+  "src/compile/codegen.rs": "374591a833f62adc92e37e6b8eaf77a8436a0ee53626d33fc49711c1f316a917",
+  "src/compile/schema.rs": "3b8a5b6ae27f5d4a8ea05f7b7bf37570aa0a587579617ce3a0abad7c471fce1d",
+  "src/document/html.rs": "5c2a6939f64f4f27ccfafd48df3d4eaf21fc76467ee9575d9a0910e8b9b47ad6",
+  "src/document/mod.rs": "cd544e0a2952098bd1c6f540281aba448fb303bb32ce3f99919d19d7d42fdbb1",
+  "src/dsl/extract.rs": "f03d5d48a285c05f39f3a2d5970f268ef461f507169889c56909d5d6a6d0fd1b",
+  "src/dsl/parser.rs": "f3852b5751ae32f3c437868ca1394c82aa526c027de721aacba8cbb93f7b3c16",
+  "tests/selector_region.rs": "c587c9bd80f939f9e83701c1dec8908257a328675f020eea672a6f558a0e1508",
+  "src/document/html_source.rs": "ea7624b942dbb32e31e064667278049dd8bc049d0132dec55cb6ceac772b9d5b",
+  "target/debug/fingerprint": "642cc7a54b1b8df8f348452d055e8558c4bbe37c91e1b82a498de3d8edbfff69"
+}

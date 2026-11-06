@@ -619,6 +619,14 @@ Content extract rules specify how to locate and delimit content regions for hash
 - If an extract rule cannot locate its target (e.g., table not found at the expected index), the rule is omitted from `extracted` with a warning, but the match still holds (extract failure is non-fatal).
 - `region` is HTML-only. Malformed `anchor_selector` or `stop_selector` values are definition errors. Optional `anchor_text_regex` and `stop_text_regex` fields filter the selected DOM nodes by visible node text without adding normalizer heuristics; malformed text-filter regexes are definition errors. `continue_past` regexes suppress broad stop candidates such as repeated `(continued)` running headers. Setting `coalesce_by_as_of: false` preserves declared same-period subsection boundaries while still honoring `continue_past`; the absent/true setting retains existing running-header coalescing. Region output must not include copied document text. One anchor emits one region object; multiple anchors emit `{ "regions": [...] }` in document order with per-region `as_of` dates or `null`. `table_indices` indexes raw DOM `<table>` elements in document order within the selector-bounded span; it does not depend on the frozen normalized table model. `byte_offsets` indexes the original HTML source when scraper-serialized nodes can be located by a deterministic monotonic cursor; otherwise it is `null` and the line/table-index bounds remain authoritative.
 
+- Optional `tokenized_byte_offsets: true` on a region uses source start-tag locations
+  mapped to the existing DOM after full canonical DOM equality verification. It
+  preserves the absent/false serialized-locator behavior. Only unique explicit
+  source nodes receive offsets; implicit or cloned nodes, invalid UTF-8 input and
+  failed DOM equivalence retain null offsets. Bounds still run from anchor start
+  to boundary start (or EOF). Selectors, dates, line/table bounds and normalizers
+  are unchanged. No copied source content enters output.
+
 ### Compiling DSL to Rust
 
 ```bash

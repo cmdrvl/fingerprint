@@ -1,4 +1,5 @@
 use crate::document::html::{HtmlDocument, is_hard_page_break};
+use crate::document::html_source::{SourceLocations, source_locations};
 use crate::document::{Document, StructuredDocument};
 use crate::dsl::parser::ExtractSection;
 use calamine::{Reader, open_workbook_auto};
@@ -248,6 +249,25 @@ struct RegionBoundary {
     raw_span: Option<RawElementSpan>,
 }
 
+struct RawLocator<'a> {
+    html: &'a HtmlDocument,
+    tokenized: bool,
+    locations: Option<SourceLocations>,
+}
+
+impl RawLocator<'_> {
+    fn locate(&self, node: scraper::ElementRef<'_>, search_start: usize) -> Option<RawElementSpan> {
+        if !self.tokenized {
+            return locate_raw_element(self.html, node, search_start);
+        }
+        let span = self.locations.as_ref()?.get(&node.id())?;
+        (span.start >= search_start).then_some(RawElementSpan {
+            start: span.start,
+            end: span.end,
+        })
+    }
+}
+
 fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Value>, String> {
     let Document::Html(html) = doc else {
         return Ok(None);
@@ -275,6 +295,12 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    let tokenized = section.tokenized_byte_offsets.unwrap_or(false);
+    let raw_locator = RawLocator {
+        html,
+        tokenized,
+        locations: tokenized.then(|| source_locations(html)).flatten(),
+    };
     let mut anchor_search_start = 0usize;
     let mut raw_anchor_search_start = 0usize;
     let anchors = html
@@ -284,7 +310,7 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
         .filter_map(|node| {
             let located = locate_element(html, node, anchor_search_start)?;
             anchor_search_start = located.byte_end;
-            let raw_span = locate_raw_element(html, node, raw_anchor_search_start);
+            let raw_span = raw_locator.locate(node, raw_anchor_search_start);
             if let Some(span) = raw_span {
                 raw_anchor_search_start = span.end;
             }
@@ -335,7 +361,7 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
             continue;
         }
         let stop = first_region_stop(
-            html,
+            &raw_locator,
             &stop_nodes,
             anchor.node,
             anchor.normalized,
@@ -451,7 +477,7 @@ fn node_matches_optional_regex(node: scraper::ElementRef<'_>, regex: Option<&Reg
 }
 
 fn first_region_stop(
-    html: &HtmlDocument,
+    raw_locator: &RawLocator<'_>,
     stop_nodes: &[scraper::ElementRef<'_>],
     anchor_node: scraper::ElementRef<'_>,
     anchor: LocatedElement,
@@ -459,6 +485,7 @@ fn first_region_stop(
     continue_past: &[Regex],
     anchor_as_of: Option<&str>,
 ) -> Option<RegionBoundary> {
+    let html = raw_locator.html;
     stop_nodes
         .iter()
         .copied()
@@ -482,7 +509,7 @@ fn first_region_stop(
             }
             Some(RegionBoundary {
                 normalized: located,
-                raw_span: raw_search_start.and_then(|start| locate_raw_element(html, node, start)),
+                raw_span: raw_search_start.and_then(|start| raw_locator.locate(node, start)),
             })
         })
 }

@@ -1,0 +1,891 @@
+{
+  "invalid_lines": [],
+  "raw_text": "{\"bytes_hash\":\"sha256:fcb6b25d85aa07e24212d2dd961e3541debf0c7500ea4dfb4f78c7c5ae624908\",\"extension\":\".htm\",\"fingerprint\":{\"assertions\":[{\"detail\":null,\"name\":\"schedule_heading_text\",\"passed\":true},{\"detail\":null,\"name\":\"schedule_tables_present\",\"passed\":true}],\"content_hash\":null,\"extracted\":{\"schedule_region\":{\"regions\":[{\"anchor_selector\":\"h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span\",\"as_of\":\"2025-09-30\",\"byte_offsets\":{\"end\":9904988,\"start\":2861825},\"end_line\":3049,\"page_span\":[5,68],\"start_line\":218,\"stop_selector\":\"h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p\",\"table_indices\":[9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72]},{\"anchor_selector\":\"h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span\",\"as_of\":\"2024-12-31\",\"byte_offsets\":{\"end\":22239259,\"start\":11834014},\"end_line\":8137,\"page_span\":[82,198],\"start_line\":3668,\"stop_selector\":\"h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p\",\"table_indices\":[86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145,146,147,148,149,150,151,152,153,154,155,156,157,158,159,160,161,162,163,164,165,166,167,168,169,170,171,172,173,174,175,176,177,178,179,180,181,182,183,184,185,186,187,188,189,190,191,192,193,194,195,196,197,198,199,200,201,202,203,204,205,206,207,208,209,210,211,212,213]}]}},\"fingerprint_crate\":\"dsl-runtime:soi-schedule.v1.fp.yaml\",\"fingerprint_id\":\"soi-schedule.v1\",\"fingerprint_source\":\"installed:soi-schedule.v1\",\"fingerprint_version\":\"0.12.0\",\"matched\":true,\"reason\":null},\"path\":\"/private/tmp/bdc-six-filer-parity-20261106/input/ares-capital_2025-09-30.htm\",\"tool_versions\":{\"fingerprint\":\"0.12.0\"},\"version\":\"fingerprint.v0\"}\n{\"bytes_hash\":\"sha256:e26bbd9422d3ab1b572e4b388daf504c6f8c996ef2f6be77b5f4719d74b25617\",\"extension\":\".htm\",\"fingerprint\":{\"assertions\":[{\"detail\":null,\"name\":\"schedule_heading_text\",\"passed\":true},{\"detail\":null,\"name\":\"schedule_tables_present\",\"passed\":true}],\"content_hash\":null,\"extracted\":{\"schedule_region\":{\"regions\":[{\"anchor_selector\":\"h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span\",\"as_of\":\"2025-09-30\",\"byte_offsets\":{\"end\":2093818,\"start\":295790},\"end_line\":449,\"page_span\":[4,10],\"start_line\":141,\"stop_selector\":\"h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p\",\"table_indices\":[6,7,8,9,10]},{\"anchor_selector\":\"h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span\",\"as_of\":\"2024-12-31\",\"byte_offsets\":{\"end\":5006222,\"start\":2093818},\"end_line\":940,\"page_span\":[11,21],\"start_line\":449,\"stop_selector\":\"h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p\",\"table_indices\":[11,12,13,14,15,16,17,18,19,20]}]}},\"fingerprint_crate\":\"dsl-runtime:soi-schedule.v1.fp.yaml\",\"fingerprint_id\":\"soi-schedule.v1\",\"fingerprint_source\":\"installed:soi-schedule.v1\",\"fingerprint_version\":\"0.12.0\",\"matched\":true,\"reason\":null},\"path\":\"/private/tmp/bdc-six-filer-parity-20261106/input/oxford-square-capital-corp_2025-09-30.htm\",\"tool_versions\":{\"fingerprint\":\"0.12.0\"},\"version\":\"fingerprint.v0\"}\n{\"bytes_hash\":\"sha256:866cd519a01cdb01b586387a800cad1bede15f66af35329c6858019e9dbe0b9c\",\"extension\":\".htm\",\"fingerprint\":{\"assertions\":[{\"detail\":null,\"name\":\"schedule_heading_text\",\"passed\":true},{\"detail\":null,\"name\":\"schedule_tables_present\",\"passed\":true}],\"content_hash\":null,\"extracted\":{\"schedule_region\":{\"regions\":[{\"anchor_selector\":\"h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span\",\"as_of\":\"2023-09-30\",\"byte_offsets\":{\"end\":6841954,\"start\":2997783},\"end_line\":919,\"page_span\":[8,15],\"start_line\":380,\"stop_selector\":\"h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p\",\"table_indices\":[9,10,11,12,13,14,15,16,17,18]},{\"anchor_selector\":\"h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span\",\"as_of\":\"2022-12-31\",\"byte_offsets\":{\"end\":13470104,\"start\":6841954},\"end_line\":3579,\"page_span\":[16,64],\"start_line\":919,\"stop_selector\":\"h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p\",\"table_indices\":[19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66]}]}},\"fingerprint_crate\":\"dsl-runtime:soi-schedule.v1.fp.yaml\",\"fingerprint_id\":\"soi-schedule.v1\",\"fingerprint_source\":\"installed:soi-schedule.v1\",\"fingerprint_version\":\"0.12.0\",\"matched\":true,\"reason\":null},\"path\":\"/private/tmp/bdc-six-filer-parity-20261106/input/blackrock-kelso_2023-09-30.htm\",\"tool_versions\":{\"fingerprint\":\"0.12.0\"},\"version\":\"fingerprint.v0\"}\n{\"bytes_hash\":\"sha256:393350e847abe39ea5501b7b1fae3d495513bd7192d1a77422074cc19bc2cec4\",\"extension\":\".htm\",\"fingerprint\":{\"assertions\":[{\"detail\":null,\"name\":\"schedule_heading_text\",\"passed\":true},{\"detail\":null,\"name\":\"schedule_tables_present\",\"passed\":true}],\"content_hash\":null,\"extracted\":{\"schedule_region\":{\"regions\":[{\"anchor_selector\":\"h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span\",\"as_of\":\"2025-09-30\",\"byte_offsets\":{\"end\":6480596,\"start\":2056281},\"end_line\":2430,\"page_span\":[11,54],\"start_line\":431,\"stop_selector\":\"h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p\",\"table_indices\":[16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60]},{\"anchor_selector\":\"h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span\",\"as_of\":\"2024-12-31\",\"byte_offsets\":{\"end\":10266616,\"start\":6480596},\"end_line\":4125,\"page_span\":[55,90],\"start_line\":2430,\"stop_selector\":\"h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p\",\"table_indices\":[61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98]}]}},\"fingerprint_crate\":\"dsl-runtime:soi-schedule.v1.fp.yaml\",\"fingerprint_id\":\"soi-schedule.v1\",\"fingerprint_source\":\"installed:soi-schedule.v1\",\"fingerprint_version\":\"0.12.0\",\"matched\":true,\"reason\":null},\"path\":\"/private/tmp/bdc-six-filer-parity-20261106/input/blackstone-secured-lending-fund_2025-09-30.htm\",\"tool_versions\":{\"fingerprint\":\"0.12.0\"},\"version\":\"fingerprint.v0\"}\n{\"bytes_hash\":\"sha256:4c0ed299ae7e752afdd383056b3603ab937e43fb8864bde7d5b52a92ba28a430\",\"extension\":\".htm\",\"fingerprint\":{\"assertions\":[{\"detail\":null,\"name\":\"schedule_heading_text\",\"passed\":true},{\"detail\":null,\"name\":\"schedule_tables_present\",\"passed\":true}],\"content_hash\":null,\"extracted\":{\"schedule_region\":{\"regions\":[{\"anchor_selector\":\"h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span\",\"as_of\":\"2025-12-31\",\"byte_offsets\":{\"end\":12215159,\"start\":3142273},\"end_line\":3183,\"page_span\":[8,54],\"start_line\":334,\"stop_selector\":\"h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p\",\"table_indices\":[9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58]},{\"anchor_selector\":\"h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span\",\"as_of\":\"2025-09-30\",\"byte_offsets\":{\"end\":21261936,\"start\":12215159},\"end_line\":5958,\"page_span\":[55,98],\"start_line\":3183,\"stop_selector\":\"h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p\",\"table_indices\":[59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105]}]}},\"fingerprint_crate\":\"dsl-runtime:soi-schedule.v1.fp.yaml\",\"fingerprint_id\":\"soi-schedule.v1\",\"fingerprint_source\":\"installed:soi-schedule.v1\",\"fingerprint_version\":\"0.12.0\",\"matched\":true,\"reason\":null},\"path\":\"/private/tmp/bdc-six-filer-parity-20261106/input/golub-capital_2025-12-31.htm\",\"tool_versions\":{\"fingerprint\":\"0.12.0\"},\"version\":\"fingerprint.v0\"}\n{\"bytes_hash\":\"sha256:f28cd253503da23fe1d3a51c2ae9cf63e3fd212c38e7f7474635e439c3e861c0\",\"extension\":\".htm\",\"fingerprint\":{\"assertions\":[{\"detail\":null,\"name\":\"schedule_heading_text\",\"passed\":true},{\"detail\":null,\"name\":\"schedule_tables_present\",\"passed\":true}],\"content_hash\":null,\"extracted\":{\"schedule_region\":{\"regions\":[{\"anchor_selector\":\"h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span\",\"as_of\":\"2025-12-31\",\"byte_offsets\":{\"end\":9479702,\"start\":3713397},\"end_line\":989,\"page_span\":[8,16],\"start_line\":298,\"stop_selector\":\"h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p\",\"table_indices\":[10,11,12,13,14,15,16,17,18]},{\"anchor_selector\":\"h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span\",\"as_of\":\"2025-09-30\",\"byte_offsets\":{\"end\":15468424,\"start\":9479702},\"end_line\":1714,\"page_span\":[17,26],\"start_line\":989,\"stop_selector\":\"h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p\",\"table_indices\":[19,20,21,22,23,24,25,26,27,28]}]}},\"fingerprint_crate\":\"dsl-runtime:soi-schedule.v1.fp.yaml\",\"fingerprint_id\":\"soi-schedule.v1\",\"fingerprint_source\":\"installed:soi-schedule.v1\",\"fingerprint_version\":\"0.12.0\",\"matched\":true,\"reason\":null},\"path\":\"/private/tmp/bdc-six-filer-parity-20261106/input/pennant-park_2025-12-31.htm\",\"tool_versions\":{\"fingerprint\":\"0.12.0\"},\"version\":\"fingerprint.v0\"}\n",
+  "records": [
+    {
+      "bytes_hash": "sha256:fcb6b25d85aa07e24212d2dd961e3541debf0c7500ea4dfb4f78c7c5ae624908",
+      "extension": ".htm",
+      "fingerprint": {
+        "assertions": [
+          {
+            "detail": null,
+            "name": "schedule_heading_text",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "name": "schedule_tables_present",
+            "passed": true
+          }
+        ],
+        "content_hash": null,
+        "extracted": {
+          "schedule_region": {
+            "regions": [
+              {
+                "anchor_selector": "h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span",
+                "as_of": "2025-09-30",
+                "byte_offsets": {
+                  "end": 9904988,
+                  "start": 2861825
+                },
+                "end_line": 3049,
+                "page_span": [
+                  5,
+                  68
+                ],
+                "start_line": 218,
+                "stop_selector": "h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p",
+                "table_indices": [
+                  9,
+                  10,
+                  11,
+                  12,
+                  13,
+                  14,
+                  15,
+                  16,
+                  17,
+                  18,
+                  19,
+                  20,
+                  21,
+                  22,
+                  23,
+                  24,
+                  25,
+                  26,
+                  27,
+                  28,
+                  29,
+                  30,
+                  31,
+                  32,
+                  33,
+                  34,
+                  35,
+                  36,
+                  37,
+                  38,
+                  39,
+                  40,
+                  41,
+                  42,
+                  43,
+                  44,
+                  45,
+                  46,
+                  47,
+                  48,
+                  49,
+                  50,
+                  51,
+                  52,
+                  53,
+                  54,
+                  55,
+                  56,
+                  57,
+                  58,
+                  59,
+                  60,
+                  61,
+                  62,
+                  63,
+                  64,
+                  65,
+                  66,
+                  67,
+                  68,
+                  69,
+                  70,
+                  71,
+                  72
+                ]
+              },
+              {
+                "anchor_selector": "h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span",
+                "as_of": "2024-12-31",
+                "byte_offsets": {
+                  "end": 22239259,
+                  "start": 11834014
+                },
+                "end_line": 8137,
+                "page_span": [
+                  82,
+                  198
+                ],
+                "start_line": 3668,
+                "stop_selector": "h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p",
+                "table_indices": [
+                  86,
+                  87,
+                  88,
+                  89,
+                  90,
+                  91,
+                  92,
+                  93,
+                  94,
+                  95,
+                  96,
+                  97,
+                  98,
+                  99,
+                  100,
+                  101,
+                  102,
+                  103,
+                  104,
+                  105,
+                  106,
+                  107,
+                  108,
+                  109,
+                  110,
+                  111,
+                  112,
+                  113,
+                  114,
+                  115,
+                  116,
+                  117,
+                  118,
+                  119,
+                  120,
+                  121,
+                  122,
+                  123,
+                  124,
+                  125,
+                  126,
+                  127,
+                  128,
+                  129,
+                  130,
+                  131,
+                  132,
+                  133,
+                  134,
+                  135,
+                  136,
+                  137,
+                  138,
+                  139,
+                  140,
+                  141,
+                  142,
+                  143,
+                  144,
+                  145,
+                  146,
+                  147,
+                  148,
+                  149,
+                  150,
+                  151,
+                  152,
+                  153,
+                  154,
+                  155,
+                  156,
+                  157,
+                  158,
+                  159,
+                  160,
+                  161,
+                  162,
+                  163,
+                  164,
+                  165,
+                  166,
+                  167,
+                  168,
+                  169,
+                  170,
+                  171,
+                  172,
+                  173,
+                  174,
+                  175,
+                  176,
+                  177,
+                  178,
+                  179,
+                  180,
+                  181,
+                  182,
+                  183,
+                  184,
+                  185,
+                  186,
+                  187,
+                  188,
+                  189,
+                  190,
+                  191,
+                  192,
+                  193,
+                  194,
+                  195,
+                  196,
+                  197,
+                  198,
+                  199,
+                  200,
+                  201,
+                  202,
+                  203,
+                  204,
+                  205,
+                  206,
+                  207,
+                  208,
+                  209,
+                  210,
+                  211,
+                  212,
+                  213
+                ]
+              }
+            ]
+          }
+        },
+        "fingerprint_crate": "dsl-runtime:soi-schedule.v1.fp.yaml",
+        "fingerprint_id": "soi-schedule.v1",
+        "fingerprint_source": "installed:soi-schedule.v1",
+        "fingerprint_version": "0.12.0",
+        "matched": true,
+        "reason": null
+      },
+      "path": "/private/tmp/bdc-six-filer-parity-20261106/input/ares-capital_2025-09-30.htm",
+      "tool_versions": {
+        "fingerprint": "0.12.0"
+      },
+      "version": "fingerprint.v0"
+    },
+    {
+      "bytes_hash": "sha256:e26bbd9422d3ab1b572e4b388daf504c6f8c996ef2f6be77b5f4719d74b25617",
+      "extension": ".htm",
+      "fingerprint": {
+        "assertions": [
+          {
+            "detail": null,
+            "name": "schedule_heading_text",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "name": "schedule_tables_present",
+            "passed": true
+          }
+        ],
+        "content_hash": null,
+        "extracted": {
+          "schedule_region": {
+            "regions": [
+              {
+                "anchor_selector": "h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span",
+                "as_of": "2025-09-30",
+                "byte_offsets": {
+                  "end": 2093818,
+                  "start": 295790
+                },
+                "end_line": 449,
+                "page_span": [
+                  4,
+                  10
+                ],
+                "start_line": 141,
+                "stop_selector": "h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p",
+                "table_indices": [
+                  6,
+                  7,
+                  8,
+                  9,
+                  10
+                ]
+              },
+              {
+                "anchor_selector": "h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span",
+                "as_of": "2024-12-31",
+                "byte_offsets": {
+                  "end": 5006222,
+                  "start": 2093818
+                },
+                "end_line": 940,
+                "page_span": [
+                  11,
+                  21
+                ],
+                "start_line": 449,
+                "stop_selector": "h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p",
+                "table_indices": [
+                  11,
+                  12,
+                  13,
+                  14,
+                  15,
+                  16,
+                  17,
+                  18,
+                  19,
+                  20
+                ]
+              }
+            ]
+          }
+        },
+        "fingerprint_crate": "dsl-runtime:soi-schedule.v1.fp.yaml",
+        "fingerprint_id": "soi-schedule.v1",
+        "fingerprint_source": "installed:soi-schedule.v1",
+        "fingerprint_version": "0.12.0",
+        "matched": true,
+        "reason": null
+      },
+      "path": "/private/tmp/bdc-six-filer-parity-20261106/input/oxford-square-capital-corp_2025-09-30.htm",
+      "tool_versions": {
+        "fingerprint": "0.12.0"
+      },
+      "version": "fingerprint.v0"
+    },
+    {
+      "bytes_hash": "sha256:866cd519a01cdb01b586387a800cad1bede15f66af35329c6858019e9dbe0b9c",
+      "extension": ".htm",
+      "fingerprint": {
+        "assertions": [
+          {
+            "detail": null,
+            "name": "schedule_heading_text",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "name": "schedule_tables_present",
+            "passed": true
+          }
+        ],
+        "content_hash": null,
+        "extracted": {
+          "schedule_region": {
+            "regions": [
+              {
+                "anchor_selector": "h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span",
+                "as_of": "2023-09-30",
+                "byte_offsets": {
+                  "end": 6841954,
+                  "start": 2997783
+                },
+                "end_line": 919,
+                "page_span": [
+                  8,
+                  15
+                ],
+                "start_line": 380,
+                "stop_selector": "h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p",
+                "table_indices": [
+                  9,
+                  10,
+                  11,
+                  12,
+                  13,
+                  14,
+                  15,
+                  16,
+                  17,
+                  18
+                ]
+              },
+              {
+                "anchor_selector": "h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span",
+                "as_of": "2022-12-31",
+                "byte_offsets": {
+                  "end": 13470104,
+                  "start": 6841954
+                },
+                "end_line": 3579,
+                "page_span": [
+                  16,
+                  64
+                ],
+                "start_line": 919,
+                "stop_selector": "h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p",
+                "table_indices": [
+                  19,
+                  20,
+                  21,
+                  22,
+                  23,
+                  24,
+                  25,
+                  26,
+                  27,
+                  28,
+                  29,
+                  30,
+                  31,
+                  32,
+                  33,
+                  34,
+                  35,
+                  36,
+                  37,
+                  38,
+                  39,
+                  40,
+                  41,
+                  42,
+                  43,
+                  44,
+                  45,
+                  46,
+                  47,
+                  48,
+                  49,
+                  50,
+                  51,
+                  52,
+                  53,
+                  54,
+                  55,
+                  56,
+                  57,
+                  58,
+                  59,
+                  60,
+                  61,
+                  62,
+                  63,
+                  64,
+                  65,
+                  66
+                ]
+              }
+            ]
+          }
+        },
+        "fingerprint_crate": "dsl-runtime:soi-schedule.v1.fp.yaml",
+        "fingerprint_id": "soi-schedule.v1",
+        "fingerprint_source": "installed:soi-schedule.v1",
+        "fingerprint_version": "0.12.0",
+        "matched": true,
+        "reason": null
+      },
+      "path": "/private/tmp/bdc-six-filer-parity-20261106/input/blackrock-kelso_2023-09-30.htm",
+      "tool_versions": {
+        "fingerprint": "0.12.0"
+      },
+      "version": "fingerprint.v0"
+    },
+    {
+      "bytes_hash": "sha256:393350e847abe39ea5501b7b1fae3d495513bd7192d1a77422074cc19bc2cec4",
+      "extension": ".htm",
+      "fingerprint": {
+        "assertions": [
+          {
+            "detail": null,
+            "name": "schedule_heading_text",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "name": "schedule_tables_present",
+            "passed": true
+          }
+        ],
+        "content_hash": null,
+        "extracted": {
+          "schedule_region": {
+            "regions": [
+              {
+                "anchor_selector": "h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span",
+                "as_of": "2025-09-30",
+                "byte_offsets": {
+                  "end": 6480596,
+                  "start": 2056281
+                },
+                "end_line": 2430,
+                "page_span": [
+                  11,
+                  54
+                ],
+                "start_line": 431,
+                "stop_selector": "h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p",
+                "table_indices": [
+                  16,
+                  17,
+                  18,
+                  19,
+                  20,
+                  21,
+                  22,
+                  23,
+                  24,
+                  25,
+                  26,
+                  27,
+                  28,
+                  29,
+                  30,
+                  31,
+                  32,
+                  33,
+                  34,
+                  35,
+                  36,
+                  37,
+                  38,
+                  39,
+                  40,
+                  41,
+                  42,
+                  43,
+                  44,
+                  45,
+                  46,
+                  47,
+                  48,
+                  49,
+                  50,
+                  51,
+                  52,
+                  53,
+                  54,
+                  55,
+                  56,
+                  57,
+                  58,
+                  59,
+                  60
+                ]
+              },
+              {
+                "anchor_selector": "h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span",
+                "as_of": "2024-12-31",
+                "byte_offsets": {
+                  "end": 10266616,
+                  "start": 6480596
+                },
+                "end_line": 4125,
+                "page_span": [
+                  55,
+                  90
+                ],
+                "start_line": 2430,
+                "stop_selector": "h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p",
+                "table_indices": [
+                  61,
+                  62,
+                  63,
+                  64,
+                  65,
+                  66,
+                  67,
+                  68,
+                  69,
+                  70,
+                  71,
+                  72,
+                  73,
+                  74,
+                  75,
+                  76,
+                  77,
+                  78,
+                  79,
+                  80,
+                  81,
+                  82,
+                  83,
+                  84,
+                  85,
+                  86,
+                  87,
+                  88,
+                  89,
+                  90,
+                  91,
+                  92,
+                  93,
+                  94,
+                  95,
+                  96,
+                  97,
+                  98
+                ]
+              }
+            ]
+          }
+        },
+        "fingerprint_crate": "dsl-runtime:soi-schedule.v1.fp.yaml",
+        "fingerprint_id": "soi-schedule.v1",
+        "fingerprint_source": "installed:soi-schedule.v1",
+        "fingerprint_version": "0.12.0",
+        "matched": true,
+        "reason": null
+      },
+      "path": "/private/tmp/bdc-six-filer-parity-20261106/input/blackstone-secured-lending-fund_2025-09-30.htm",
+      "tool_versions": {
+        "fingerprint": "0.12.0"
+      },
+      "version": "fingerprint.v0"
+    },
+    {
+      "bytes_hash": "sha256:4c0ed299ae7e752afdd383056b3603ab937e43fb8864bde7d5b52a92ba28a430",
+      "extension": ".htm",
+      "fingerprint": {
+        "assertions": [
+          {
+            "detail": null,
+            "name": "schedule_heading_text",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "name": "schedule_tables_present",
+            "passed": true
+          }
+        ],
+        "content_hash": null,
+        "extracted": {
+          "schedule_region": {
+            "regions": [
+              {
+                "anchor_selector": "h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span",
+                "as_of": "2025-12-31",
+                "byte_offsets": {
+                  "end": 12215159,
+                  "start": 3142273
+                },
+                "end_line": 3183,
+                "page_span": [
+                  8,
+                  54
+                ],
+                "start_line": 334,
+                "stop_selector": "h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p",
+                "table_indices": [
+                  9,
+                  10,
+                  11,
+                  12,
+                  13,
+                  14,
+                  15,
+                  16,
+                  17,
+                  18,
+                  19,
+                  20,
+                  21,
+                  22,
+                  23,
+                  24,
+                  25,
+                  26,
+                  27,
+                  28,
+                  29,
+                  30,
+                  31,
+                  32,
+                  33,
+                  34,
+                  35,
+                  36,
+                  37,
+                  38,
+                  39,
+                  40,
+                  41,
+                  42,
+                  43,
+                  44,
+                  45,
+                  46,
+                  47,
+                  48,
+                  49,
+                  50,
+                  51,
+                  52,
+                  53,
+                  54,
+                  55,
+                  56,
+                  57,
+                  58
+                ]
+              },
+              {
+                "anchor_selector": "h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span",
+                "as_of": "2025-09-30",
+                "byte_offsets": {
+                  "end": 21261936,
+                  "start": 12215159
+                },
+                "end_line": 5958,
+                "page_span": [
+                  55,
+                  98
+                ],
+                "start_line": 3183,
+                "stop_selector": "h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p",
+                "table_indices": [
+                  59,
+                  60,
+                  61,
+                  62,
+                  63,
+                  64,
+                  65,
+                  66,
+                  67,
+                  68,
+                  69,
+                  70,
+                  71,
+                  72,
+                  73,
+                  74,
+                  75,
+                  76,
+                  77,
+                  78,
+                  79,
+                  80,
+                  81,
+                  82,
+                  83,
+                  84,
+                  85,
+                  86,
+                  87,
+                  88,
+                  89,
+                  90,
+                  91,
+                  92,
+                  93,
+                  94,
+                  95,
+                  96,
+                  97,
+                  98,
+                  99,
+                  100,
+                  101,
+                  102,
+                  103,
+                  104,
+                  105
+                ]
+              }
+            ]
+          }
+        },
+        "fingerprint_crate": "dsl-runtime:soi-schedule.v1.fp.yaml",
+        "fingerprint_id": "soi-schedule.v1",
+        "fingerprint_source": "installed:soi-schedule.v1",
+        "fingerprint_version": "0.12.0",
+        "matched": true,
+        "reason": null
+      },
+      "path": "/private/tmp/bdc-six-filer-parity-20261106/input/golub-capital_2025-12-31.htm",
+      "tool_versions": {
+        "fingerprint": "0.12.0"
+      },
+      "version": "fingerprint.v0"
+    },
+    {
+      "bytes_hash": "sha256:f28cd253503da23fe1d3a51c2ae9cf63e3fd212c38e7f7474635e439c3e861c0",
+      "extension": ".htm",
+      "fingerprint": {
+        "assertions": [
+          {
+            "detail": null,
+            "name": "schedule_heading_text",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "name": "schedule_tables_present",
+            "passed": true
+          }
+        ],
+        "content_hash": null,
+        "extracted": {
+          "schedule_region": {
+            "regions": [
+              {
+                "anchor_selector": "h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span",
+                "as_of": "2025-12-31",
+                "byte_offsets": {
+                  "end": 9479702,
+                  "start": 3713397
+                },
+                "end_line": 989,
+                "page_span": [
+                  8,
+                  16
+                ],
+                "start_line": 298,
+                "stop_selector": "h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p",
+                "table_indices": [
+                  10,
+                  11,
+                  12,
+                  13,
+                  14,
+                  15,
+                  16,
+                  17,
+                  18
+                ]
+              },
+              {
+                "anchor_selector": "h1.soi, div[id] + hr + div[style*='min-height'], a[id^='T'] + p + p, p[style*='text-align:center'] > span",
+                "as_of": "2025-09-30",
+                "byte_offsets": {
+                  "end": 15468424,
+                  "start": 9479702
+                },
+                "end_line": 1714,
+                "page_span": [
+                  17,
+                  26
+                ],
+                "start_line": 989,
+                "stop_selector": "h1, h2.notes, div[id] + hr + div[style*='min-height'], hr + div[style*='min-height'] + div, a[id^='T'] + p + p",
+                "table_indices": [
+                  19,
+                  20,
+                  21,
+                  22,
+                  23,
+                  24,
+                  25,
+                  26,
+                  27,
+                  28
+                ]
+              }
+            ]
+          }
+        },
+        "fingerprint_crate": "dsl-runtime:soi-schedule.v1.fp.yaml",
+        "fingerprint_id": "soi-schedule.v1",
+        "fingerprint_source": "installed:soi-schedule.v1",
+        "fingerprint_version": "0.12.0",
+        "matched": true,
+        "reason": null
+      },
+      "path": "/private/tmp/bdc-six-filer-parity-20261106/input/pennant-park_2025-12-31.htm",
+      "tool_versions": {
+        "fingerprint": "0.12.0"
+      },
+      "version": "fingerprint.v0"
+    }
+  ],
+  "schema": "fingerprint.soi-parity.stdout-records.v1"
+}

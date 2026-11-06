@@ -135,6 +135,12 @@ Optional fields:
   explicitly selected subheadings that share a period date but delimit separate
   segments. `continue_past` still suppresses declared continuation boundaries.
 
+- `tokenized_byte_offsets` on `region` defaults to `false`. Set it to `true` to
+  map unique explicit DOM nodes to original start-tag bytes despite quote, case or
+  attribute normalization. Full canonical DOM equality is required. Ambiguous,
+  implicit or cloned nodes and non-UTF-8 input retain null offsets. Region spans
+  still end at the next boundary's start, or EOF; they are not element spans.
+
 Region output is intentionally bounds-only. It must not include copied HTML,
 table text, holding rows, or other carved document content. Downstream tools own
 period selection and slicing.

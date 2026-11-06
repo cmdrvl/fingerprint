@@ -44,6 +44,9 @@ pub struct ExtractSection {
     /// None preserves the historical same-period continuation behavior.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coalesce_by_as_of: Option<bool>,
+    /// Opt in to explicit source-node mapping; absent/false retains the legacy locator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokenized_byte_offsets: Option<bool>,
 }
 
 /// Content hash configuration.

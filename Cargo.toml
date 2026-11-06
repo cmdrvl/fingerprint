@@ -24,6 +24,7 @@ serde_yaml = "=0.9.34"
 globset = "=0.4.16"
 futures = "=0.3.31"
 scraper = "=0.22.0"
+lol_html = "=3.0.2"
 ego-tree = "=0.10.0"
 zip = { version = "=2.4.2", default-features = false }
 frankensearch-core = "=0.1.2"

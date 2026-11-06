@@ -1,0 +1,42 @@
+{
+  "tests": {
+    "passed": 514,
+    "failed": 0,
+    "ignored": 0
+  },
+  "clippy_all_targets_warnings_denied": "passed",
+  "fmt": "passed",
+  "cli_selector_regions": "passed",
+  "ubs": {
+    "exit_code": 0,
+    "critical": 0,
+    "warnings": 760,
+    "scope": "seven changed Rust files including existing code and tests; new-map warnings reviewed: test unwrap/asserts, bounded validated indices, Range clones"
+  },
+  "default_six_stdout_equal_to_installed_0_12_0": true,
+  "default_stdout_sha256": "42a0d4f0e3ec7a7e3858c955b7b4306585b96898e401df3ef7f497c2075e0268",
+  "tokenized_six": {
+    "selected": 6,
+    "matched": 6,
+    "mismatches": 0,
+    "duration_ms": 296701,
+    "jobs": 1,
+    "profile": "debug",
+    "legacy_metrics": "fresh reconstruction; original old artifact unavailable"
+  },
+  "icmb": {
+    "regions": 12,
+    "before_null_byte_offsets": 12,
+    "after_null_byte_offsets": 0,
+    "all_other_region_fields_equal": true
+  },
+  "independent_review": false,
+  "released": false,
+  "full_schedule_and_footnote_closure_proven": false,
+  "log_sha256": {
+    "tests": "e34718b0bf37db4236e8b89f5f4903a9b3d2f0ee0c81919aeb1c2776a2eedcf7",
+    "clippy": "136f065442ac9939faa2a8698ca05dca940e9a97f44b9f44b6d24febf9705da4",
+    "ubs": "433de043670949b8bcceb6195cd0904b8bc4dad7d782d94ac1b32448e67777cb",
+    "cli_e2e": "517c7ff9d948502fc307cfa37911f69c76f599e99a3d4419445b72fcb842164b"
+  }
+}

@@ -715,6 +715,7 @@ pub fn dsl_json_schema() -> String {
                     "stop_selector": { "type": "string" },
                     "stop_text_regex": { "type": "string" },
                     "coalesce_by_as_of": { "type": "boolean", "default": true },
+                    "tokenized_byte_offsets": { "type": "boolean", "default": false },
                     "continue_past": {
                         "type": "array",
                         "items": { "type": "string", "minLength": 1 },
@@ -933,6 +934,8 @@ assertions:
         assert!(properties.contains_key("continue_past"));
         assert_eq!(properties["coalesce_by_as_of"]["type"], "boolean");
         assert_eq!(properties["coalesce_by_as_of"]["default"], true);
+        assert_eq!(properties["tokenized_byte_offsets"]["type"], "boolean");
+        assert_eq!(properties["tokenized_byte_offsets"]["default"], false);
     }
 
     #[test]

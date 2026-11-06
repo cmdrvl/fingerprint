@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 pub struct HtmlDocument {
     pub path: PathBuf,
     pub raw: String,
+    /// Whether raw string byte offsets still refer to the original file bytes.
+    pub source_is_utf8: bool,
     pub dom: Html,
     pub normalized: String,
     pub headings: Vec<Heading>,
@@ -76,7 +78,9 @@ impl HtmlDocument {
         let raw_bytes = fs::read(path)
             .map_err(|error| format!("failed to read html file '{}': {error}", path.display()))?;
         let raw = String::from_utf8_lossy(&raw_bytes).into_owned();
-        Ok(parse_html_document(path, raw))
+        let mut document = parse_html_document(path, raw);
+        document.source_is_utf8 = std::str::from_utf8(&raw_bytes).is_ok();
+        Ok(document)
     }
 
     /// Select elements from the original HTML DOM in deterministic document order.
@@ -137,6 +141,7 @@ fn parse_html_document(path: &Path, raw: String) -> HtmlDocument {
     HtmlDocument {
         path: path.to_path_buf(),
         raw,
+        source_is_utf8: true,
         dom: document,
         normalized,
         headings,

@@ -541,6 +541,7 @@ fn generate_extracted_code(extract: &[ExtractSection]) -> String {
                     stop_text_regex: {stop_text_regex},
                     continue_past: {continue_past},
                     coalesce_by_as_of: {coalesce_by_as_of},
+                    tokenized_byte_offsets: {tokenized_byte_offsets},
                 }}"#,
             name = format_args!("{:?}", section.name),
             typ = format_args!("{:?}", section.r#type),
@@ -557,6 +558,7 @@ fn generate_extracted_code(extract: &[ExtractSection]) -> String {
             stop_text_regex = codegen_option_string(section.stop_text_regex.as_deref()),
             continue_past = codegen_string_vec(&section.continue_past),
             coalesce_by_as_of = codegen_option_display(section.coalesce_by_as_of),
+            tokenized_byte_offsets = codegen_option_display(section.tokenized_byte_offsets),
         ));
     }
 
@@ -656,6 +658,28 @@ mod tests {
             generate_rust(&definition)
                 .unwrap()
                 .contains("coalesce_by_as_of: None,")
+        );
+    }
+
+    #[test]
+    fn generate_rust_preserves_tokenized_offset_option() {
+        let mut definition = base_definition();
+        definition.extract = vec![ExtractSection {
+            name: "region".to_owned(),
+            r#type: "region".to_owned(),
+            tokenized_byte_offsets: Some(true),
+            ..Default::default()
+        }];
+        assert!(
+            generate_rust(&definition)
+                .unwrap()
+                .contains("tokenized_byte_offsets: Some(true),")
+        );
+        definition.extract[0].tokenized_byte_offsets = None;
+        assert!(
+            generate_rust(&definition)
+                .unwrap()
+                .contains("tokenized_byte_offsets: None,")
         );
     }
 

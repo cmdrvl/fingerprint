@@ -1,6 +1,7 @@
 pub mod csv;
 pub mod dispatch;
 pub mod html;
+pub(crate) mod html_source;
 pub mod markdown;
 pub mod pdf;
 pub mod raw;
