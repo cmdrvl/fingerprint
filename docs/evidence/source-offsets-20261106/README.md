@@ -38,5 +38,8 @@ financial evidence, so this does not prove a complete SOI or footnote package.
 
 `producer-hashes.json` identifies exact tested file and binary hashes;
 `verification.json` summarizes checks and log hashes. The source-location option
-remains unreleased and independently unreviewed. Original default tests and
-expectations were not relaxed. Broader `bd-lxy` and `bd-3hf` acceptance remains open.
+remains unreleased. CoralFalcon independently reviewed commit `b0bdf5a`, verified
+the source hashes and passed 37 focused tests (Agent Mail 10470), finding no defect
+in the opt-in mapping semantics. The full suite and six-filer parity were not
+repeated during that review. Original default tests and expectations were not
+relaxed. Broader `bd-lxy` and `bd-3hf` acceptance remains open.

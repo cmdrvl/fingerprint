@@ -30,7 +30,16 @@
     "after_null_byte_offsets": 0,
     "all_other_region_fields_equal": true
   },
-  "independent_review": false,
+  "independent_review": true,
+  "independent_review_evidence": {
+    "reviewer": "CoralFalcon",
+    "agent_mail_message_id": 10470,
+    "reviewed_commit": "b0bdf5aca587e38a1ffaef7d977ed9d2b8729d32",
+    "findings": "no defect found in opt-in mapping semantics; source hashes verified",
+    "focused_tests_passed": 37,
+    "full_suite_and_parity_repeated": false,
+    "scope": "source-map module, HTML UTF-8 handling, region integration, DSL parser/codegen/schema and selector tests"
+  },
   "released": false,
   "full_schedule_and_footnote_closure_proven": false,
   "log_sha256": {
