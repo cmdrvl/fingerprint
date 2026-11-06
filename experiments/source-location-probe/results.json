@@ -1,0 +1,109 @@
+{
+  "scope": "source-start-tag feasibility, not native fingerprint region or holdings acceptance",
+  "selected": 7,
+  "dom_equal": 7,
+  "source_hashes_verified": 7,
+  "test_count": 7,
+  "test_failed": 0,
+  "fmt_passed": true,
+  "clippy_all_targets_warnings_denied_passed": true,
+  "ubs": {
+    "exit_code": 0,
+    "critical": 0,
+    "warnings": 21,
+    "review": "Warnings cover static literal unwraps, test assertions/unwraps, Range clones and error-message allocation; no critical finding."
+  },
+  "producer_files": {
+    "Cargo.toml": "e5912410d3b03c2f331cebbee3e99c4a926fec5a463fdc5cf2d08f5f8c07fb66",
+    "Cargo.lock": "a1d035d746dc870a52aca65453077a15ec78a415f1044a69be178bacdff30277",
+    "src/main.rs": "c8e6ef2960eade1911e2145046f2970b2bdd69da31ba02c958c3eb97f419007d"
+  },
+  "binary_sha256": "8914ed572684b6db3430979b586e69b081539d15b478740db39e38265ba83d8e",
+  "independent_review": false,
+  "runs": [
+    {
+      "elapsed_ms": 9144,
+      "path": "/tmp/bdc-icmb-primary.htm",
+      "result": {
+        "Ok": [
+          65959,
+          0,
+          85
+        ]
+      },
+      "source_sha256": "087098832aefb9064be41bd515158c0abc6f0447b2208fa3545df132350ba592"
+    },
+    {
+      "elapsed_ms": 39986,
+      "path": "/tmp/bdc-six-filer-parity-20261106/input/ares-capital_2025-09-30.htm",
+      "result": {
+        "Ok": [
+          264195,
+          0,
+          265
+        ]
+      },
+      "source_sha256": "fcb6b25d85aa07e24212d2dd961e3541debf0c7500ea4dfb4f78c7c5ae624908"
+    },
+    {
+      "elapsed_ms": 15152,
+      "path": "/tmp/bdc-six-filer-parity-20261106/input/blackrock-kelso_2023-09-30.htm",
+      "result": {
+        "Ok": [
+          105134,
+          0,
+          67
+        ]
+      },
+      "source_sha256": "866cd519a01cdb01b586387a800cad1bede15f66af35329c6858019e9dbe0b9c"
+    },
+    {
+      "elapsed_ms": 17966,
+      "path": "/tmp/bdc-six-filer-parity-20261106/input/blackstone-secured-lending-fund_2025-09-30.htm",
+      "result": {
+        "Ok": [
+          124008,
+          0,
+          151
+        ]
+      },
+      "source_sha256": "393350e847abe39ea5501b7b1fae3d495513bd7192d1a77422074cc19bc2cec4"
+    },
+    {
+      "elapsed_ms": 31360,
+      "path": "/tmp/bdc-six-filer-parity-20261106/input/golub-capital_2025-12-31.htm",
+      "result": {
+        "Ok": [
+          250161,
+          0,
+          174
+        ]
+      },
+      "source_sha256": "4c0ed299ae7e752afdd383056b3603ab937e43fb8864bde7d5b52a92ba28a430"
+    },
+    {
+      "elapsed_ms": 6094,
+      "path": "/tmp/bdc-six-filer-parity-20261106/input/oxford-square-capital-corp_2025-09-30.htm",
+      "result": {
+        "Ok": [
+          32177,
+          0,
+          59
+        ]
+      },
+      "source_sha256": "e26bbd9422d3ab1b572e4b388daf504c6f8c996ef2f6be77b5f4719d74b25617"
+    },
+    {
+      "elapsed_ms": 24452,
+      "path": "/tmp/bdc-six-filer-parity-20261106/input/pennant-park_2025-12-31.htm",
+      "result": {
+        "Ok": [
+          195646,
+          0,
+          68
+        ]
+      },
+      "source_sha256": "f28cd253503da23fe1d3a51c2ae9cf63e3fd212c38e7f7474635e439c3e861c0"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+[package]
+name = "bdc-source-location-probe"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lol_html = "=3.0.2"
+scraper = "=0.22.0"
+regex = "1"
+serde_json = "1"
+
+[workspace]

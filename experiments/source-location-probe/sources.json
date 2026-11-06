@@ -1,0 +1,72 @@
+{
+  "purpose": "bd-lxy source-location feasibility; not native region or holdings acceptance",
+  "sources": [
+    {
+      "name": "ares-capital_2025-09-30",
+      "path": "/tmp/bdc-six-filer-parity-20261106/input/ares-capital_2025-09-30.htm",
+      "url": "https://www.sec.gov/Archives/edgar/data/1287750/000128775025000046/arcc-20250930.htm",
+      "sha256": "fcb6b25d85aa07e24212d2dd961e3541debf0c7500ea4dfb4f78c7c5ae624908",
+      "bytes": 23504833,
+      "period": "2025-09-30"
+    },
+    {
+      "name": "oxford-square-capital-corp_2025-09-30",
+      "path": "/tmp/bdc-six-filer-parity-20261106/input/oxford-square-capital-corp_2025-09-30.htm",
+      "url": "https://www.sec.gov/Archives/edgar/data/1259429/000121390025107316/ea0262531-01_10q.htm",
+      "sha256": "e26bbd9422d3ab1b572e4b388daf504c6f8c996ef2f6be77b5f4719d74b25617",
+      "bytes": 8764108,
+      "period": "2025-09-30"
+    },
+    {
+      "name": "blackrock-kelso_2023-09-30",
+      "path": "/tmp/bdc-six-filer-parity-20261106/input/blackrock-kelso_2023-09-30.htm",
+      "url": "https://www.sec.gov/Archives/edgar/data/1326003/000095017023061071/bkcc-20230930.htm",
+      "sha256": "866cd519a01cdb01b586387a800cad1bede15f66af35329c6858019e9dbe0b9c",
+      "bytes": 13470104,
+      "period": "2023-09-30"
+    },
+    {
+      "name": "blackstone-secured-lending-fund_2025-09-30",
+      "path": "/tmp/bdc-six-filer-parity-20261106/input/blackstone-secured-lending-fund_2025-09-30.htm",
+      "url": "https://www.sec.gov/Archives/edgar/data/1736035/000173603525000021/bxsl-20250930.htm",
+      "sha256": "393350e847abe39ea5501b7b1fae3d495513bd7192d1a77422074cc19bc2cec4",
+      "bytes": 12017281,
+      "period": "2025-09-30"
+    },
+    {
+      "name": "golub-capital_2025-12-31",
+      "path": "/tmp/bdc-six-filer-parity-20261106/input/golub-capital_2025-12-31.htm",
+      "url": "https://www.sec.gov/Archives/edgar/data/1476765/000147676526000012/gbdc-20251231.htm",
+      "sha256": "4c0ed299ae7e752afdd383056b3603ab937e43fb8864bde7d5b52a92ba28a430",
+      "bytes": 23405991,
+      "period": "2025-12-31"
+    },
+    {
+      "name": "pennant-park_2025-12-31",
+      "path": "/tmp/bdc-six-filer-parity-20261106/input/pennant-park_2025-12-31.htm",
+      "url": "https://www.sec.gov/Archives/edgar/data/1383414/000119312526042780/pnnt-20251231.htm",
+      "sha256": "f28cd253503da23fe1d3a51c2ae9cf63e3fd212c38e7f7474635e439c3e861c0",
+      "bytes": 23842344,
+      "period": "2025-12-31"
+    },
+    {
+      "name": "icmb_2024-12-31",
+      "path": "/tmp/bdc-icmb-primary.htm",
+      "raw_submission_uri": "s3://edgar-data-full/xbrl/20250326/0000950170-25-044673.nc",
+      "raw_submission_sha256": "c64d1fd52b174c3ef71f1b6f7c2feb6afc0e1b69f170520a7171350d19f967a7",
+      "primary_document": "icmb-20241231.htm",
+      "primary_extractor_revision": "edgar-elt:4d8962f10c9022607cdea3df73f4fbce90bdcb9b",
+      "sha256": "087098832aefb9064be41bd515158c0abc6f0447b2208fa3545df132350ba592",
+      "bytes": 8159977
+    }
+  ],
+  "producer_files": {
+    "Cargo.toml": "e5912410d3b03c2f331cebbee3e99c4a926fec5a463fdc5cf2d08f5f8c07fb66",
+    "Cargo.lock": "a1d035d746dc870a52aca65453077a15ec78a415f1044a69be178bacdff30277",
+    "src/main.rs": "c8e6ef2960eade1911e2145046f2970b2bdd69da31ba02c958c3eb97f419007d"
+  },
+  "binary_sha256": "8914ed572684b6db3430979b586e69b081539d15b478740db39e38265ba83d8e",
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Homebrew)",
+  "profile": "debug",
+  "independent_review": false
+}
