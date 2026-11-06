@@ -540,6 +540,7 @@ fn generate_extracted_code(extract: &[ExtractSection]) -> String {
                     stop_selector: {stop_selector},
                     stop_text_regex: {stop_text_regex},
                     continue_past: {continue_past},
+                    coalesce_by_as_of: {coalesce_by_as_of},
                 }}"#,
             name = format_args!("{:?}", section.name),
             typ = format_args!("{:?}", section.r#type),
@@ -555,6 +556,7 @@ fn generate_extracted_code(extract: &[ExtractSection]) -> String {
             stop_selector = codegen_option_string(section.stop_selector.as_deref()),
             stop_text_regex = codegen_option_string(section.stop_text_regex.as_deref()),
             continue_past = codegen_string_vec(&section.continue_past),
+            coalesce_by_as_of = codegen_option_display(section.coalesce_by_as_of),
         ));
     }
 
@@ -636,6 +638,25 @@ mod tests {
             extract: vec![],
             content_hash: None,
         }
+    }
+
+    #[test]
+    fn generate_rust_preserves_region_coalescing_option() {
+        let mut definition = base_definition();
+        definition.extract = vec![ExtractSection {
+            name: "segments".to_owned(),
+            r#type: "region".to_owned(),
+            coalesce_by_as_of: Some(false),
+            ..Default::default()
+        }];
+        let generated = generate_rust(&definition).unwrap();
+        assert!(generated.contains("coalesce_by_as_of: Some(false),"));
+        definition.extract[0].coalesce_by_as_of = None;
+        assert!(
+            generate_rust(&definition)
+                .unwrap()
+                .contains("coalesce_by_as_of: None,")
+        );
     }
 
     #[test]

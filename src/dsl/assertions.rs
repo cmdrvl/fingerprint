@@ -18,7 +18,7 @@ pub fn set_diagnose_mode(enabled: bool) {
     if enabled {
         DIAGNOSE_MODE.fetch_add(1, Ordering::SeqCst);
     } else {
-        let _ = DIAGNOSE_MODE.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+        let _ = DIAGNOSE_MODE.try_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
             Some(count.saturating_sub(1))
         });
     }

@@ -943,3 +943,68 @@ fn rgn_validation_rejects_malformed_region_selector() {
 
     assert!(error.contains("invalid CSS selector"));
 }
+
+#[test]
+fn same_period_subsections_partition_without_coalescing_and_keep_continuations() {
+    let path = fixture("tests/fixtures/html/soi_subsections_repeated_period.html");
+    let mut section = region_section("soi_region", "p.subsec", "p.subsec, p.notes");
+    section.continue_past = vec!["(?i)continued".to_owned()];
+    // Missing and explicit true preserve the historical single-region behavior.
+    let default = region_value(&path, section.clone()).expect("default region");
+    assert_eq!(default["table_indices"], serde_json::json!([0, 1, 2, 3]));
+    section.coalesce_by_as_of = Some(true);
+    assert_eq!(region_value(&path, section.clone()).unwrap(), default);
+    section.coalesce_by_as_of = Some(false);
+    let segmented = region_value(&path, section.clone()).expect("segmented regions");
+    let regions = segmented["regions"].as_array().expect("three segments");
+    assert_eq!(regions.len(), 3);
+    assert_eq!(regions[0]["table_indices"], serde_json::json!([0, 1]));
+    assert_eq!(regions[1]["table_indices"], serde_json::json!([2]));
+    assert_eq!(regions[2]["table_indices"], serde_json::json!([3]));
+    for pair in regions.windows(2) {
+        assert_eq!(pair[0]["end_line"], pair[1]["start_line"]);
+        assert_eq!(
+            pair[0]["byte_offsets"]["end"],
+            pair[1]["byte_offsets"]["start"]
+        );
+    }
+    assert_eq!(region_value(&path, section.clone()).unwrap(), segmented);
+    let without_dates = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("<p class=\"date\">September 30, 2025</p>", "");
+    let control = make_temp_html(&without_dates);
+    let control_regions = region_value(control.path(), section).unwrap();
+    assert_eq!(
+        control_regions["regions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|region| region["table_indices"].clone())
+            .collect::<Vec<_>>(),
+        vec![
+            serde_json::json!([0, 1]),
+            serde_json::json!([2]),
+            serde_json::json!([3])
+        ]
+    );
+    assert_region_has_only_bounds_strings(&segmented, &["p.subsec", "p.subsec, p.notes"]);
+}
+
+#[test]
+fn coalescing_option_roundtrips_and_absence_preserves_serialization() {
+    let absent: ExtractSection = serde_yaml::from_str("name: parts\ntype: region\n").unwrap();
+    assert_eq!(absent.coalesce_by_as_of, None);
+    assert!(
+        serde_json::to_value(&absent)
+            .unwrap()
+            .get("coalesce_by_as_of")
+            .is_none()
+    );
+    let explicit: ExtractSection =
+        serde_yaml::from_str("name: parts\ntype: region\ncoalesce_by_as_of: false\n").unwrap();
+    assert_eq!(explicit.coalesce_by_as_of, Some(false));
+    assert_eq!(
+        serde_json::from_value::<ExtractSection>(serde_json::to_value(&explicit).unwrap()).unwrap(),
+        explicit
+    );
+}

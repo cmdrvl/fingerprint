@@ -167,3 +167,51 @@ print(
     f"byte_offsets_present={summary['region_byte_offsets_present']}"
 )
 PY
+
+# Exercise the same-period segmentation option through the actual CLI twice.
+python3 - <<'PY' "${REPO_ROOT}" "${ARTIFACT_DIR}" "${DEFINITIONS_DIR}"
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+root, artifacts, definitions = (Path(value) for value in sys.argv[1:])
+definitions = root / definitions
+rule = definitions / 'selector-subsections.fp.yaml'
+rule.write_text('''fingerprint_id: selector-subsections.v1
+format: html
+assertions:
+  - node_exists: {selector: "p.subsec"}
+extract:
+  - name: segments
+    type: region
+    anchor_selector: "p.subsec"
+    stop_selector: "p.subsec, p.notes"
+    coalesce_by_as_of: false
+    continue_past: ["(?i)continued"]
+''')
+source = root / 'tests/fixtures/html/soi_subsections_repeated_period.html'
+record = {'version': 'hash.v0', 'path': str(source), 'extension': '.html',
+          'bytes_hash': 'sha256:' + hashlib.sha256(source.read_bytes()).hexdigest(),
+          'tool_versions': {'hash': 'fixture'}}
+trust = artifacts / 'subsections-trust.yaml'
+trust.write_text('trust:\n  - "installed:*"\n')
+env = dict(os.environ, FINGERPRINT_DEFINITIONS=str(definitions), FINGERPRINT_TRUST=str(trust))
+binary = os.environ.get('FINGERPRINT_BIN', str(root / 'target/debug/fingerprint'))
+outputs = []
+for attempt in range(2):
+    result = subprocess.run([binary, '--no-witness', '--fp', 'selector-subsections.v1'],
+                            input=json.dumps(record) + '\n', text=True, capture_output=True, env=env)
+    (artifacts / f'subsections-{attempt}.stdout.jsonl').write_text(result.stdout)
+    (artifacts / f'subsections-{attempt}.stderr.log').write_text(result.stderr)
+    if result.returncode:
+        sys.stderr.write(result.stderr)
+        raise SystemExit(f'subsection CLI exited {result.returncode}: {result.stdout}')
+    outputs.append(result.stdout)
+assert outputs[0] == outputs[1], 'subsection CLI output changed across identical runs'
+regions = json.loads(outputs[0])['fingerprint']['extracted']['segments']['regions']
+assert [region['table_indices'] for region in regions] == [[0, 1], [2], [3]]
+print('[selector] repeated-period subsection CLI partition and determinism passed')
+PY

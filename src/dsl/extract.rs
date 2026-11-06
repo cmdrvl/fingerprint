@@ -309,14 +309,28 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
         .filter(|node| node_matches_optional_regex(*node, stop_text_regex.as_ref()))
         .collect::<Vec<_>>();
     let mut regions = Vec::new();
+    let coalesce_by_as_of = section.coalesce_by_as_of.unwrap_or(true);
     let mut covered_continuation: Option<(String, usize)> = None;
+    let mut covered_until = 0;
     for (index, anchor) in anchors.iter().enumerate() {
         let anchor_as_of = anchor_as_ofs[index].as_deref();
-        if covered_continuation
-            .as_ref()
-            .is_some_and(|(as_of, until_order)| {
-                anchor_as_of == Some(as_of.as_str()) && anchor.normalized.order < *until_order
-            })
+        // Explicit continuation anchors inside the preceding region must not
+        // become duplicate segments when date coalescing is disabled.
+        if !coalesce_by_as_of
+            && anchor.normalized.order < covered_until
+            && continue_past
+                .iter()
+                .any(|pattern| pattern.is_match(selector_node_text(anchor.node).as_str()))
+        {
+            continue;
+        }
+
+        if coalesce_by_as_of
+            && covered_continuation
+                .as_ref()
+                .is_some_and(|(as_of, until_order)| {
+                    anchor_as_of == Some(as_of.as_str()) && anchor.normalized.order < *until_order
+                })
         {
             continue;
         }
@@ -327,16 +341,22 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
             anchor.normalized,
             anchor.raw_span.map(|span| span.end),
             &continue_past,
-            anchor_as_of,
+            anchor_as_of.filter(|_| coalesce_by_as_of),
         );
-        let next_anchor =
-            next_non_continuation_anchor(&anchors, &anchor_as_ofs, index, &continue_past);
+        let next_anchor = next_non_continuation_anchor(
+            &anchors,
+            &anchor_as_ofs,
+            index,
+            &continue_past,
+            coalesce_by_as_of,
+        );
         let boundary = earlier_boundary(stop, next_anchor);
         let end_line = boundary
             .map(|boundary| boundary.normalized.line)
             .unwrap_or_else(|| html.normalized.lines().count() + 1)
             .max(anchor.normalized.line + 1);
         let boundary_order = boundary.map(|boundary| boundary.normalized.order);
+        covered_until = boundary_order.unwrap_or(usize::MAX);
         if let Some(anchor_as_of) = anchor_as_of {
             covered_continuation = Some((
                 anchor_as_of.to_owned(),
@@ -390,6 +410,7 @@ fn next_non_continuation_anchor(
     anchor_as_ofs: &[Option<String>],
     index: usize,
     continue_past: &[Regex],
+    coalesce_by_as_of: bool,
 ) -> Option<RegionBoundary> {
     let current_as_of = anchor_as_ofs.get(index).and_then(|as_of| as_of.as_deref());
     anchors
@@ -405,7 +426,7 @@ fn next_non_continuation_anchor(
             let next_as_of = anchor_as_ofs
                 .get(*next_index)
                 .and_then(|as_of| as_of.as_deref());
-            !matches!((current_as_of, next_as_of), (Some(current), Some(next)) if current == next)
+            !coalesce_by_as_of || !matches!((current_as_of, next_as_of), (Some(current), Some(next)) if current == next)
         })
         .map(|(_, anchor)| RegionBoundary {
             normalized: anchor.normalized,

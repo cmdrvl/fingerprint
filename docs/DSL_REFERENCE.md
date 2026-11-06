@@ -117,7 +117,7 @@ a domain schema.
 | `table` | `html`, `markdown`, `pdf` with `text_path` | `name`, `type`, `anchor_heading` | `{ "start_line": 45, "end_line": 62, "columns": [...], "row_count": 15 }` |
 | `section` | `html`, `markdown`, `pdf` with `text_path` | `name`, `type`, `anchor_heading` | `{ "start_line": 30, "end_line": 90, "heading": "Income Capitalization Approach" }` |
 | `text_match` | `html`, `markdown`, `text`, `pdf` with `text_path` | `name`, `type`, `anchor`, `pattern`, `within_chars` | `{ "line": 12, "char_offset": 45, "matched": "June 15, 2024" }` |
-| `region` | `html` only | `name`, `type`, `anchor_selector`, `stop_selector` | Bounds-only region metadata: `anchor_selector`, `stop_selector`, `start_line`, `end_line`, DOM-order `table_indices`, `page_span`, `byte_offsets`, and `as_of`. Multiple anchors emit `{ "regions": [...] }`. |
+| `region` | `html` only | `name`, `type`, `anchor_selector`, `stop_selector` | Bounds-only region metadata: `anchor_selector`, `stop_selector`, `start_line`, `end_line`, DOM-order `table_indices`, `page_span`, `byte_offsets`, and `as_of`. Multiple anchors emit `{ "regions": [...] }`; optional `coalesce_by_as_of: false` retains same-period subsection boundaries. |
 <!-- extract-catalog:end -->
 
 Optional fields:
@@ -131,11 +131,19 @@ Optional fields:
 - `continue_past` on `region` is a list of regexes for stop candidates such as
   repeated `(continued)` headers that should not end the region.
 
+- `coalesce_by_as_of` on `region` defaults to `true`. Set it to `false` for
+  explicitly selected subheadings that share a period date but delimit separate
+  segments. `continue_past` still suppresses declared continuation boundaries.
+
 Region output is intentionally bounds-only. It must not include copied HTML,
 table text, holding rows, or other carved document content. Downstream tools own
 period selection and slicing.
 
 ## Content hashes
+
+An empty `over` hashes every extracted section, sorted by name. When adding
+segments to an existing definition, set `over` explicitly to preserve the intended
+hash scope; otherwise adding a section changes its content hash.
 
 `content_hash` currently supports only BLAKE3:
 
@@ -255,6 +263,12 @@ extract:
     stop_text_regex: "(?i)(schedu\\s*les?\\s+of\\s+investments|notes|derivative\\s+instruments|item\\s+[0-9])"
     continue_past:
       - "(?i)(\\(continued\\)|\\bcontinued\\b)"
+  - name: schedule_segments
+    type: region
+    coalesce_by_as_of: false
+    anchor_selector: "p.subsection"
+    stop_selector: "p.subsection, h2.notes"
+    continue_past: ["(?i)continued"]
 content_hash:
   algorithm: blake3
   over: [schedule_region]

@@ -41,6 +41,9 @@ pub struct ExtractSection {
     pub stop_text_regex: Option<String>,
     #[serde(default)]
     pub continue_past: Vec<String>,
+    /// None preserves the historical same-period continuation behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coalesce_by_as_of: Option<bool>,
 }
 
 /// Content hash configuration.
