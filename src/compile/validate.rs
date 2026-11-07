@@ -3,7 +3,14 @@ use crate::dsl::parser::{ContentHashConfig, ExtractSection, FingerprintDefinitio
 use std::collections::BTreeSet;
 
 const SUPPORTED_FORMATS: &[&str] = &["xlsx", "csv", "pdf", "markdown", "text", "html"];
-const SUPPORTED_EXTRACT_TYPES: &[&str] = &["range", "table", "section", "text_match", "region"];
+const SUPPORTED_EXTRACT_TYPES: &[&str] = &[
+    "range",
+    "table",
+    "section",
+    "text_match",
+    "region",
+    "element",
+];
 
 pub fn validate_definition(definition: &FingerprintDefinition) -> Result<(), String> {
     validate_format(&definition.format)?;
@@ -259,6 +266,14 @@ fn validate_extract_sections(format: &str, extract: &[ExtractSection]) -> Result
                     })?;
                 }
             }
+            "element" => {
+                require_element_html_format(format)?;
+                require_extract_field(section, section.selector.as_ref(), "selector")?;
+                if let Some(selector) = &section.selector {
+                    validate_selector("element.selector", selector)?;
+                }
+                validate_optional_element_regex(section.text_regex.as_deref())?;
+            }
             other => {
                 return Err(format!(
                     "unsupported extract type '{other}'; supported extract types are {}",
@@ -300,6 +315,28 @@ fn require_region_html_format(format: &str) -> Result<(), String> {
             "extract type 'region' is html-only and requires format 'html', found '{format}'. For pdf fingerprints, use text_path-backed section/table/text_match extracts plus page_count/metadata_regex, or supply richer structure from an upstream extractor instead of adding fingerprint heuristics."
         ))
     }
+}
+
+fn require_element_html_format(format: &str) -> Result<(), String> {
+    if format == "html" {
+        Ok(())
+    } else {
+        Err(format!(
+            "extract type 'element' is html-only and requires format 'html', found '{format}'. For pdf fingerprints, use text_path-backed section/table/text_match extracts plus page_count/metadata_regex, or supply DOM structure from an upstream extractor."
+        ))
+    }
+}
+
+fn validate_optional_element_regex(pattern: Option<&str>) -> Result<(), String> {
+    let Some(pattern) = pattern else {
+        return Ok(());
+    };
+    if pattern.trim().is_empty() {
+        return Err("element extract 'text_regex' must not be empty".to_owned());
+    }
+    regex::Regex::new(pattern)
+        .map(|_| ())
+        .map_err(|error| format!("invalid element text_regex '{pattern}': {error}"))
 }
 
 fn require_extract_field(

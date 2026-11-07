@@ -138,6 +138,13 @@ fn doc_u02_extract_type_parity_with_compile_schema() {
         documented, expected,
         "DSL_REFERENCE.md extract catalog drifted from compile --schema"
     );
+    let element_row = reference
+        .lines()
+        .find(|line| line.starts_with("| `element` |"))
+        .expect("element extract output contract");
+    assert!(element_row.contains("source_bound"));
+    assert!(element_row.contains("byte_offsets"));
+    assert!(element_row.contains("raw-DOM"));
 }
 
 #[test]

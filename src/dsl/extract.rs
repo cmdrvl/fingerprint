@@ -1,10 +1,14 @@
 use crate::document::html::{HtmlDocument, is_hard_page_break};
-use crate::document::html_source::{SourceLocations, source_locations};
+use crate::document::html_source::{
+    SourceElementLocations, SourceLocations, source_element_locations, source_locations,
+};
 use crate::document::{Document, StructuredDocument};
 use crate::dsl::parser::ExtractSection;
 use calamine::{Reader, open_workbook_auto};
 use chrono::NaiveDate;
+use ego_tree::NodeId;
 use regex::Regex;
+use scraper::ElementRef;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::{BTreeSet, HashMap};
@@ -38,6 +42,7 @@ fn extract_one(doc: &Document, section: &ExtractSection) -> Result<Option<Value>
         "table" => extract_table(doc, section),
         "text_match" => extract_text_match(doc, section),
         "region" => extract_region(doc, section),
+        "element" => extract_element(doc, section),
         other => Err(format!("unsupported extract type '{other}'")),
     }
 }
@@ -221,6 +226,96 @@ fn extract_text_match(doc: &Document, section: &ExtractSection) -> Result<Option
         "char_offset": char_offset,
         "matched": value_match.as_str(),
     })))
+}
+
+fn extract_element(doc: &Document, section: &ExtractSection) -> Result<Option<Value>, String> {
+    let Document::Html(html) = doc else {
+        return Ok(None);
+    };
+    let selector = section
+        .selector
+        .as_deref()
+        .ok_or_else(|| "element extract requires 'selector'".to_owned())?;
+    let text_regex = section
+        .text_regex
+        .as_deref()
+        .map(|pattern| {
+            if pattern.trim().is_empty() {
+                return Err("element extract 'text_regex' must not be empty".to_owned());
+            }
+            Regex::new(pattern)
+                .map_err(|error| format!("invalid element text_regex '{pattern}': {error}"))
+        })
+        .transpose()?;
+
+    let mut selected = Vec::new();
+    for node in html.select_nodes(selector)? {
+        if node_matches_optional_regex(node, text_regex.as_ref()) {
+            let dom_element_index = html
+                .element_order_index(&node)
+                .ok_or_else(|| "selected element has no original DOM order index".to_owned())?;
+            selected.push((dom_element_index, node));
+        }
+    }
+    if selected.is_empty() {
+        return Ok(None);
+    }
+    selected.sort_by_key(|(dom_element_index, _)| *dom_element_index);
+
+    let table_indices = raw_dom_tag_indices(html, "table")?;
+    let row_indices = raw_dom_tag_indices(html, "tr")?;
+    let cell_indices = raw_dom_tag_indices(html, "td, th")?;
+    let source_locations: Option<SourceElementLocations> = source_element_locations(html);
+    let elements = selected
+        .into_iter()
+        .map(|(dom_element_index, node)| {
+            let source_span = source_locations
+                .as_ref()
+                .and_then(|locations| locations.get(&node.id()))
+                .and_then(|location| location.element.clone())
+                .filter(|span| html.raw.get(span.clone()).is_some());
+            json!({
+                "tag_name": node.value().name(),
+                "dom_element_index": dom_element_index,
+                "dom_table_index": nearest_dom_index(node, &["table"], &table_indices),
+                "dom_row_index": nearest_dom_index(node, &["tr"], &row_indices),
+                "dom_cell_index": nearest_dom_index(node, &["td", "th"], &cell_indices),
+                "source_bound": source_span.is_some(),
+                "byte_offsets": source_span.map(|span| json!({
+                    "start": span.start,
+                    "end": span.end,
+                })),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(Some(json!({ "elements": elements })))
+}
+
+fn raw_dom_tag_indices(
+    html: &HtmlDocument,
+    selector: &str,
+) -> Result<HashMap<NodeId, usize>, String> {
+    Ok(html
+        .select_nodes(selector)?
+        .into_iter()
+        .enumerate()
+        .map(|(index, node)| (node.id(), index))
+        .collect())
+}
+
+fn nearest_dom_index(
+    node: ElementRef<'_>,
+    tag_names: &[&str],
+    indices: &HashMap<NodeId, usize>,
+) -> Option<usize> {
+    if tag_names.contains(&node.value().name()) {
+        return indices.get(&node.id()).copied();
+    }
+    node.ancestors()
+        .filter_map(ElementRef::wrap)
+        .find(|ancestor| tag_names.contains(&ancestor.value().name()))
+        .and_then(|ancestor| indices.get(&ancestor.id()).copied())
 }
 
 #[derive(Debug, Clone, Copy)]

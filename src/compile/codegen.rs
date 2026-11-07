@@ -542,6 +542,8 @@ fn generate_extracted_code(extract: &[ExtractSection]) -> String {
                     continue_past: {continue_past},
                     coalesce_by_as_of: {coalesce_by_as_of},
                     tokenized_byte_offsets: {tokenized_byte_offsets},
+                    selector: {selector},
+                    text_regex: {text_regex},
                 }}"#,
             name = format_args!("{:?}", section.name),
             typ = format_args!("{:?}", section.r#type),
@@ -559,6 +561,8 @@ fn generate_extracted_code(extract: &[ExtractSection]) -> String {
             continue_past = codegen_string_vec(&section.continue_past),
             coalesce_by_as_of = codegen_option_display(section.coalesce_by_as_of),
             tokenized_byte_offsets = codegen_option_display(section.tokenized_byte_offsets),
+            selector = codegen_option_string(section.selector.as_deref()),
+            text_regex = codegen_option_string(section.text_regex.as_deref()),
         ));
     }
 

@@ -47,6 +47,12 @@ pub struct ExtractSection {
     /// Opt in to explicit source-node mapping; absent/false retains the legacy locator.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokenized_byte_offsets: Option<bool>,
+    /// CSS selector for the opt-in HTML source-element bounds extract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
+    /// Optional visible text filter for the opt-in HTML source-element bounds extract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_regex: Option<String>,
 }
 
 /// Content hash configuration.

@@ -85,6 +85,10 @@ extract:
     type: table
     anchor_heading: "(?i)schedule of investments"
     index: 0
+  - name: source_cells
+    type: element
+    selector: td
+    text_regex: ".+"
 content_hash:
   algorithm: blake3
   over: [schedule_table]
@@ -293,6 +297,14 @@ fn compile_mode_html_crate_builds_and_matches_dsl_runtime() {
         compiled_match, dsl_match,
         "compiled html fingerprint must match DSL runtime on matching fixture"
     );
+    let source_cells = compiled_match["extracted"]["source_cells"]["elements"]
+        .as_array()
+        .expect("compiled element extract should report raw DOM cells");
+    assert!(!source_cells.is_empty());
+    assert!(source_cells.iter().all(|cell| cell["source_bound"] == true));
+    assert_eq!(source_cells[0]["dom_table_index"], 0);
+    assert_eq!(source_cells[0]["dom_row_index"], 1);
+    assert_eq!(source_cells[0]["dom_cell_index"], 6);
 
     let compiled_non_match = run_parity_harness(&manifest_path, &target_dir, &non_matching_doc);
     let dsl_non_match = evaluate_dsl(yaml.path(), &non_matching_doc);

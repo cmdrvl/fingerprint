@@ -701,7 +701,7 @@ pub fn dsl_json_schema() -> String {
                     "name": { "type": "string", "minLength": 1 },
                     "type": {
                         "type": "string",
-                        "enum": ["range", "table", "section", "text_match", "region"]
+                        "enum": ["range", "table", "section", "text_match", "region", "element"]
                     },
                     "anchor_heading": { "type": "string" },
                     "index": { "type": "integer", "minimum": 0 },
@@ -716,11 +716,20 @@ pub fn dsl_json_schema() -> String {
                     "stop_text_regex": { "type": "string" },
                     "coalesce_by_as_of": { "type": "boolean", "default": true },
                     "tokenized_byte_offsets": { "type": "boolean", "default": false },
+                    "selector": { "type": "string", "minLength": 1 },
+                    "text_regex": { "type": "string", "minLength": 1 },
                     "continue_past": {
                         "type": "array",
                         "items": { "type": "string", "minLength": 1 },
                     },
                 },
+                "allOf": [{
+                    "if": {
+                        "properties": { "type": { "const": "element" } },
+                        "required": ["type"],
+                    },
+                    "then": { "required": ["selector"] },
+                }],
             },
             "contentHashConfig": {
                 "type": "object",
@@ -936,6 +945,29 @@ assertions:
         assert_eq!(properties["coalesce_by_as_of"]["default"], true);
         assert_eq!(properties["tokenized_byte_offsets"]["type"], "boolean");
         assert_eq!(properties["tokenized_byte_offsets"]["default"], false);
+    }
+
+    #[test]
+    fn schema_supports_element_extract_selector_and_text_filter() {
+        let parsed: Value =
+            serde_json::from_str(&dsl_json_schema()).expect("schema should be valid JSON");
+        let extract_section = &parsed["$defs"]["extractSection"];
+        let extract_type_enum = extract_section["properties"]["type"]["enum"]
+            .as_array()
+            .expect("extract type enum should be an array");
+        let properties = extract_section["properties"]
+            .as_object()
+            .expect("extract section properties should be an object");
+
+        assert!(extract_type_enum.contains(&Value::String("element".to_owned())));
+        assert_eq!(properties["selector"]["type"], "string");
+        assert_eq!(properties["selector"]["minLength"], 1);
+        assert_eq!(properties["text_regex"]["type"], "string");
+        assert_eq!(properties["text_regex"]["minLength"], 1);
+        assert_eq!(
+            extract_section["allOf"][0]["then"]["required"],
+            serde_json::json!(["selector"])
+        );
     }
 
     #[test]

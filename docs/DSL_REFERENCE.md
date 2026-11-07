@@ -118,6 +118,7 @@ a domain schema.
 | `section` | `html`, `markdown`, `pdf` with `text_path` | `name`, `type`, `anchor_heading` | `{ "start_line": 30, "end_line": 90, "heading": "Income Capitalization Approach" }` |
 | `text_match` | `html`, `markdown`, `text`, `pdf` with `text_path` | `name`, `type`, `anchor`, `pattern`, `within_chars` | `{ "line": 12, "char_offset": 45, "matched": "June 15, 2024" }` |
 | `region` | `html` only | `name`, `type`, `anchor_selector`, `stop_selector` | Bounds-only region metadata: `anchor_selector`, `stop_selector`, `start_line`, `end_line`, DOM-order `table_indices`, `page_span`, `byte_offsets`, and `as_of`. Multiple anchors emit `{ "regions": [...] }`; optional `coalesce_by_as_of: false` retains same-period subsection boundaries. |
+| `element` | `html` only | `name`, `type`, `selector`, optional `text_regex` | One entry per original DOM match, with `dom_element_index`, nearest raw-DOM table/row/cell indexes, `source_bound`, and exact UTF-8 `byte_offsets` when both explicit source boundaries map uniquely. Unbound nodes retain `byte_offsets: null`; no text is copied. |
 <!-- extract-catalog:end -->
 
 Optional fields:
@@ -199,7 +200,7 @@ They may also use content assertions and extracts through a caller-supplied
 - `section`, `table`, and `text_match` extracts
 
 PDFs do not have an HTML DOM. `node_exists`, `node_count`, `node_text_regex`,
-`attr_regex`, and `region` are rejected under `format: pdf` with an html-only
+`attr_regex`, `region`, and `element` are rejected under `format: pdf` with an html-only
 validation message. If a PDF workflow needs Docling JSON reading order, table
 geometry, or another richer structure, that should become a new
 extractor-targeting surface over the upstream artifact rather than a new

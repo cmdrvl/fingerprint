@@ -2,9 +2,11 @@ use fingerprint::compile::validate::validate_definition;
 use fingerprint::document::html::{HtmlDocument, is_hard_page_break};
 use fingerprint::document::markdown::MarkdownDocument;
 use fingerprint::document::{Document, open_document_from_path};
+use fingerprint::dsl::content_hash::content_hash;
 use fingerprint::dsl::extract::extract;
 use fingerprint::dsl::parser::{ExtractSection, FingerprintDefinition};
-use serde_json::Value;
+use serde_json::{Value, json};
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -92,6 +94,226 @@ fn tokenized_option_roundtrips_without_changing_absent_serialization() {
     );
 }
 
+#[test]
+fn element_extract_cli_binds_each_repeated_source_marker_without_copying_text() {
+    let raw = "<html><body><table><tr><td>Borrower A <span>(Q)</span></td><td>100</td></tr><tr><td>Borrower B <span>(Q)</span></td><td>200</td></tr></table><p>Footer</p></body></html>";
+    let file = make_temp_html(raw);
+    let markers = element_section("markers", "span", Some(r"^\(Q\)$"));
+    let marker_text = ExtractSection {
+        name: "marker_text".to_owned(),
+        r#type: "text_match".to_owned(),
+        anchor: Some("Borrower".to_owned()),
+        pattern: Some("Borrower".to_owned()),
+        within_chars: Some(200),
+        ..Default::default()
+    };
+    let document = open_document_from_path(file.path()).expect("open BDC marker HTML");
+    let with_elements = extract(&document, &[markers.clone(), marker_text.clone()])
+        .expect("extract source-bounded markers");
+    let without_elements =
+        extract(&document, &[marker_text]).expect("extract text match without element locator");
+    let hash_scope = ["marker_text".to_owned()];
+    let expected_hash = content_hash(&without_elements, &hash_scope);
+    assert_eq!(
+        content_hash(&with_elements, &hash_scope),
+        expected_hash,
+        "adding locator metadata must not change a content hash scoped to another extract"
+    );
+
+    let definitions = tempdir().expect("create installed definitions directory");
+    fs::write(
+        definitions.path().join("marker-probe.fp.yaml"),
+        r#"
+fingerprint_id: marker-probe.v1
+format: html
+assertions:
+  - node_count:
+      selector: table
+      min: 1
+extract:
+  - name: markers
+    type: element
+    selector: span
+    text_regex: '^\(Q\)$'
+  - name: marker_text
+    type: text_match
+    anchor: Borrower
+    pattern: Borrower
+    within_chars: 200
+content_hash:
+  algorithm: blake3
+  over: [marker_text]
+"#,
+    )
+    .expect("write marker probe definition");
+    let trust = NamedTempFile::new().expect("create trust config");
+    fs::write(trust.path(), "trust:\n  - \"installed:*\"\n").expect("write trust config");
+    let manifest = write_jsonl(&[json!({
+        "version": "hash.v0",
+        "path": file.path().display().to_string(),
+        "extension": ".html",
+        "bytes_hash": "sha256:79659abf6c28a62aac0c956a323925329baeea947c127d0e24e6043d897dc954",
+        "tool_versions": { "hash": "0.1.0" }
+    })]);
+    let output = Command::new(env!("CARGO_BIN_EXE_fingerprint"))
+        .arg(manifest.path())
+        .args(["--fp", "marker-probe.v1", "--no-witness"])
+        .env("FINGERPRINT_DEFINITIONS", definitions.path())
+        .env("FINGERPRINT_TRUST", trust.path())
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("run native fingerprint CLI");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "marker CLI failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let records = parse_jsonl(&output.stdout);
+    assert_eq!(records.len(), 1);
+    let extracted = &records[0]["fingerprint"]["extracted"];
+    assert_eq!(extracted["markers"], with_elements["markers"]);
+    assert_eq!(records[0]["fingerprint"]["content_hash"], expected_hash);
+    let elements = extracted["markers"]["elements"]
+        .as_array()
+        .expect("marker element array");
+    assert_eq!(
+        elements.len(),
+        2,
+        "equal marker text retains both DOM nodes"
+    );
+    assert_eq!(elements[0]["source_bound"], true);
+    assert_eq!(elements[1]["source_bound"], true);
+    assert_eq!(elements[0]["dom_table_index"], 0);
+    assert_eq!(elements[0]["dom_row_index"], 0);
+    assert_eq!(elements[1]["dom_row_index"], 1);
+    assert_eq!(elements[0]["dom_cell_index"], 0);
+    assert_eq!(elements[1]["dom_cell_index"], 2);
+    let expected_ranges = raw
+        .match_indices("<span>(Q)</span>")
+        .map(|(start, source)| (start, start + source.len()))
+        .collect::<Vec<_>>();
+    assert_eq!(expected_ranges.len(), 2);
+    for (element, (start, end)) in elements.iter().zip(expected_ranges) {
+        assert_eq!(element["byte_offsets"]["start"], start);
+        assert_eq!(element["byte_offsets"]["end"], end);
+        assert_eq!(&raw[start..end], "<span>(Q)</span>");
+    }
+    let serialized = serde_json::to_string(&extracted["markers"]).unwrap();
+    for source_text in ["Borrower A", "Borrower B", "100", "200", "Footer", "(Q)"] {
+        assert!(
+            !serialized.contains(source_text),
+            "copied {source_text:?} into output"
+        );
+    }
+}
+
+#[test]
+fn element_extract_maps_utf8_entities_and_nested_selected_nodes() {
+    let raw = "<table><tr><td><span>(Q &amp; <em>é🙂</em>)</span></td><td>1&nbsp;000</td></tr></table><p>Footer</p>";
+    let file = make_temp_html(raw);
+    let extracted = element_value(
+        file.path(),
+        element_section("elements", "span, em", Some(r"(?s)(Q|é🙂)")),
+    )
+    .expect("matching nested elements should be emitted");
+    let elements = extracted["elements"].as_array().unwrap();
+    assert_eq!(elements.len(), 2);
+    assert_eq!(elements[0]["tag_name"], "span");
+    assert_eq!(elements[1]["tag_name"], "em");
+    assert!(
+        elements[0]["dom_element_index"].as_u64().unwrap()
+            < elements[1]["dom_element_index"].as_u64().unwrap()
+    );
+    assert!(
+        elements
+            .iter()
+            .all(|element| element["source_bound"] == true)
+    );
+
+    let span_start = raw.find("<span>").unwrap();
+    let span_end = raw.find("</span>").unwrap() + "</span>".len();
+    let em_start = raw.find("<em>").unwrap();
+    let em_end = raw.find("</em>").unwrap() + "</em>".len();
+    assert_eq!(
+        elements[0]["byte_offsets"],
+        json!({ "start": span_start, "end": span_end })
+    );
+    assert_eq!(
+        elements[1]["byte_offsets"],
+        json!({ "start": em_start, "end": em_end })
+    );
+    assert!(raw[span_start..span_end].contains("&amp;"));
+    assert_eq!(&raw[em_start..em_end], "<em>é🙂</em>");
+    let serialized = serde_json::to_string(&extracted).unwrap();
+    for source_text in ["(Q", "&amp;", "é🙂", "1&nbsp;000", "Footer"] {
+        assert!(!serialized.contains(source_text));
+    }
+}
+
+#[test]
+fn element_extract_keeps_matching_but_unproven_nodes_visibly_unbound() {
+    let missing_end =
+        make_temp_html("<table><tr><td><span>(Q)</td><td>100</td></tr></table><p>Footer</p>");
+    let missing = element_value(
+        missing_end.path(),
+        element_section("elements", "span", Some(r"^\(Q\)$")),
+    )
+    .expect("text-matched node should remain observable");
+    assert_eq!(missing["elements"].as_array().unwrap().len(), 1);
+    assert_eq!(missing["elements"][0]["source_bound"], false);
+    assert_eq!(missing["elements"][0]["byte_offsets"], Value::Null);
+
+    let reconstructed = make_temp_html("<p><b>(Q)<p>neighbor</b>");
+    let cloned = element_value(
+        reconstructed.path(),
+        element_section("elements", "b", Some(r"Q")),
+    )
+    .expect("matching reconstructed node should remain observable");
+    assert!(
+        cloned["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|element| element["source_bound"] == false
+                && element["byte_offsets"] == Value::Null)
+    );
+
+    let mut invalid_utf8 = NamedTempFile::with_suffix(".html").unwrap();
+    invalid_utf8.write_all(b"<span>(Q)</span>\xff").unwrap();
+    invalid_utf8.flush().unwrap();
+    let lossy = element_value(
+        invalid_utf8.path(),
+        element_section("elements", "span", Some(r"Q")),
+    )
+    .expect("lossy DOM node remains visible");
+    assert_eq!(lossy["elements"][0]["source_bound"], false);
+    assert_eq!(lossy["elements"][0]["byte_offsets"], Value::Null);
+}
+
+#[test]
+fn element_extract_maps_duplicate_attribute_source_without_guessing_bounds() {
+    let raw = "<span data-kind='first' data-kind='second'>(Q)</span>";
+    let file = make_temp_html(raw);
+    let extracted = element_value(
+        file.path(),
+        element_section("elements", "span", Some(r"^\(Q\)$")),
+    )
+    .expect("explicit duplicate-attribute element should be selected");
+    let element = &extracted["elements"][0];
+    assert_eq!(element["source_bound"], true);
+    assert_eq!(
+        element["byte_offsets"],
+        json!({ "start": 0, "end": raw.len() })
+    );
+    assert_eq!(
+        &raw[element["byte_offsets"]["start"].as_u64().unwrap() as usize
+            ..element["byte_offsets"]["end"].as_u64().unwrap() as usize],
+        raw
+    );
+}
+
 fn fixture(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
 }
@@ -146,10 +368,26 @@ fn region_section(name: &str, anchor_selector: &str, stop_selector: &str) -> Ext
     }
 }
 
+fn element_section(name: &str, selector: &str, text_regex: Option<&str>) -> ExtractSection {
+    ExtractSection {
+        name: name.to_owned(),
+        r#type: "element".to_owned(),
+        selector: Some(selector.to_owned()),
+        text_regex: text_regex.map(ToOwned::to_owned),
+        ..Default::default()
+    }
+}
+
 fn region_value(path: &Path, section: ExtractSection) -> Option<Value> {
     let document = open_document_from_path(path).expect("open document");
     let mut extracted = extract(&document, &[section]).expect("extract region");
     extracted.remove("soi_region")
+}
+
+fn element_value(path: &Path, section: ExtractSection) -> Option<Value> {
+    let document = open_document_from_path(path).expect("open document");
+    let mut extracted = extract(&document, &[section]).expect("extract source elements");
+    extracted.remove("elements")
 }
 
 fn assert_region_has_only_bounds_strings(value: &Value, allowed_selectors: &[&str]) {
@@ -1024,6 +1262,58 @@ fn rgn_validation_rejects_malformed_region_selector() {
     let error = validate_definition(&definition).expect_err("bad region selector should fail");
 
     assert!(error.contains("invalid CSS selector"));
+}
+
+#[test]
+fn element_validation_requires_html_and_valid_selector_and_text_regex() {
+    let definition = |format: &str, section: ExtractSection| FingerprintDefinition {
+        fingerprint_id: "element-validation.v1".to_owned(),
+        format: format.to_owned(),
+        valid_from: None,
+        valid_until: None,
+        parent: None,
+        assertions: vec![],
+        extract: vec![section],
+        content_hash: None,
+    };
+
+    validate_definition(&definition(
+        "html",
+        element_section("elements", "span", Some(r"^\(Q\)$")),
+    ))
+    .expect("valid element extractor should compile");
+
+    let missing_selector = validate_definition(&definition(
+        "html",
+        ExtractSection {
+            name: "elements".to_owned(),
+            r#type: "element".to_owned(),
+            ..Default::default()
+        },
+    ))
+    .expect_err("element selector is required");
+    assert!(missing_selector.contains("requires field 'selector'"));
+
+    let invalid_selector = validate_definition(&definition(
+        "html",
+        element_section("elements", "div[", None),
+    ))
+    .expect_err("malformed CSS selector should be rejected");
+    assert!(invalid_selector.contains("invalid CSS selector"));
+
+    let invalid_regex = validate_definition(&definition(
+        "html",
+        element_section("elements", "span", Some("[")),
+    ))
+    .expect_err("malformed visible text regex should be rejected");
+    assert!(invalid_regex.contains("invalid element text_regex"));
+
+    let non_html = validate_definition(&definition(
+        "pdf",
+        element_section("elements", "span", None),
+    ))
+    .expect_err("element extraction is HTML-only");
+    assert!(non_html.contains("extract type 'element' is html-only"));
 }
 
 #[test]
