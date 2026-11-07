@@ -118,7 +118,7 @@ a domain schema.
 | `section` | `html`, `markdown`, `pdf` with `text_path` | `name`, `type`, `anchor_heading` | `{ "start_line": 30, "end_line": 90, "heading": "Income Capitalization Approach" }` |
 | `text_match` | `html`, `markdown`, `text`, `pdf` with `text_path` | `name`, `type`, `anchor`, `pattern`, `within_chars` | `{ "line": 12, "char_offset": 45, "matched": "June 15, 2024" }` |
 | `region` | `html` only | `name`, `type`, `anchor_selector`, `stop_selector` | Bounds-only region metadata: `anchor_selector`, `stop_selector`, `start_line`, `end_line`, DOM-order `table_indices`, `page_span`, `byte_offsets`, and `as_of`. Multiple anchors emit `{ "regions": [...] }`; optional `coalesce_by_as_of: false` retains same-period subsection boundaries. |
-| `element` | `html` only | `name`, `type`, `selector`, optional `text_regex` | One entry per original DOM match, with `dom_element_index`, nearest raw-DOM table/row/cell indexes, `source_bound`, and exact UTF-8 `byte_offsets` when both explicit source boundaries map uniquely. Unbound nodes retain `byte_offsets: null`; no text is copied. |
+| `element` | `html` only | `name`, `type`, `selector`, optional `text_regex` | One entry per original DOM match, with `dom_element_index`, nearest raw-DOM table/row/cell indexes, `source_bound`, and exact UTF-8 `byte_offsets` when source boundaries map uniquely. Unbound nodes retain `byte_offsets: null`; no text is copied. |
 <!-- extract-catalog:end -->
 
 Optional fields:
@@ -135,6 +135,12 @@ Optional fields:
 - `coalesce_by_as_of` on `region` defaults to `true`. Set it to `false` for
   explicitly selected subheadings that share a period date but delimit separate
   segments. `continue_past` still suppresses declared continuation boundaries.
+
+- `element` bounds use exact explicit end tags, except `td`/`th` may use a
+  uniquely mapped next-cell, row, row-group, or table boundary from the native
+  HTML tree when every intervening source element maps inside the same DOM cell.
+  A slash does not close these non-void elements. Ambiguous or incomplete cell
+  boundaries retain `source_bound: false` and `byte_offsets: null`.
 
 - `tokenized_byte_offsets` on `region` defaults to `false`. Set it to `true` to
   map unique explicit DOM nodes to original start-tag bytes despite quote, case or

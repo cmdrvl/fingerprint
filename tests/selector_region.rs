@@ -332,6 +332,80 @@ fn element_extract_keeps_matching_but_unproven_nodes_visibly_unbound() {
 }
 
 #[test]
+fn element_extract_maps_implicit_table_cell_boundaries_without_treating_slash_as_close() {
+    let raw = "<table><tr><td/>kept <b>nested</b><td>next</td></tr></table>";
+    assert_element_bounds(raw, "td", &["<td/>kept <b>nested</b>", "<td>next</td>"]);
+
+    let raw = "<table><tr><td/><td/></tr></table>";
+    assert_element_bounds(raw, "td", &["<td/>", "<td/>"]);
+
+    let raw = "<table><tr><td>first<td>second</tr></table>";
+    assert_element_bounds(raw, "td", &["<td>first", "<td>second"]);
+
+    let raw = "<table><tr><td/>first<tr><td>last</table>";
+    assert_element_bounds(raw, "td", &["<td/>first", "<td>last"]);
+
+    let raw = "<table><tbody><tr><td/>row group</tbody></table>";
+    assert_element_bounds(raw, "td", &["<td/>row group"]);
+
+    let raw = "<table><tr><th/>header<th>next</tr></table>";
+    assert_element_bounds(raw, "th", &["<th/>header", "<th>next"]);
+}
+
+#[test]
+fn element_extract_uses_nearest_nested_table_boundaries_and_refuses_incomplete_outer_cells() {
+    let raw = "<table><tr><td/>outer<table><tr><td/>inner<td>inner-next</table><td>outer-next</tr></table>";
+    assert_element_bounds(
+        raw,
+        "td",
+        &[
+            "<td/>outer<table><tr><td/>inner<td>inner-next</table>",
+            "<td/>inner",
+            "<td>inner-next",
+            "<td>outer-next",
+        ],
+    );
+
+    // The nested table close is not a close for the still-open outer cell.
+    let raw = "<table><tr><td/>outer<table><tr><td/>inner</table>";
+    let file = make_temp_html(raw);
+    let extracted = element_value(file.path(), element_section("cells", "td", None))
+        .expect("native table cells should remain observable");
+    let elements = extracted["elements"].as_array().unwrap();
+    assert_eq!(elements.len(), 2);
+    assert_eq!(elements[0]["source_bound"], false);
+    assert_eq!(elements[0]["byte_offsets"], Value::Null);
+    assert_eq!(elements[1]["source_bound"], true);
+    let start = elements[1]["byte_offsets"]["start"].as_u64().unwrap() as usize;
+    let end = elements[1]["byte_offsets"]["end"].as_u64().unwrap() as usize;
+    assert_eq!(&raw[start..end], "<td/>inner");
+
+    // With no next cell or explicit row/table boundary, EOF is not guessed as
+    // a source close for malformed content.
+    let raw = "<table><tr><td/>unterminated";
+    let file = make_temp_html(raw);
+    let extracted = element_value(file.path(), element_section("cells", "td", None))
+        .expect("unclosed table cell should stay observable");
+    assert_eq!(extracted["elements"].as_array().unwrap().len(), 1);
+    assert_eq!(extracted["elements"][0]["source_bound"], false);
+    assert_eq!(extracted["elements"][0]["byte_offsets"], Value::Null);
+}
+
+fn assert_element_bounds(raw: &str, selector: &str, expected: &[&str]) {
+    let file = make_temp_html(raw);
+    let extracted = element_value(file.path(), element_section("cells", selector, None))
+        .expect("selected HTML elements should be extracted");
+    let elements = extracted["elements"].as_array().unwrap();
+    assert_eq!(elements.len(), expected.len());
+    for (element, expected_source) in elements.iter().zip(expected) {
+        assert_eq!(element["source_bound"], true);
+        let start = element["byte_offsets"]["start"].as_u64().unwrap() as usize;
+        let end = element["byte_offsets"]["end"].as_u64().unwrap() as usize;
+        assert_eq!(&raw[start..end], *expected_source);
+    }
+}
+
+#[test]
 fn element_extract_maps_duplicate_attribute_source_without_guessing_bounds() {
     let raw = "<span data-kind='first' data-kind='second'>(Q)</span>";
     let file = make_temp_html(raw);
