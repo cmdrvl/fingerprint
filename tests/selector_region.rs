@@ -499,8 +499,9 @@ fn region_value(path: &Path, section: ExtractSection) -> Option<Value> {
 
 fn element_value(path: &Path, section: ExtractSection) -> Option<Value> {
     let document = open_document_from_path(path).expect("open document");
+    let name = section.name.clone();
     let mut extracted = extract(&document, &[section]).expect("extract source elements");
-    extracted.remove("elements")
+    extracted.remove(&name)
 }
 
 fn assert_region_has_only_bounds_strings(value: &Value, allowed_selectors: &[&str]) {

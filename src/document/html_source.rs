@@ -135,7 +135,9 @@ fn source_location_map(
             mapped_locations.insert(id, location);
         }
     }
-    infer_implicit_table_cell_bounds(html, &locations, &unique_ordinals, &mut mapped_locations);
+    if include_element_bounds {
+        infer_implicit_table_cell_bounds(html, &locations, &unique_ordinals, &mut mapped_locations);
+    }
     Some(mapped_locations)
 }
 
@@ -177,7 +179,7 @@ fn infer_implicit_table_cell_bounds(
         else {
             continue;
         };
-        if end <= location.start_tag.end || end > html.raw.len() {
+        if end < location.start_tag.end || end > html.raw.len() {
             continue;
         }
         if !source_tags_are_cell_descendants(
