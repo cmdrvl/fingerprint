@@ -253,6 +253,45 @@ fn element_extract_maps_utf8_entities_and_nested_selected_nodes() {
 }
 
 #[test]
+fn many_source_elements_keep_original_dom_indexes_and_exact_bounds() {
+    let row = "<tr><td><span>(2)<em>é</em></span></td><td>100</td></tr>";
+    let raw = format!(
+        "<html><head><title>Schedule</title></head><body><p>Before</p><table>{}</table></body></html>",
+        row.repeat(96)
+    );
+    let file = make_temp_html(&raw);
+    let document = open_document_from_path(file.path()).unwrap();
+    let Document::Html(html) = &document else {
+        panic!("HTML fixture expected");
+    };
+    let expected_nodes = html.select_nodes("span, em").unwrap();
+    let extracted = extract(&document, &[element_section("elements", "span, em", None)]).unwrap();
+    let elements = extracted["elements"]["elements"].as_array().unwrap();
+    assert_eq!(elements.len(), 192);
+    for (index, (element, node)) in elements.iter().zip(expected_nodes).enumerate() {
+        // The pre-existing single-node traversal is the reference for DOM order.
+        assert_eq!(
+            element["dom_element_index"],
+            html.element_order_index(&node).unwrap()
+        );
+        assert_eq!(element["dom_table_index"], 0);
+        assert_eq!(element["dom_row_index"], index / 2);
+        assert_eq!(element["dom_cell_index"], (index / 2) * 2);
+        assert_eq!(element["source_bound"], true);
+        let start = element["byte_offsets"]["start"].as_u64().unwrap() as usize;
+        let end = element["byte_offsets"]["end"].as_u64().unwrap() as usize;
+        assert_eq!(
+            &raw[start..end],
+            if index % 2 == 0 {
+                "<span>(2)<em>é</em></span>"
+            } else {
+                "<em>é</em>"
+            }
+        );
+    }
+}
+
+#[test]
 fn element_extract_keeps_matching_but_unproven_nodes_visibly_unbound() {
     let missing_end =
         make_temp_html("<table><tr><td><span>(Q)</td><td>100</td></tr></table><p>Footer</p>");

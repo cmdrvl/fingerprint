@@ -248,11 +248,14 @@ fn extract_element(doc: &Document, section: &ExtractSection) -> Result<Option<Va
         })
         .transpose()?;
 
+    // Index the original DOM once: walking it anew for every matched element is
+    // quadratic for full schedules containing thousands of rows and markers.
+    let element_indices = raw_dom_tag_indices(html, "*")?;
     let mut selected = Vec::new();
     for node in html.select_nodes(selector)? {
         if node_matches_optional_regex(node, text_regex.as_ref()) {
-            let dom_element_index = html
-                .element_order_index(&node)
+            let dom_element_index = *element_indices
+                .get(&node.id())
                 .ok_or_else(|| "selected element has no original DOM order index".to_owned())?;
             selected.push((dom_element_index, node));
         }
