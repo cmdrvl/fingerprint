@@ -542,6 +542,7 @@ fn generate_extracted_code(extract: &[ExtractSection]) -> String {
                     continue_past: {continue_past},
                     coalesce_by_as_of: {coalesce_by_as_of},
                     tokenized_byte_offsets: {tokenized_byte_offsets},
+                    reporting_date: {reporting_date},
                     selector: {selector},
                     text_regex: {text_regex},
                 }}"#,
@@ -561,6 +562,13 @@ fn generate_extracted_code(extract: &[ExtractSection]) -> String {
             continue_past = codegen_string_vec(&section.continue_past),
             coalesce_by_as_of = codegen_option_display(section.coalesce_by_as_of),
             tokenized_byte_offsets = codegen_option_display(section.tokenized_byte_offsets),
+            reporting_date = section.reporting_date.as_ref().map_or_else(
+                || "None".to_owned(),
+                |config| format!(
+                    "Some(fingerprint::dsl::parser::ReportingDateConfig {{ selector: {:?}.to_owned(), text_regex: {:?}.to_owned() }})",
+                    config.selector, config.text_regex
+                ),
+            ),
             selector = codegen_option_string(section.selector.as_deref()),
             text_regex = codegen_option_string(section.text_regex.as_deref()),
         ));

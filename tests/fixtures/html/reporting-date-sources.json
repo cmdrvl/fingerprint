@@ -1,0 +1,45 @@
+{
+  "scope": "Byte-exact contiguous retained-source schedule excerpts, including Notes boundary; not whole filings or acquisition authentication. No row truth or full filing coverage claim.",
+  "cases": [
+    {
+      "fixture": "reporting-date-pfx.htm",
+      "source_basename": "0001490349_historical_0001213900-26-052253.htm",
+      "source_sha256": "a04c4f2fc45d0a68df5bb777a664f0d132a052bf2dc30e26128e6622f0ca347d",
+      "source_length": 2472767,
+      "source_byte_range": [
+        259333,
+        909904
+      ],
+      "fixture_sha256": "21eb46fb4d984baff28636a5f1d402a78015d5367be72bd404f4cd5a7effdccf",
+      "fixture_length": 650571,
+      "periods": [
+        "2026-03-31",
+        "2025-09-30"
+      ],
+      "table_counts": [
+        35,
+        36
+      ]
+    },
+    {
+      "fixture": "reporting-date-sar.htm",
+      "source_basename": "0001377936_historical_0001213900-26-075931.htm",
+      "source_sha256": "a91b1d2c611c8f9b20456ec08fbb2e2ebb96f7e2c83ece7693101a14339b8f7e",
+      "source_length": 7344617,
+      "source_byte_range": [
+        195682,
+        1396573
+      ],
+      "fixture_sha256": "fef2009fc590b8201e4883d9fb57046cf24894de3e528a5e18175a62e23e68c5",
+      "fixture_length": 1200891,
+      "periods": [
+        "2026-05-31",
+        "2026-02-28"
+      ],
+      "table_counts": [
+        27,
+        29
+      ]
+    }
+  ]
+}

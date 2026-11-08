@@ -630,6 +630,30 @@ Content extract rules specify how to locate and delimit content regions for hash
   to boundary start (or EOF). Selectors, dates, line/table bounds and normalizers
   are unchanged. No copied source content enters output.
 
+- Optional `reporting_date: {selector: "p.report-date", text_regex: "(?i)(?:as of )?[a-z]+ [0-9]{1,2}, [0-9]{4}"}`
+  on an HTML `region` replaces the legacy six-normalized-line date window with an
+  explicit title-local reporting-date role. Both fields are required. The regex
+  must match the entire whitespace-normalized visible text of a selected node;
+  substring matches are ignored. This option does not infer a heading or date role
+  from styling. Each original title is resolved independently, strictly after its
+  explicit source element end and before the earliest following raw DOM table,
+  next selected title or filtered stop. A continuation does not enlarge this local
+  date window. Candidate elements must have unique explicit whole-element source
+  mappings and stay wholly within that window; table ancestors, descendants and
+  wrappers are excluded. The existing written-month, slash and ISO calendar
+  parsers must yield one distinct valid date across all matching candidates.
+  Missing/conflicting/invalid candidates or unavailable source binding yield
+  `as_of: null`, retaining the region and its tables. No previous date is inherited.
+  The same result drives continuation/coalescing decisions and final `as_of`.
+  With this option, `continue_past` can suppress a selected continuation title only
+  when both local dates are known and equal; non-title stops are not coalesced by
+  date. Original title byte boundaries remain unchanged. The option is independent
+  of `tokenized_byte_offsets`; its absence preserves legacy runtime output and
+  serialized definition fields. No normalizer changes, larger line window or
+  copied source content are introduced. Template assertions still own title and
+  first-page coverage: date selection does not repair a moved start ID, establish
+  acquisition identity, validate holding rows or qualify downstream parsing.
+
 ### Compiling DSL to Rust
 
 ```bash

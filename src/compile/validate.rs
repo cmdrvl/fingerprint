@@ -208,6 +208,9 @@ fn validate_extract_sections(format: &str, extract: &[ExtractSection]) -> Result
         if section.name.trim().is_empty() {
             return Err("extract.name must not be empty".to_owned());
         }
+        if section.reporting_date.is_some() && section.r#type != "region" {
+            return Err("reporting_date is supported only on HTML region extracts".to_owned());
+        }
 
         match section.r#type.as_str() {
             "range" => {
@@ -229,6 +232,17 @@ fn validate_extract_sections(format: &str, extract: &[ExtractSection]) -> Result
             }
             "region" => {
                 require_region_html_format(format)?;
+                if let Some(config) = &section.reporting_date {
+                    validate_selector("region.reporting_date.selector", &config.selector)?;
+                    if config.text_regex.trim().is_empty() {
+                        return Err("region.reporting_date.text_regex must not be empty".to_owned());
+                    }
+                    validate_optional_region_regex(
+                        &section.name,
+                        "reporting_date.text_regex",
+                        Some(&config.text_regex),
+                    )?;
+                }
                 require_extract_field(
                     section,
                     section.anchor_selector.as_ref(),

@@ -148,6 +148,25 @@ Optional fields:
   implicit or cloned nodes and non-UTF-8 input retain null offsets. Region spans
   still end at the next boundary's start, or EOF; they are not element spans.
 
+- `reporting_date` is an optional HTML `region` object with required `selector`
+  (CSS) and `text_regex` fields; other nested fields are rejected. The text regex
+  must match the entire whitespace-normalized visible candidate text. It selects
+  an explicit reporting-date role, not a general date search. Selected elements
+  must map uniquely to explicit whole source elements strictly after the original
+  title end and before the first following raw DOM table, next title, or filtered
+  stop, whichever is first. Table ancestors/descendants/wrappers are excluded.
+  Written-month, slash and ISO dates use the existing calendar parser. Exactly one
+  distinct valid date is required across the local candidates. Missing, invalid,
+  conflicting or unbound evidence emits `as_of: null` and retains tables. No date
+  propagates from a preceding header. The single local result governs both
+  coalescing and final `as_of`; `continue_past` suppresses a selected continuation
+  only with the same known local date. Non-title stops remain boundaries. The
+  original title boundary stays intact. This option does not require
+  `tokenized_byte_offsets: true`; absence retains legacy runtime output and
+  serialization. It does not fix first-page coverage, authenticate a filing, or
+  establish row truth. See the byte-exact retained PFX/SAR excerpt provenance in
+  `tests/fixtures/html/reporting-date-sources.json` and owner regression tests.
+
 Region output is intentionally bounds-only. It must not include copied HTML,
 table text, holding rows, or other carved document content. Downstream tools own
 period selection and slicing.
@@ -282,6 +301,9 @@ extract:
     anchor_selector: "p.subsection"
     stop_selector: "p.subsection, h2.notes"
     continue_past: ["(?i)continued"]
+    reporting_date:
+      selector: "p.report-date"
+      text_regex: "(?i)(?:as of )?[a-z]+ [0-9]{1,2}, [0-9]{4}"
 content_hash:
   algorithm: blake3
   over: [schedule_region]

@@ -3,7 +3,7 @@ use crate::document::html_source::{
     SourceElementLocations, SourceLocations, source_element_locations, source_locations,
 };
 use crate::document::{Document, StructuredDocument};
-use crate::dsl::parser::ExtractSection;
+use crate::dsl::parser::{ExtractSection, ReportingDateConfig};
 use calamine::{Reader, open_workbook_auto};
 use chrono::NaiveDate;
 use ego_tree::NodeId;
@@ -347,6 +347,13 @@ struct RegionBoundary {
     raw_span: Option<RawElementSpan>,
 }
 
+struct RegionDatePolicy<'a, 'dom> {
+    as_of: Option<&'a str>,
+    local_as_ofs: Option<&'a HashMap<NodeId, Option<String>>>,
+    anchors: &'a [RegionAnchor<'dom>],
+    coalesce: bool,
+}
+
 struct RawLocator<'a> {
     html: &'a HtmlDocument,
     tokenized: bool,
@@ -364,6 +371,87 @@ impl RawLocator<'_> {
             end: span.end,
         })
     }
+}
+
+/// This is a local extraction policy over the existing DOM, not a normalizer.
+/// Source spans prevent a selected wrapper from importing a table's date text.
+struct TitleLocalDates<'a> {
+    candidates: Vec<ElementRef<'a>>,
+    text_regex: Regex,
+    orders: HashMap<NodeId, usize>,
+    tables: Vec<ElementRef<'a>>,
+    locations: Option<SourceElementLocations>,
+}
+
+impl<'a> TitleLocalDates<'a> {
+    fn new(html: &'a HtmlDocument, config: &ReportingDateConfig) -> Result<Self, String> {
+        Ok(Self {
+            candidates: html.select_nodes(&config.selector)?,
+            text_regex: Regex::new(&config.text_regex)
+                .map_err(|error| format!("invalid reporting_date.text_regex: {error}"))?,
+            orders: raw_dom_tag_indices(html, "*")?,
+            tables: html.select_nodes("table")?,
+            locations: source_element_locations(html),
+        })
+    }
+
+    fn date(
+        &self,
+        html: &HtmlDocument,
+        title: ElementRef<'_>,
+        boundaries: &[ElementRef<'_>],
+    ) -> Option<String> {
+        if in_or_contains_table(title) {
+            return None;
+        }
+        let locations = self.locations.as_ref()?;
+        let title_span = locations.get(&title.id())?.element.as_ref()?;
+        let title_order = *self.orders.get(&title.id())?;
+        // Even an explicitly continued title bounds this header's date search.
+        let limit = boundaries
+            .iter()
+            .chain(self.tables.iter())
+            .filter_map(|node| {
+                let order = *self.orders.get(&node.id())?;
+                (order > title_order && !is_descendant_of(*node, title)).then_some((order, node))
+            })
+            .min_by_key(|(order, _)| *order);
+        let (limit_order, limit_byte) = match limit {
+            Some((order, node)) => (order, locations.get(&node.id())?.start_tag.start),
+            None => (usize::MAX, html.raw.len()),
+        };
+        let mut dates = BTreeSet::new();
+        for node in &self.candidates {
+            let order = *self.orders.get(&node.id())?;
+            if order <= title_order || order >= limit_order || in_or_contains_table(*node) {
+                continue;
+            }
+            let text = selector_node_text(*node);
+            if !self
+                .text_regex
+                .find(&text)
+                .is_some_and(|matched| matched.start() == 0 && matched.end() == text.len())
+            {
+                continue;
+            }
+            let span = locations.get(&node.id())?.element.as_ref()?;
+            if span.start < title_span.end || span.end > limit_byte {
+                // A wrapper crossing the title/table boundary is not a date role.
+                continue;
+            }
+            dates.extend(reporting_dates_in_text(&text)?);
+        }
+        (dates.len() == 1)
+            .then(|| dates.into_iter().next())
+            .flatten()
+    }
+}
+
+fn in_or_contains_table(node: ElementRef<'_>) -> bool {
+    node.ancestors()
+        .chain(node.descendants())
+        .filter_map(ElementRef::wrap)
+        .any(|element| element.value().name() == "table")
 }
 
 fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Value>, String> {
@@ -394,10 +482,27 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
         .collect::<Result<Vec<_>, _>>()?;
 
     let tokenized = section.tokenized_byte_offsets.unwrap_or(false);
+    let reporting_dates = section
+        .reporting_date
+        .as_ref()
+        .map(|config| TitleLocalDates::new(html, config))
+        .transpose()?;
     let raw_locator = RawLocator {
         html,
         tokenized,
-        locations: tokenized.then(|| source_locations(html)).flatten(),
+        locations: if tokenized {
+            match &reporting_dates {
+                Some(dates) => dates.locations.as_ref().map(|locations| {
+                    locations
+                        .iter()
+                        .map(|(id, location)| (*id, location.start_tag.clone()))
+                        .collect()
+                }),
+                None => source_locations(html),
+            }
+        } else {
+            None
+        },
     };
     let mut anchor_search_start = 0usize;
     let mut raw_anchor_search_start = 0usize;
@@ -422,15 +527,28 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
     if anchors.is_empty() {
         return Ok(None);
     }
-    let anchor_as_ofs = anchors
-        .iter()
-        .map(|anchor| region_anchor_as_of(html, anchor.node, anchor.normalized.line))
-        .collect::<Vec<_>>();
-
     let stop_nodes = html
         .select_nodes(stop_selector)?
         .into_iter()
         .filter(|node| node_matches_optional_regex(*node, stop_text_regex.as_ref()))
+        .collect::<Vec<_>>();
+    let local_boundaries = anchors
+        .iter()
+        .map(|anchor| anchor.node)
+        .chain(stop_nodes.iter().copied())
+        .collect::<Vec<_>>();
+    let local_as_ofs = reporting_dates.as_ref().map(|dates| {
+        local_boundaries
+            .iter()
+            .map(|node| (node.id(), dates.date(html, *node, &local_boundaries)))
+            .collect::<HashMap<_, _>>()
+    });
+    let anchor_as_ofs = anchors
+        .iter()
+        .map(|anchor| match &local_as_ofs {
+            Some(dates) => dates.get(&anchor.node.id()).cloned().flatten(),
+            None => region_anchor_as_of(html, anchor.node, anchor.normalized.line),
+        })
         .collect::<Vec<_>>();
     let mut regions = Vec::new();
     let coalesce_by_as_of = section.coalesce_by_as_of.unwrap_or(true);
@@ -442,6 +560,7 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
         // become duplicate segments when date coalescing is disabled.
         if !coalesce_by_as_of
             && anchor.normalized.order < covered_until
+            && (local_as_ofs.is_none() || anchor_as_of.is_some())
             && continue_past
                 .iter()
                 .any(|pattern| pattern.is_match(selector_node_text(anchor.node).as_str()))
@@ -465,7 +584,12 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
             anchor.normalized,
             anchor.raw_span.map(|span| span.end),
             &continue_past,
-            anchor_as_of.filter(|_| coalesce_by_as_of),
+            &RegionDatePolicy {
+                as_of: anchor_as_of,
+                local_as_ofs: local_as_ofs.as_ref(),
+                anchors: &anchors,
+                coalesce: coalesce_by_as_of,
+            },
         );
         let next_anchor = next_non_continuation_anchor(
             &anchors,
@@ -473,6 +597,7 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
             index,
             &continue_past,
             coalesce_by_as_of,
+            local_as_ofs.is_some(),
         );
         let boundary = earlier_boundary(stop, next_anchor);
         let end_line = boundary
@@ -496,12 +621,16 @@ fn extract_region(doc: &Document, section: &ExtractSection) -> Result<Option<Val
             anchor.normalized.order,
             boundary_order,
         )?;
-        let as_of = parse_as_of_date(&region_date_text(
-            html,
-            anchor.node,
-            anchor.normalized.line,
-            end_line,
-        ));
+        let as_of = if local_as_ofs.is_some() {
+            anchor_as_ofs[index].clone()
+        } else {
+            parse_as_of_date(&region_date_text(
+                html,
+                anchor.node,
+                anchor.normalized.line,
+                end_line,
+            ))
+        };
         let byte_offsets =
             region_byte_offsets(anchor.raw_span, boundary, html.raw.len()).map(|span| {
                 json!({
@@ -535,6 +664,7 @@ fn next_non_continuation_anchor(
     index: usize,
     continue_past: &[Regex],
     coalesce_by_as_of: bool,
+    require_matching_date: bool,
 ) -> Option<RegionBoundary> {
     let current_as_of = anchor_as_ofs.get(index).and_then(|as_of| as_of.as_deref());
     anchors
@@ -542,14 +672,15 @@ fn next_non_continuation_anchor(
         .enumerate()
         .skip(index + 1)
         .find(|(next_index, _)| {
-            if continue_past.iter().any(|pattern| {
+            let next_as_of = anchor_as_ofs
+                .get(*next_index)
+                .and_then(|as_of| as_of.as_deref());
+            let same_date = matches!((current_as_of, next_as_of), (Some(current), Some(next)) if current == next);
+            if (!require_matching_date || same_date) && continue_past.iter().any(|pattern| {
                 pattern.is_match(selector_node_text(anchors[*next_index].node).as_str())
             }) {
                 return false;
             }
-            let next_as_of = anchor_as_ofs
-                .get(*next_index)
-                .and_then(|as_of| as_of.as_deref());
             !coalesce_by_as_of || !matches!((current_as_of, next_as_of), (Some(current), Some(next)) if current == next)
         })
         .map(|(_, anchor)| RegionBoundary {
@@ -581,7 +712,7 @@ fn first_region_stop(
     anchor: LocatedElement,
     raw_search_start: Option<usize>,
     continue_past: &[Regex],
-    anchor_as_of: Option<&str>,
+    dates: &RegionDatePolicy<'_, '_>,
 ) -> Option<RegionBoundary> {
     let html = raw_locator.html;
     stop_nodes
@@ -593,16 +724,30 @@ fn first_region_stop(
         })
         .find_map(|(_, node)| {
             let text = selector_node_text(node);
-            if continue_past
-                .iter()
-                .any(|pattern| pattern.is_match(text.as_str()))
+            let local_same_date = dates.local_as_ofs.is_some_and(|local| {
+                dates
+                    .anchors
+                    .iter()
+                    .any(|candidate| candidate.node.id() == node.id())
+                    && dates.as_of.is_some()
+                    && local.get(&node.id()).and_then(|date| date.as_deref()) == dates.as_of
+            });
+            if (dates.local_as_ofs.is_none() || local_same_date)
+                && continue_past
+                    .iter()
+                    .any(|pattern| pattern.is_match(text.as_str()))
             {
                 return None;
             }
             let located = locate_element(html, node, anchor.byte_end)?;
-            if anchor_as_of.is_some_and(|anchor_as_of| {
-                region_anchor_as_of(html, node, located.line).as_deref() == Some(anchor_as_of)
-            }) {
+            if (dates.coalesce && local_same_date)
+                || (dates.local_as_ofs.is_none()
+                    && dates.coalesce
+                    && dates.as_of.is_some_and(|anchor_as_of| {
+                        region_anchor_as_of(html, node, located.line).as_deref()
+                            == Some(anchor_as_of)
+                    }))
+            {
                 return None;
             }
             Some(RegionBoundary {
@@ -816,8 +961,32 @@ fn region_anchor_as_of(
     ))
 }
 
+const MONTH_DATE_PATTERN: &str = r"(?i)\b([a-z]+)\s+([0-9]{1,2}),\s*([0-9]{4})\b";
+const SLASH_DATE_PATTERN: &str = r"\b([0-9]{1,2})/([0-9]{1,2})/([0-9]{4})\b";
+const ISO_DATE_PATTERN: &str = r"\b([0-9]{4})-([0-9]{2})-([0-9]{2})\b";
+
+/// Collect all declared dates with the same patterns/calendar parser as the
+/// legacy path. Unlike that path, a reporting role cannot choose the first of
+/// conflicting dates (even when they occur in the same selected element).
+fn reporting_dates_in_text(text: &str) -> Option<BTreeSet<String>> {
+    let mut dates = BTreeSet::new();
+    for pattern in [MONTH_DATE_PATTERN, SLASH_DATE_PATTERN, ISO_DATE_PATTERN] {
+        for captures in Regex::new(pattern).ok()?.captures_iter(text) {
+            let date = match pattern {
+                MONTH_DATE_PATTERN => {
+                    parse_month_day_year(&captures[1], &captures[2], &captures[3])
+                }
+                SLASH_DATE_PATTERN => parse_numeric_date(&captures[3], &captures[1], &captures[2]),
+                _ => parse_numeric_date(&captures[1], &captures[2], &captures[3]),
+            }?;
+            dates.insert(format_iso_date(date));
+        }
+    }
+    (!dates.is_empty()).then_some(dates)
+}
+
 fn parse_as_of_date(region_text: &str) -> Option<String> {
-    let month_date = Regex::new(r"(?i)\b([a-z]+)\s+([0-9]{1,2}),\s*([0-9]{4})\b").ok()?;
+    let month_date = Regex::new(MONTH_DATE_PATTERN).ok()?;
     if let Some(date) = month_date
         .captures_iter(region_text)
         .find_map(|captures| parse_month_day_year(&captures[1], &captures[2], &captures[3]))
@@ -825,7 +994,7 @@ fn parse_as_of_date(region_text: &str) -> Option<String> {
         return Some(format_iso_date(date));
     }
 
-    let slash_date = Regex::new(r"\b([0-9]{1,2})/([0-9]{1,2})/([0-9]{4})\b").ok()?;
+    let slash_date = Regex::new(SLASH_DATE_PATTERN).ok()?;
     if let Some(date) = slash_date
         .captures_iter(region_text)
         .find_map(|captures| parse_numeric_date(&captures[3], &captures[1], &captures[2]))
@@ -833,7 +1002,7 @@ fn parse_as_of_date(region_text: &str) -> Option<String> {
         return Some(format_iso_date(date));
     }
 
-    let iso_date = Regex::new(r"\b([0-9]{4})-([0-9]{2})-([0-9]{2})\b").ok()?;
+    let iso_date = Regex::new(ISO_DATE_PATTERN).ok()?;
     iso_date
         .captures_iter(region_text)
         .find_map(|captures| parse_numeric_date(&captures[1], &captures[2], &captures[3]))

@@ -47,12 +47,24 @@ pub struct ExtractSection {
     /// Opt in to explicit source-node mapping; absent/false retains the legacy locator.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokenized_byte_offsets: Option<bool>,
+    /// Opt in to source-bound, title-local reporting dates instead of the legacy line window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reporting_date: Option<ReportingDateConfig>,
     /// CSS selector for the opt-in HTML source-element bounds extract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selector: Option<String>,
     /// Optional visible text filter for the opt-in HTML source-element bounds extract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_regex: Option<String>,
+}
+
+/// An explicit author-selected reporting-date role; no visual or date-role inference.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ReportingDateConfig {
+    pub selector: String,
+    /// Must match the entire whitespace-normalized visible text of a candidate node.
+    pub text_regex: String,
 }
 
 /// Content hash configuration.

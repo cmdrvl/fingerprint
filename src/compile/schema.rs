@@ -716,6 +716,15 @@ pub fn dsl_json_schema() -> String {
                     "stop_text_regex": { "type": "string" },
                     "coalesce_by_as_of": { "type": "boolean", "default": true },
                     "tokenized_byte_offsets": { "type": "boolean", "default": false },
+                    "reporting_date": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["selector", "text_regex"],
+                        "properties": {
+                            "selector": { "type": "string", "minLength": 1 },
+                            "text_regex": { "type": "string", "minLength": 1 },
+                        },
+                    },
                     "selector": { "type": "string", "minLength": 1 },
                     "text_regex": { "type": "string", "minLength": 1 },
                     "continue_past": {
@@ -729,6 +738,9 @@ pub fn dsl_json_schema() -> String {
                         "required": ["type"],
                     },
                     "then": { "required": ["selector"] },
+                }, {
+                    "if": { "required": ["reporting_date"] },
+                    "then": { "properties": { "type": { "const": "region" } } },
                 }],
             },
             "contentHashConfig": {
