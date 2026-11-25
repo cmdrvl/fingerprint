@@ -28,8 +28,7 @@ const GUESS_LINES: usize = 25;
 
 /// Binary containers peek has no reader for: refused up front as "format not applicable"
 /// instead of failing later with a UTF-8 error.
-const NOT_APPLICABLE_EXTENSIONS: &[&str] =
-    &["pdf", "zip", "gz", "docx", "pptx", "png", "jpg", "jpeg"];
+const NOT_APPLICABLE_EXTENSIONS: &[&str] = &["zip", "gz", "docx", "pptx", "png", "jpg", "jpeg"];
 
 /// Workbook containers peek reads through calamine (bd-jxd).
 const WORKBOOK_EXTENSIONS: &[&str] = &["xlsx", "xlsm", "xls"];
@@ -165,6 +164,9 @@ pub fn run(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
     }
     if matches!(lower_extension.as_deref(), Some("html" | "htm")) {
         return run_html(args, append_witness_record);
+    }
+    if lower_extension.as_deref() == Some("pdf") {
+        return run_pdf(args, append_witness_record);
     }
     if let Some(kind) = match lower_extension.as_deref() {
         Some("jsonl" | "ndjson") => Some(JsonPeekKind::Jsonl),
@@ -786,7 +788,8 @@ fn apply_view(args: &PeekArgs, mut result: Value) -> Value {
     let mut omitted = Vec::new();
     if let Some(object) = result.as_object_mut() {
         for key in [
-            "rows", "columns", "fields", "paths", "sheets", "headings", "tables", "tags", "classes",
+            "rows", "columns", "fields", "paths", "sheets", "headings", "tables", "tags",
+            "classes", "outline",
         ] {
             if object.remove(key).is_some() {
                 omitted.push(key);
@@ -806,6 +809,274 @@ fn apply_view(args: &PeekArgs, mut result: Value) -> Value {
     result["view"] = json!("brief");
     result["omitted"] = json!(omitted);
     result
+}
+
+/// Info-dictionary keys defined by the PDF specification: public vocabulary, so they are named
+/// even by default. Any other key is a pseudonym `id` unless `--explicit`.
+const STANDARD_INFO_KEYS: &[&str] = &[
+    "Title",
+    "Author",
+    "Subject",
+    "Keywords",
+    "Creator",
+    "Producer",
+    "CreationDate",
+    "ModDate",
+    "Trapped",
+];
+const MAX_OUTLINE_ENTRIES: usize = 5000;
+const MAX_OUTLINE_DEPTH: usize = 16;
+const MAX_PDF_LISTED: usize = 200;
+
+/// `fingerprint peek x.pdf`: structure only. Page count and page-size/rotation profile, PDF
+/// version and whether it is encrypted, the Info dictionary's KEYS (never a value), and the
+/// outline (bookmark) tree as entry count, depth and per-entry depth/children/title-length
+/// bucket. No page content is read, no metadata value and no bookmark title is printed. A key
+/// outside the PDF specification's Info vocabulary is an `id` unless `--explicit`; `--explicit`
+/// also adds a blake3-prefix `id` per outline title (a pseudonym; never the title).
+fn run_pdf(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
+    use lopdf::{Dictionary, Document, Object, ObjectId};
+
+    let path = args.file.display().to_string();
+    let refuse = |message: &str, detail: Value| -> Result<u8, String> {
+        emit_refusal("E_BAD_INPUT", message, detail)?;
+        Ok(2)
+    };
+    let bytes = match fs::read(&args.file) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return refuse(
+                "Could not read input file",
+                json!({ "path": path, "error": error.kind().to_string() }),
+            );
+        }
+    };
+    if bytes.is_empty() {
+        return refuse("Input file is empty", json!({ "path": path }));
+    }
+    let document = match Document::load_mem(&bytes) {
+        Ok(document) => document,
+        Err(error) => {
+            return refuse(
+                "Could not read pdf",
+                json!({ "path": path, "error": error.to_string() }),
+            );
+        }
+    };
+
+    let dict_of = |object: &Object| -> Option<Dictionary> {
+        match object {
+            Object::Reference(id) => document.get_object(*id).ok()?.as_dict().ok().cloned(),
+            other => other.as_dict().ok().cloned(),
+        }
+    };
+
+    // Pages: size and rotation profile (MediaBox/Rotate may be inherited from the page tree).
+    let pages = document.get_pages();
+    let inherited = |start: ObjectId, key: &[u8]| -> Option<Object> {
+        let mut current = start;
+        for _ in 0..16 {
+            let dict = document.get_object(current).ok()?.as_dict().ok()?;
+            if let Ok(value) = dict.get(key) {
+                return Some(value.clone());
+            }
+            current = dict.get(b"Parent").ok()?.as_reference().ok()?;
+        }
+        None
+    };
+    let mut sizes: BTreeMap<(i64, i64, i64), usize> = BTreeMap::new();
+    for page_id in pages.values() {
+        let rotate = inherited(*page_id, b"Rotate")
+            .and_then(|object| object.as_i64().ok())
+            .unwrap_or(0);
+        let media = inherited(*page_id, b"MediaBox").and_then(|object| {
+            let items = match object {
+                Object::Reference(id) => document.get_object(id).ok()?.as_array().ok()?.clone(),
+                other => other.as_array().ok()?.clone(),
+            };
+            let numbers: Vec<f32> = items
+                .iter()
+                .filter_map(|item| {
+                    item.as_float()
+                        .ok()
+                        .or_else(|| item.as_i64().ok().map(|n| n as f32))
+                })
+                .collect();
+            (numbers.len() == 4).then(|| (numbers[2] - numbers[0], numbers[3] - numbers[1]))
+        });
+        let (width, height) = media.unwrap_or((0.0, 0.0));
+        *sizes
+            .entry((
+                (width * 10.0).round() as i64,
+                (height * 10.0).round() as i64,
+                rotate,
+            ))
+            .or_insert(0) += 1;
+    }
+    let mut size_list: Vec<_> = sizes.into_iter().collect();
+    size_list.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let page_sizes: Vec<Value> = size_list
+        .iter()
+        .take(20)
+        .map(|((width, height, rotate), count)| {
+            json!({
+                "width": *width as f64 / 10.0,
+                "height": *height as f64 / 10.0,
+                "rotate": rotate,
+                "pages": count,
+            })
+        })
+        .collect();
+
+    // Info dictionary KEYS only.
+    let info = document.trailer.get(b"Info").ok().and_then(dict_of);
+    let mut standard_keys = Vec::new();
+    let mut other_keys: Vec<String> = Vec::new();
+    if let Some(info) = &info {
+        for (name, _) in info.iter() {
+            let key = String::from_utf8_lossy(name).into_owned();
+            if STANDARD_INFO_KEYS.contains(&key.as_str()) {
+                standard_keys.push(key);
+            } else {
+                other_keys.push(key);
+            }
+        }
+    }
+    standard_keys.sort();
+    other_keys.sort();
+    let mut metadata = json!({
+        "key_count": standard_keys.len() + other_keys.len(),
+        "standard_keys": standard_keys,
+        "other_key_ids": other_keys.iter().map(|key| short_id(key)).collect::<Vec<_>>(),
+    });
+    if args.explicit {
+        metadata["other_keys"] = json!(other_keys);
+    }
+
+    // Outline tree: iterative walk of /Outlines with caps and a cycle guard.
+    struct Entry {
+        depth: usize,
+        children: usize,
+        title_length: usize,
+        id: String,
+    }
+    let mut entries: Vec<Entry> = Vec::new();
+    let mut truncated = false;
+    let outlines_root = document
+        .catalog()
+        .ok()
+        .and_then(|catalog| catalog.get(b"Outlines").ok())
+        .and_then(|object| object.as_reference().ok());
+    if let Some(root_id) = outlines_root
+        && let Some(root) = document
+            .get_object(root_id)
+            .ok()
+            .and_then(|object| object.as_dict().ok())
+    {
+        let mut seen: std::collections::BTreeSet<ObjectId> = std::collections::BTreeSet::new();
+        // (item id, depth, index of the parent entry)
+        let mut stack: Vec<(ObjectId, usize, Option<usize>)> = Vec::new();
+        if let Ok(first) = root.get(b"First").and_then(Object::as_reference) {
+            stack.push((first, 1, None));
+        }
+        while let Some((item_id, depth, parent)) = stack.pop() {
+            if !seen.insert(item_id) {
+                continue;
+            }
+            if entries.len() >= MAX_OUTLINE_ENTRIES || depth > MAX_OUTLINE_DEPTH {
+                truncated = true;
+                continue;
+            }
+            let Some(item) = document
+                .get_object(item_id)
+                .ok()
+                .and_then(|o| o.as_dict().ok())
+            else {
+                continue;
+            };
+            let title = item
+                .get(b"Title")
+                .ok()
+                .and_then(|object| match object {
+                    Object::String(text, _) => Some(String::from_utf8_lossy(text).into_owned()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            let index = entries.len();
+            entries.push(Entry {
+                depth,
+                children: 0,
+                title_length: title.chars().count(),
+                id: short_id(&title),
+            });
+            if let Some(parent) = parent {
+                entries[parent].children += 1;
+            }
+            // Siblings after children on the stack so the walk is document order.
+            if let Ok(next) = item.get(b"Next").and_then(Object::as_reference) {
+                stack.push((next, depth, parent));
+            }
+            if let Ok(first) = item.get(b"First").and_then(Object::as_reference) {
+                stack.push((first, depth + 1, Some(index)));
+            }
+        }
+    }
+    let outline_items: Vec<Value> = entries
+        .iter()
+        .take(MAX_PDF_LISTED)
+        .enumerate()
+        .map(|(index, entry)| {
+            let mut value = json!({
+                "index": index,
+                "depth": entry.depth,
+                "children": entry.children,
+                "title_length_bucket": length_bucket(entry.title_length),
+            });
+            if args.explicit {
+                value["id"] = json!(entry.id);
+            }
+            value
+        })
+        .collect();
+
+    let mut result = json!({
+        "file": path,
+        "format": "pdf",
+        "dialect": dialect_json("pdf", "none", None),
+        "version": document.version,
+        "encrypted": document.is_encrypted(),
+        "page_count": pages.len(),
+        "summary": {
+            "page_sizes": page_sizes,
+            "metadata_key_count": metadata["key_count"],
+            "outline_entries": entries.len(),
+            "outline_max_depth": entries.iter().map(|e| e.depth).max().unwrap_or(0),
+            "outline_top_level": entries.iter().filter(|e| e.depth == 1).count(),
+            "outline_truncated": truncated,
+        },
+        "metadata": metadata,
+        "outline": outline_items,
+    });
+    if entries.len() > MAX_PDF_LISTED {
+        result["outline_listed"] = json!(MAX_PDF_LISTED);
+    }
+    let result = apply_view(args, result);
+
+    let witness_id = if append_witness_record {
+        let hash = format!("blake3:{}", blake3::hash(&bytes).to_hex());
+        append_peek_witness(args, Some(hash), bytes.len() as u64, &result)
+    } else {
+        None
+    };
+    emit_json(&json!({
+        "version": ENVELOPE_VERSION,
+        "outcome": "SUCCESS",
+        "exit_code": 0,
+        "subcommand": "peek",
+        "result": result,
+        "witness_id": witness_id
+    }))?;
+    Ok(0)
 }
 
 /// Largest HTML file parsed in memory.
@@ -1421,7 +1692,7 @@ fn emit_refusal(code: &str, message: &str, detail: Value) -> Result<(), String> 
             "code": code,
             "message": message,
             "detail": detail,
-            "next_command": "Rerun fingerprint peek with a readable CSV-like text file"
+            "next_command": "Rerun fingerprint peek with a readable CSV, TSV, XLSX, Parquet, JSON, JSONL, XML, HTML or PDF file"
         },
         "witness_id": null
     }))

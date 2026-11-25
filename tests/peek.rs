@@ -358,7 +358,8 @@ fn invalid_utf8_inside_the_inspected_rows_still_refuses() {
 fn non_csv_containers_are_refused_as_format_not_applicable() {
     let dir = tempfile::tempdir().expect("tempdir");
     // (.xlsx/.xls are supported workbooks since bd-jxd: a fake one is "could not open", below.)
-    for name in ["doc.pdf", "archive.zip"] {
+    // (pdf is supported since bd-hra; these are the containers peek still has no reader for.)
+    for name in ["archive.zip", "image.png", "letter.docx", "data.gz"] {
         let path = dir.path().join(name);
         fs::write(&path, b"PK\x03\x04 not really").unwrap();
         let output = run_fingerprint(&["peek", path.to_str().unwrap(), "--no-witness"]);
@@ -1605,6 +1606,285 @@ fn html_peek_brief_view_is_bounded_and_witness_and_refusals_work() {
     );
 
     let empty = dir.path().join("empty.html");
+    fs::write(&empty, "").unwrap();
+    assert_eq!(peek_path(&empty, &[]).status.code(), Some(2));
+}
+
+// ---- bd-hra: pdf structure ---------------------------------------------------------------------------
+
+/// Build a PDF with lopdf (an independent writer from the reader under test): 3 pages (two
+/// Letter, one A4 rotated 90), an Info dictionary with standard and custom keys, planted
+/// strings in every value, page content and bookmark title, and a two-level outline
+/// (A with children A1 and A2, then B).
+fn write_canary_pdf(path: &Path) {
+    use lopdf::{Object, Stream, dictionary};
+    let mut document = lopdf::Document::with_version("1.5");
+    let pages_id = document.new_object_id();
+    let mut kids = Vec::new();
+    for (index, (width, height, rotate)) in [(612, 792, 0), (612, 792, 0), (595, 842, 90)]
+        .into_iter()
+        .enumerate()
+    {
+        let content_id = document.add_object(Stream::new(
+            lopdf::Dictionary::new(),
+            format!(
+                "BT /F1 12 Tf ({}) Tj ET",
+                format!("CANARY-PAGE-TEXT-{index}-7a8b")
+            )
+            .into_bytes(),
+        ));
+        let page_id = document.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Contents" => content_id,
+            "MediaBox" => vec![0.into(), 0.into(), width.into(), height.into()],
+            "Rotate" => rotate,
+        });
+        kids.push(Object::Reference(page_id));
+    }
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => kids,
+            "Count" => 3,
+        }),
+    );
+
+    // Outline items with Parent/First/Last/Next links.
+    let outline_root = document.new_object_id();
+    let ids: Vec<_> = (0..4).map(|_| document.new_object_id()).collect(); // A, A1, A2, B
+    let (a, a1, a2, b) = (ids[0], ids[1], ids[2], ids[3]);
+    let item = |title: &str,
+                parent,
+                first_last: Option<(lopdf::ObjectId, lopdf::ObjectId)>,
+                next: Option<lopdf::ObjectId>| {
+        let mut dict = dictionary! {
+            "Title" => Object::string_literal(title),
+            "Parent" => parent,
+        };
+        if let Some((first, last)) = first_last {
+            dict.set("First", first);
+            dict.set("Last", last);
+            dict.set("Count", 2);
+        }
+        if let Some(next) = next {
+            dict.set("Next", next);
+        }
+        Object::Dictionary(dict)
+    };
+    document.objects.insert(
+        a,
+        item(
+            "CANARY-OUTLINE-A-11aa",
+            outline_root,
+            Some((a1, a2)),
+            Some(b),
+        ),
+    );
+    document
+        .objects
+        .insert(a1, item("CANARY-OUTLINE-A1-22bb", a, None, Some(a2)));
+    document
+        .objects
+        .insert(a2, item("CANARY-OUTLINE-A2-33cc", a, None, None));
+    document
+        .objects
+        .insert(b, item("CANARY-OUTLINE-B-44dd", outline_root, None, None));
+    document.objects.insert(
+        outline_root,
+        Object::Dictionary(dictionary! {
+            "Type" => "Outlines",
+            "First" => a,
+            "Last" => b,
+            "Count" => 4,
+        }),
+    );
+
+    let info_id = document.add_object(dictionary! {
+        "Title" => Object::string_literal("CANARY-TITLE-1a2b"),
+        "Author" => Object::string_literal("CANARY-AUTHOR-3c4d"),
+        "Producer" => Object::string_literal("fingerprint-test-writer"),
+        "CanaryCustomKey" => Object::string_literal("CANARY-CUSTOM-VALUE-5e6f"),
+    });
+    let catalog_id = document.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+        "Outlines" => outline_root,
+    });
+    document.trailer.set("Root", catalog_id);
+    document.trailer.set("Info", info_id);
+    document.save(path).expect("write canary pdf");
+}
+
+fn pdf_result(path: &Path, extra: &[&str]) -> Value {
+    let output = peek_path(path, extra);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    parse_stdout(&output)["result"].clone()
+}
+
+#[test]
+fn pdf_peek_reports_pages_metadata_keys_and_the_outline_tree() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("canary.pdf");
+    write_canary_pdf(&path);
+    let result = pdf_result(&path, &[]);
+    assert_eq!(result["format"], "pdf");
+    assert_eq!(
+        result["dialect"],
+        serde_json::json!({"name": "pdf", "delimiter": "none"})
+    );
+    assert_eq!(result["version"], "1.5");
+    assert_eq!(result["encrypted"], false);
+    assert_eq!(result["page_count"], 3);
+    assert_eq!(
+        result["summary"]["page_sizes"],
+        serde_json::json!([
+            {"width": 612.0, "height": 792.0, "rotate": 0, "pages": 2},
+            {"width": 595.0, "height": 842.0, "rotate": 90, "pages": 1}
+        ])
+    );
+    // Standard Info keys by name, the custom key as a pseudonym.
+    assert_eq!(result["metadata"]["key_count"], 4);
+    assert_eq!(
+        result["metadata"]["standard_keys"],
+        serde_json::json!(["Author", "Producer", "Title"])
+    );
+    assert_eq!(
+        result["metadata"]["other_key_ids"],
+        serde_json::json!([format!(
+            "blake3:{}",
+            &blake3::hash(b"CanaryCustomKey").to_hex()[..16]
+        )])
+    );
+    assert!(result["metadata"].get("other_keys").is_none());
+    // Outline in document order: A (2 children), A1, A2, B.
+    let summary = &result["summary"];
+    assert_eq!(summary["outline_entries"], 4);
+    assert_eq!(summary["outline_max_depth"], 2);
+    assert_eq!(summary["outline_top_level"], 2);
+    let shape: Vec<(u64, u64)> = result["outline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            (
+                e["depth"].as_u64().unwrap(),
+                e["children"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(shape, [(1, 2), (2, 0), (2, 0), (1, 0)]);
+    assert_eq!(result, pdf_result(&path, &[]), "deterministic");
+}
+
+#[test]
+fn pdf_peek_canary_never_prints_metadata_values_titles_or_page_text() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("canary.pdf");
+    write_canary_pdf(&path);
+    let witness = dir.path().join("witness.jsonl");
+    let output = run_fingerprint_with_witness(&["peek", path.to_str().unwrap()], &witness);
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let ledger = fs::read_to_string(&witness).unwrap();
+    for text in [&stdout, &ledger] {
+        for planted in ["CANARY-", "CanaryCustomKey", "fingerprint-test-writer"] {
+            assert!(
+                !text.contains(planted),
+                "{planted} leaked by default: {text}"
+            );
+        }
+    }
+    // The standard key NAMES are public vocabulary and are printed; values never are.
+    assert!(stdout.contains("\"Title\"") && stdout.contains("\"Author\""));
+
+    // --explicit adds the custom key name and outline pseudonyms, never a value or a title.
+    let explicit = String::from_utf8(peek_path(&path, &["--explicit"]).stdout).unwrap();
+    assert!(explicit.contains("CanaryCustomKey"), "{explicit}");
+    for planted in ["CANARY-", "fingerprint-test-writer"] {
+        assert!(
+            !explicit.contains(planted),
+            "{planted} leaked with --explicit: {explicit}"
+        );
+    }
+    let result = parse_stdout_from_str(&explicit)["result"].clone();
+    assert_eq!(
+        result["outline"][0]["id"],
+        format!(
+            "blake3:{}",
+            &blake3::hash(b"CANARY-OUTLINE-A-11aa").to_hex()[..16]
+        )
+    );
+}
+
+#[test]
+fn pdf_peek_brief_view_witness_and_refusals() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("canary.pdf");
+    write_canary_pdf(&path);
+    let witness = dir.path().join("witness.jsonl");
+    let output = run_fingerprint_with_witness(
+        &[
+            "peek",
+            path.to_str().unwrap(),
+            "--view",
+            "brief",
+            "--explicit",
+        ],
+        &witness,
+    );
+    assert_eq!(output.status.code(), Some(0));
+    let compact = serde_json::to_vec(&parse_stdout(&output)).unwrap();
+    assert!(compact.len() < 2000, "brief is {} bytes", compact.len());
+    let brief = parse_stdout(&output)["result"].clone();
+    assert!(brief.get("outline").is_none());
+    assert_eq!(brief["summary"]["outline_entries"], 4);
+    assert_eq!(brief["page_count"], 3);
+    let record: Value = serde_json::from_str(
+        fs::read_to_string(&witness)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        record["inputs"][0]["hash"],
+        format!(
+            "blake3:{}",
+            blake3::hash(&fs::read(&path).unwrap()).to_hex()
+        )
+    );
+    assert_eq!(
+        record["output_hash"],
+        format!(
+            "blake3:{}",
+            blake3::hash(&serde_json::to_vec(&brief).unwrap()).to_hex()
+        )
+    );
+
+    // A real PDF without an outline or Info dictionary, the repo's report.pdf.
+    let report = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_files/report.pdf");
+    let result = pdf_result(&report, &[]);
+    assert_eq!(result["page_count"], 1);
+    assert_eq!(result["summary"]["outline_entries"], 0);
+    assert_eq!(result["metadata"]["key_count"], 0);
+
+    // Not a PDF (the repo's sample.pdf has an invalid header) and an empty file refuse.
+    let sample = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/files/sample.pdf");
+    let refused = peek_path(&sample, &[]);
+    assert_eq!(refused.status.code(), Some(2));
+    assert_eq!(
+        parse_stdout(&refused)["refusal"]["message"],
+        "Could not read pdf"
+    );
+    let empty = dir.path().join("empty.pdf");
     fs::write(&empty, "").unwrap();
     assert_eq!(peek_path(&empty, &[]).status.code(), Some(2));
 }
