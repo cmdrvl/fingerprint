@@ -460,7 +460,20 @@ fingerprint peek <FILE> [--rows N] [--sheet NAME|INDEX] [--json] [--suggest] [--
 
 **JSON and JSONL (`.json`, `.jsonl`, `.ndjson`):** the schema tree of the first `--rows` records (a `.json` array contributes its first elements, a `.json` object is one record): per field path (`$.a.b`, `$.list[]`) the number of records it appears in, `presence_rate` and counts by JSON type (`string`, `integer`, `number`, `boolean`, `null`, `array`, `object`). Fields are identified by `id` (blake3 prefix of the path); `--explicit` adds the `path` (key names). Never a value. Up to 500 distinct paths and 8 levels deep are followed (`fields_truncated` says when more exist). Lines that are not JSON are counted (`invalid_lines`, `first_invalid_line`) and never quoted. `.jsonl` streams the first lines only; a `.json` document is parsed whole and refused over 256 MiB.
 
-**Shared inspection vocabulary** (the names a `profile inspect` and `cmdrvl inspect` should reuse, defined here because neither exists yet; see bd-47o): `format` (`csv`, `tsv`, `xlsx`, `parquet`, `json`, `jsonl`), `rows_requested`, `rows_observed`, `summary` (`modal_column_count`, `preamble_rows`, `header_at_row`, `data_starts_at`, `shape_classes`) and `rows[]` (`row_index`, `column_count`, `non_empty_count`, `shape_class`, `cell_type_counts`, `cell_length_histogram`), and `suggestions.profile_pre_parse`.
+**Shared vocabulary with `profile inspect`.** The two commands answer different questions: `peek` reports row SHAPES before parsing (it works on messy files; it never reads past the rows it reports), `profile inspect` reports column STATS after parsing. They share these names, and a test (`tests/peek.rs`, snapshot in `tests/fixtures/peek/inspect_vocabulary.json`) pins them:
+
+| Concept | `profile inspect` | `fingerprint peek` |
+|---------|-------------------|--------------------|
+| format | `format` (`csv`, `tsv`, `xlsx`, `parquet`, `jsonl`) | `format` (same, plus `json`) |
+| delimiter / dialect | `dialect.name`, `dialect.delimiter` (`,`, `\t`, `none`) | `dialect.name`, `dialect.delimiter` (same values; `dialect.confidence` is peek-only; the older `delimiter` object is kept) |
+| total data rows | `row_count` | `row_count` for Parquet (exact, from the footer; `rows_total` kept). CSV/TSV/XLSX/JSON have none: peek reads a prefix (`rows_observed` = rows inspected) |
+| column count | `column_count` | `column_count`: Parquet exact; CSV/TSV/XLSX the modal row width of the inspected rows (`summary.modal_column_count`) |
+| header row | `suggestions.header_row` | `summary.header_row` (= `summary.header_at_row`, profile pre_parse's key) |
+| preamble rows | `suggestions.preamble_rows` | `summary.preamble_rows` |
+| column name | `columns[].name` | `columns[].name` with `--explicit` (Parquet); otherwise `id` (blake3 prefix) |
+| column type | `columns[].type`: `integer`, `number`, `boolean`, `text`, `unknown` | Parquet `columns[].type`: the same words (dates and timestamps are `text`, as the shared tabular reader renders them); exact types stay in `physical_type`/`logical_type` |
+
+Deliberately NOT unified: peek's per-ROW cell classes (`cell_type_counts`: `empty`, `text`, `numeric`, `date`, `boolean`, `mixed`) describe cells before any column is known, and `numeric` is the union of inspect's `integer` and `number`; JSON field types use JSON's own words (`string`, not `text`). Peek's other fields (`rows_requested`, `rows_observed`, `summary.*`, `rows[]`, `fields[]`, `suggestions.profile_pre_parse`) have no inspect counterpart.
 
 Peek streams: it reads only the first `--rows` lines (plus the first 25 non-blank lines for the delimiter guess), so a 100 MB file costs the same as a small one; the witness record, when enabled, still hashes the whole file in 64 KiB chunks. A line longer than 1 MiB is truncated for shape purposes (it is a `paragraph` either way) and reported as `truncated_lines`. Text that is not UTF-8 is refused only if it is inside the inspected rows. Binary containers (`.xlsx`, `.xls`, `.parquet`, `.pdf`, `.zip`, ...) are refused up front with `E_BAD_INPUT` and `detail.reason: "format_not_applicable"`.
 

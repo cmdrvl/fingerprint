@@ -920,3 +920,79 @@ fn jsonl_peek_streams_and_hashes_the_whole_file_in_the_witness() {
         )
     );
 }
+
+// ---- bd-jxd: shared names with `profile inspect` ------------------------------------------------
+
+#[test]
+fn peek_uses_profile_inspects_names_for_the_concepts_they_share() {
+    // tests/fixtures/peek/inspect_vocabulary.json records what `profile inspect` printed for
+    // these files (provenance inside the file). The two commands answer different questions
+    // (peek: row SHAPES before parsing; inspect: column STATS after parsing), so only the
+    // shared concepts are compared: format, dialect (name, delimiter), row_count,
+    // column_count and, for Parquet, the column type vocabulary.
+    let snapshot: Value = serde_json::from_str(
+        &fs::read_to_string(fixture("inspect_vocabulary.json")).expect("read snapshot"),
+    )
+    .expect("snapshot json");
+    for (file, expected) in snapshot["files"].as_object().expect("files") {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(file);
+        let output = peek_path(&path, &[]);
+        assert_eq!(output.status.code(), Some(0), "{file}");
+        let result = parse_stdout(&output)["result"].clone();
+        assert_eq!(result["format"], expected["format"], "{file}: format");
+        assert_eq!(
+            result["dialect"]["name"], expected["dialect"]["name"],
+            "{file}: dialect.name"
+        );
+        assert_eq!(
+            result["dialect"]["delimiter"], expected["dialect"]["delimiter"],
+            "{file}: dialect.delimiter"
+        );
+        assert_eq!(
+            result["column_count"], expected["column_count"],
+            "{file}: column_count"
+        );
+        if let Some(rows) = expected.get("row_count") {
+            assert_eq!(&result["row_count"], rows, "{file}: row_count");
+        }
+        if let Some(types) = expected.get("column_types") {
+            let got: Vec<Value> = result["columns"]
+                .as_array()
+                .map(|columns| columns.iter().map(|c| c["type"].clone()).collect())
+                .unwrap_or_default();
+            if !got.is_empty() {
+                assert_eq!(&Value::Array(got), types, "{file}: column types");
+            }
+        }
+        // Peek's own header concept keeps both names: header_at_row (profile pre_parse's key)
+        // and header_row (inspect's name).
+        if result.get("summary").is_some() {
+            assert_eq!(
+                result["summary"]["header_row"], result["summary"]["header_at_row"],
+                "{file}"
+            );
+        }
+    }
+}
+
+#[test]
+fn every_peek_format_carries_the_dialect_object() {
+    let cases = [
+        (fixture("clean_flat.csv"), "csv", ","),
+        (fixture("tsv.tsv"), "tsv", "\\t"),
+        (materialize_fixture("watl_msc.xlsx"), "xlsx", "none"),
+        (parquet_fixture("canary.parquet"), "parquet", "none"),
+        (json_fixture("loans.jsonl"), "jsonl", "none"),
+        (json_fixture("delivery.json"), "json", "none"),
+    ];
+    for (path, name, delimiter) in cases {
+        let result = parse_stdout(&peek_path(&path, &[]))["result"].clone();
+        assert_eq!(result["dialect"]["name"], name, "{path:?}");
+        assert_eq!(result["dialect"]["delimiter"], delimiter, "{path:?}");
+    }
+    // A semicolon file reports the guessed character in the same object.
+    let result = peek_result("mixed_delimiters.csv", &[]);
+    assert_eq!(result["dialect"]["delimiter"], ";");
+}

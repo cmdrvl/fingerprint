@@ -1,0 +1,23 @@
+{
+  "provenance": "Fields captured from `profile --json --no-witness inspect <file>` (profile main b7460e6; `inspect` added in bc40826) on 2026-11-25, run on the same files in this repo's tests/fixtures. Only the concepts peek and inspect share are recorded; tests/peek.rs pins that fingerprint peek uses the same names and, where it knows the value, the same values.",
+  "files": {
+    "peek/clean_flat.csv": {
+      "format": "csv",
+      "dialect": { "name": "csv", "delimiter": "," },
+      "column_count": 4,
+      "column_types": ["text", "text", "number", "number"]
+    },
+    "peek/tsv.tsv": {
+      "format": "tsv",
+      "dialect": { "name": "tsv", "delimiter": "\\t" },
+      "column_count": 4
+    },
+    "parquet/canary.parquet": {
+      "format": "parquet",
+      "dialect": { "name": "parquet", "delimiter": "none" },
+      "row_count": 2,
+      "column_count": 2,
+      "column_types": ["text", "number"]
+    }
+  }
+}

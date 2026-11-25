@@ -239,10 +239,22 @@ pub fn run(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
         .map(|row| row_to_json(row, modal_column_count))
         .collect::<Vec<_>>();
     let summary = summarize_rows(&rows, modal_column_count);
+    let format_name = if matches!(lower_extension.as_deref(), Some("tsv" | "tab")) {
+        "tsv"
+    } else {
+        "csv"
+    };
     let mut result = json!({
         "file": args.file.display().to_string(),
-        // Shared inspection vocabulary (bd-jxd): `format` is csv or tsv for delimited text.
-        "format": if matches!(lower_extension.as_deref(), Some("tsv" | "tab")) { "tsv" } else { "csv" },
+        // Shared inspection vocabulary (bd-jxd): `format` is csv or tsv for delimited text;
+        // `dialect` and `column_count` use profile inspect's names for the same concepts.
+        "format": format_name,
+        "dialect": dialect_json(
+            format_name,
+            &delimiter_text(delimiter.byte),
+            Some(("confidence", json!(delimiter.confidence))),
+        ),
+        "column_count": modal_column_count,
         "rows_requested": max_rows,
         "rows_observed": rows.len(),
         "delimiter": {
@@ -452,6 +464,8 @@ fn run_workbook(
     let mut result = json!({
         "file": path,
         "format": "xlsx",
+        "dialect": dialect_json("xlsx", "none", None),
+        "column_count": modal_column_count,
         "sheet": { "index": selected, "name": names[selected] },
         "sheets": sheets,
         "rows_requested": max_rows,
@@ -717,6 +731,7 @@ fn run_json(
     let mut result = json!({
         "file": path,
         "format": if kind == JsonPeekKind::Jsonl { "jsonl" } else { "json" },
+        "dialect": dialect_json(if kind == JsonPeekKind::Jsonl { "jsonl" } else { "json" }, "none", None),
         "rows_requested": max_rows,
         "rows_observed": records,
         "fields_total": fields.len(),
@@ -745,6 +760,22 @@ fn run_json(
         "witness_id": witness_id
     }))?;
     Ok(0)
+}
+
+/// A Parquet column's type in `profile inspect`'s column vocabulary (`integer`, `number`,
+/// `boolean`, `text`). Dates, timestamps and times are `text` because that is what the shared
+/// tabular reader renders them as before inspect classifies them; the exact Parquet types stay
+/// in `physical_type` and `logical_type`.
+fn inspect_type(physical: &str, logical: Option<&str>) -> &'static str {
+    match (physical, logical) {
+        (_, Some("decimal" | "float16")) => "number",
+        (_, Some("string" | "enum" | "json" | "uuid" | "date" | "time" | "timestamp")) => "text",
+        ("boolean", _) => "boolean",
+        ("int32" | "int64" | "int96", _) => "integer",
+        ("float" | "double", _) => "number",
+        ("byte_array" | "fixed_len_byte_array", _) => "text",
+        _ => "text",
+    }
 }
 
 /// `fingerprint peek x.parquet`: the footer's structure only (no column chunk is read): row and
@@ -812,6 +843,7 @@ fn run_parquet(args: &PeekArgs, append_witness_record: bool) -> Result<u8, Strin
         let mut entry = json!({
             "index": index,
             "id": format!("blake3:{}", &blake3::hash(name.as_bytes()).to_hex()[..16]),
+            "type": inspect_type(&physical, logical.as_deref()),
             "physical_type": physical,
             "logical_type": logical,
             "repetition": format!("{:?}", column.self_type().get_basic_info().repetition()).to_ascii_lowercase(),
@@ -835,6 +867,11 @@ fn run_parquet(args: &PeekArgs, append_witness_record: bool) -> Result<u8, Strin
     let mut result = json!({
         "file": path,
         "format": "parquet",
+        "dialect": dialect_json("parquet", "none", None),
+        // profile inspect's names for the footer's exact counts (`rows_total` and
+        // `columns_total` are kept).
+        "row_count": file_meta.num_rows(),
+        "column_count": columns.len(),
         "rows_total": file_meta.num_rows(),
         "row_groups": {
             "count": row_groups.len(),
@@ -1224,9 +1261,29 @@ fn summarize_rows(rows: &[RawRowShape], modal_column_count: Option<usize>) -> Va
         "rows_with_modal_column_count": modal_rows,
         "preamble_rows": preamble_rows,
         "header_at_row": header_at_row,
+        // `profile inspect` calls the same concept `suggestions.header_row` (bd-jxd).
+        "header_row": header_at_row,
         "data_starts_at": data_starts_at,
         "shape_classes": shape_class_counts(rows, modal_column_count)
     })
+}
+
+/// The dialect object `profile inspect` uses (`name` is the format, `delimiter` the character
+/// as text with a tab written `\t`, or `none` for formats without one), so the two commands
+/// share one name for the concept. `extra` carries peek-only facts (the guess confidence).
+fn dialect_json(name: &str, delimiter: &str, extra: Option<(&str, Value)>) -> Value {
+    let mut dialect = json!({ "name": name, "delimiter": delimiter });
+    if let Some((key, value)) = extra {
+        dialect[key] = value;
+    }
+    dialect
+}
+
+fn delimiter_text(byte: u8) -> String {
+    match byte {
+        b'\t' => "\\t".to_owned(),
+        other => (other as char).to_string(),
+    }
 }
 
 fn shape_class_counts(rows: &[RawRowShape], modal_column_count: Option<usize>) -> Value {
