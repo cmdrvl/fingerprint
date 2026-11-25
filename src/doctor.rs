@@ -170,6 +170,16 @@ fn health_findings() -> Vec<Value> {
             "doctor does not append witness records",
         ),
     ];
+    // Reports only whether a usable key is configured: never its value or its length.
+    let (redaction_ok, redaction_message) = match crate::redaction::RedactionKey::from_env() {
+        Ok(Some(_)) => (true, "peek redaction key: configured (keyed markers)"),
+        Ok(None) => (true, "peek redaction key: not configured (ordinal refs)"),
+        Err(_) => (
+            false,
+            "peek redaction key: set but unusable, so peek refuses (E_REDACTION_KEY_INVALID)",
+        ),
+    };
+    checks.push(("redaction-key", redaction_ok, redaction_message));
     if let Some(path_check) = source_checkout_gitignore_check() {
         checks.push(path_check);
     }

@@ -54,6 +54,7 @@
   },
   "refusals": [
     { "code": "E_BAD_INPUT", "message": "Invalid input stream", "action": "escalate" },
+    { "code": "E_REDACTION_KEY_INVALID", "message": "FINGERPRINT_REDACTION_KEY is empty or shorter than 16 bytes (peek never falls back to ordinal refs)", "action": "escalate" },
     { "code": "E_PARSE", "message": "Artifact parsing failed", "action": "escalate" },
     { "code": "E_TEXT", "message": "Required text extraction failed", "action": "escalate" },
     { "code": "E_UNKNOWN_FP", "message": "Fingerprint ID not found", "action": "escalate" },

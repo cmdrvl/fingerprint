@@ -28,6 +28,10 @@ parquet = { version = "=60.2.0", default-features = false }
 # or fetches DTDs.
 quick-xml = "=0.31.0"
 blake3 = "=1.6.1"
+# Keyed HMAC-SHA256 name markers for `peek` (bd-zwx). Same crates and versions rvl uses
+# (hmac 0.12, sha2 0.10); both are already in Cargo.lock, so nothing new enters the tree.
+hmac = "=0.12.1"
+sha2 = "=0.10.9"
 chrono = "=0.4.41"
 regex = "=1.11.1"
 serde_yaml = "=0.9.34"

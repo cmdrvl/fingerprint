@@ -270,8 +270,10 @@ pub struct PeekArgs {
     #[arg(long, value_enum, default_value = "full")]
     pub view: PeekView,
 
-    /// Parquet only: also print column names and file key/value metadata keys. By default a
-    /// column is identified by a short hash of its name and metadata keys are only counted.
+    /// Also print names (columns, sheets, element and field paths, PDF metadata keys, HTML tags
+    /// and classes, Parquet metadata keys), never text or values. By default a name is an ordinal
+    /// ref `redacted:ref:<kind><n>` (or a keyed `redacted:hmac-sha256:` marker when
+    /// FINGERPRINT_REDACTION_KEY holds at least 16 bytes), never a hash of the name.
     #[arg(long)]
     pub explicit: bool,
 }

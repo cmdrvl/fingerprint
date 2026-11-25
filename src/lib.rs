@@ -14,6 +14,7 @@ pub mod output;
 pub mod peek;
 pub mod pipeline;
 pub mod progress;
+pub mod redaction;
 pub mod refusal;
 pub mod registry;
 pub mod struct_check;

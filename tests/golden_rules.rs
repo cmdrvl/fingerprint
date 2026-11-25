@@ -11,5 +11,7 @@ golden_rules_suite! {
         "src/output/jsonl.rs",
         // `materialize` emits its own typed refusal codes from here.
         "src/materialize/mod.rs",
+        // `peek` emits E_REDACTION_KEY_INVALID (bd-zwx) from the redaction module.
+        "src/redaction.rs",
     ],
 }

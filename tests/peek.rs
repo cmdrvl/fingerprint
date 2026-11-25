@@ -402,17 +402,31 @@ fn workbook_peek_reports_row_shapes_by_excel_row_number() {
     assert_eq!(output.status.code(), Some(0));
     let result = parse_stdout(&output)["result"].clone();
     assert_eq!(result["format"], "xlsx");
+    // bd-zwx: sheet names are no longer printed by default (they were printed raw before): an
+    // ordinal ref in workbook order stands in; `--explicit` adds the names.
     assert_eq!(
         result["sheet"],
-        serde_json::json!({"index": 0, "name": "Servicer Watch List"})
+        serde_json::json!({"index": 0, "id": "redacted:ref:s1"})
     );
     assert_eq!(
         result["sheets"],
         serde_json::json!([
-            {"index": 0, "name": "Servicer Watch List", "rows": 20, "columns": 6, "first_row": 1, "first_column": 1},
-            {"index": 1, "name": "Notes", "rows": 1, "columns": 1, "first_row": 1, "first_column": 1}
+            {"index": 0, "id": "redacted:ref:s1", "rows": 20, "columns": 6, "first_row": 1, "first_column": 1},
+            {"index": 1, "id": "redacted:ref:s2", "rows": 1, "columns": 1, "first_row": 1, "first_column": 1}
         ])
     );
+    let default_stdout = String::from_utf8(output.stdout.clone()).unwrap();
+    assert!(!default_stdout.contains("Servicer Watch List") && !default_stdout.contains("Notes"));
+    let named = parse_stdout(&peek_path(
+        &materialize_fixture("watl_msc.xlsx"),
+        &["--suggest", "--explicit"],
+    ))["result"]
+        .clone();
+    assert_eq!(
+        named["sheet"],
+        serde_json::json!({"index": 0, "id": "redacted:ref:s1", "name": "Servicer Watch List"})
+    );
+    assert_eq!(named["sheets"][1]["name"], "Notes");
     let indexed: Vec<(u64, String)> = result["rows"]
         .as_array()
         .unwrap()
@@ -497,16 +511,25 @@ fn workbook_sheet_selection_by_name_and_index_and_unknown_sheet_refusal() {
         let output = peek_path(&path, &["--sheet", selector]);
         assert_eq!(output.status.code(), Some(0), "{selector}");
         let result = parse_stdout(&output)["result"].clone();
-        assert_eq!(result["sheet"]["name"], "Notes", "{selector}");
+        // Default: the second sheet's ref, no name. `--explicit` adds the name.
+        assert_eq!(result["sheet"]["id"], "redacted:ref:s2", "{selector}");
+        assert!(result["sheet"].get("name").is_none(), "{selector}");
         assert_eq!(result["rows_observed"], 1);
+        let named =
+            parse_stdout(&peek_path(&path, &["--sheet", selector, "--explicit"]))["result"].clone();
+        assert_eq!(named["sheet"]["name"], "Notes", "{selector}");
     }
     for selector in ["Missing", "7"] {
         let output = peek_path(&path, &["--sheet", selector]);
         assert_eq!(output.status.code(), Some(2), "{selector}");
         let envelope = parse_stdout(&output);
         assert_eq!(envelope["refusal"]["detail"]["reason"], "sheet_not_found");
+        // Sheet names are withheld by default: the count says which indexes exist.
+        assert_eq!(envelope["refusal"]["detail"]["sheet_count"], 2);
+        assert!(envelope["refusal"]["detail"].get("sheets").is_none());
+        let explicit = parse_stdout(&peek_path(&path, &["--sheet", selector, "--explicit"]));
         assert_eq!(
-            envelope["refusal"]["detail"]["sheets"],
+            explicit["refusal"]["detail"]["sheets"],
             serde_json::json!(["Servicer Watch List", "Notes"])
         );
     }
@@ -613,11 +636,10 @@ fn parquet_peek_reports_the_footer_structure() {
     assert_eq!(tags["max_repetition_level"], 1);
     assert_eq!(result["key_value_metadata_count"], 4);
     assert!(result.get("key_value_metadata_keys").is_none());
-    // Columns are identified by a short hash of the name; no name by default.
-    assert_eq!(
-        columns[0]["id"],
-        format!("blake3:{}", &blake3::hash(b"loan_id").to_hex()[..16])
-    );
+    // bd-zwx: columns are identified by an ordinal ref in file (column) order, never a hash of
+    // the name; no name by default.
+    assert_eq!(columns[0]["id"], "redacted:ref:c1");
+    assert_eq!(columns[7]["id"], "redacted:ref:c8");
     assert!(columns[0].get("name").is_none());
 }
 
@@ -716,26 +738,38 @@ fn json_fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-fn field<'a>(result: &'a Value, path_hash_of: &str) -> &'a Value {
-    let id = format!(
-        "blake3:{}",
-        &blake3::hash(path_hash_of.as_bytes()).to_hex()[..16]
-    );
+/// The field with this path. Paths are only printed with `--explicit` (bd-zwx: the default id is an
+/// ordinal ref, which cannot be looked up by name), so callers pass an `--explicit` result.
+fn field<'a>(result: &'a Value, path: &str) -> &'a Value {
     result["fields"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|f| f["id"] == id.as_str())
-        .unwrap_or_else(|| panic!("no field {path_hash_of}"))
+        .find(|f| f["path"] == path)
+        .unwrap_or_else(|| panic!("no field {path}"))
 }
 
 #[test]
 fn jsonl_peek_reports_presence_rates_and_types_per_field_path() {
     // loans.jsonl: 5 records {loan_id, balance, status, tags[]}; balance is 3 integers and 2
     // non-integer numbers; 3 of 5 records have a non-empty tags list (4 string elements).
-    let output = peek_path(&json_fixture("loans.jsonl"), &[]);
+    let output = peek_path(&json_fixture("loans.jsonl"), &["--explicit"]);
     assert_eq!(output.status.code(), Some(0));
     let result = parse_stdout(&output)["result"].clone();
+    // bd-zwx: the default output is the explicit output minus the printed paths: same fields in
+    // the same order with the same statistics, ids being ordinal refs in file order.
+    let default = parse_stdout(&peek_path(&json_fixture("loans.jsonl"), &[]))["result"].clone();
+    for (plain, named) in default["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(result["fields"].as_array().unwrap())
+    {
+        let mut named = named.clone();
+        named.as_object_mut().unwrap().remove("path");
+        assert_eq!(*plain, named);
+    }
+    assert_eq!(default["fields"][0]["id"], "redacted:ref:p1");
     assert_eq!(result["format"], "jsonl");
     assert_eq!(result["rows_observed"], 5);
     assert_eq!(result["fields_total"], 6);
@@ -761,7 +795,7 @@ fn jsonl_peek_reports_presence_rates_and_types_per_field_path() {
     assert_eq!(elements["present"], 3);
     assert_eq!(elements["presence_rate"], 0.6);
     // Names are not printed by default.
-    assert!(result["fields"][1].get("path").is_none());
+    assert!(default["fields"][1].get("path").is_none());
 }
 
 #[test]
@@ -776,31 +810,27 @@ fn json_peek_uses_array_elements_or_the_object_as_records() {
         .iter()
         .map(|f| f["path"].as_str().unwrap())
         .collect();
-    // Document order, with object keys sorted (serde_json's map order): deterministic.
+    // bd-zwx: FILE order (the document lists schema, filings, meta{generated, count, complete}),
+    // no longer serde_json's name-sorted order: field order and ref numbering must not depend on
+    // names. Deterministic across runs.
     assert_eq!(
         paths,
         [
             "$",
+            "$.schema",
             "$.filings",
             "$.filings[]",
             "$.filings[].accession",
             "$.filings[].form",
             "$.filings[].pages",
             "$.meta",
-            "$.meta.complete",
-            "$.meta.count",
             "$.meta.generated",
-            "$.schema"
+            "$.meta.count",
+            "$.meta.complete"
         ]
     );
     // `filings` holds 2 objects: element paths count every element, presence counts records.
-    let id = |p: &str| format!("blake3:{}", &blake3::hash(p.as_bytes()).to_hex()[..16]);
-    let elements = result["fields"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|f| f["id"] == id("$.filings[]").as_str())
-        .unwrap();
+    let elements = field(&result, "$.filings[]");
     assert_eq!(elements["types"], serde_json::json!({"object": 2}));
     assert_eq!(elements["present"], 1);
 
@@ -1087,13 +1117,33 @@ fn xml_peek_is_name_free_by_default_and_deterministic() {
     let one = xml_result("abs-ee/exh_103.xml", &[]);
     let two = xml_result("abs-ee/exh_103.xml", &[]);
     assert_eq!(one, two);
-    let id = |p: &str| format!("blake3:{}", &blake3::hash(p.as_bytes()).to_hex()[..16]);
-    assert_eq!(one["root"]["id"], id("comments").as_str());
+    // bd-zwx: ordinal refs in document order, no hash of any name. The root shares the ref of
+    // its own path row (equal names in one output share a ref).
+    assert_eq!(one["root"]["id"], "redacted:ref:p1");
+    assert_eq!(one["paths"][0]["id"], "redacted:ref:p1");
     assert_eq!(one["root"]["namespace_id"], Value::Null);
     let candidates = one["summary"]["record_candidates"].as_array().unwrap();
-    assert_eq!(candidates[0]["id"], id("/comments/commentData").as_str());
+    assert_eq!(candidates[0]["id"], "redacted:ref:p2");
     assert!(candidates[0].get("path").is_none());
-    // Ordered by depth then id, so the order says nothing about element names.
+    // The three depth-3 leaves are numbered in FILE order (itemNumber, fieldName, comment), not
+    // in name order (comment, fieldName, itemNumber).
+    let named = xml_result("abs-ee/exh_103.xml", &["--explicit"]);
+    let leaves: Vec<(&str, &str)> = named["paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["depth"] == 3)
+        .map(|p| (p["id"].as_str().unwrap(), p["path"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        leaves,
+        [
+            ("redacted:ref:p3", "/comments/commentData/itemNumber"),
+            ("redacted:ref:p4", "/comments/commentData/fieldName"),
+            ("redacted:ref:p5", "/comments/commentData/comment"),
+        ]
+    );
+    // Ordered by depth, then first appearance: the order says nothing about element names.
     let depths: Vec<u64> = one["paths"]
         .as_array()
         .unwrap()
@@ -1535,15 +1585,12 @@ fn html_peek_canary_never_prints_text_attribute_values_or_names_by_default() {
             "{attribute_name}: {explicit}"
         );
     }
-    // The heading pseudonym is a hash of the text, not the text.
+    // bd-zwx: the heading id is an ordinal ref (present by default, never a hash of the text);
+    // --explicit adds names but still never the heading text.
     let result = parse_stdout_from_str(&explicit)["result"].clone();
-    assert_eq!(
-        result["headings"][0]["id"],
-        format!(
-            "blake3:{}",
-            &blake3::hash(b"CANARY-HEADING-ONE-a8e3").to_hex()[..16]
-        )
-    );
+    assert_eq!(result["headings"][0]["id"], "redacted:ref:h1");
+    let default = parse_stdout_from_str(&stdout)["result"].clone();
+    assert_eq!(default["headings"][0]["id"], "redacted:ref:h1");
 }
 
 #[test]
@@ -1745,18 +1792,16 @@ fn pdf_peek_reports_pages_metadata_keys_and_the_outline_tree() {
             {"width": 595.0, "height": 842.0, "rotate": 90, "pages": 1}
         ])
     );
-    // Standard Info keys by name, the custom key as a pseudonym.
+    // Standard Info keys by name, the custom key as an ordinal ref.
     assert_eq!(result["metadata"]["key_count"], 4);
     assert_eq!(
         result["metadata"]["standard_keys"],
         serde_json::json!(["Author", "Producer", "Title"])
     );
+    // bd-zwx: the custom key is an ordinal ref (kind k), never a hash of its name.
     assert_eq!(
         result["metadata"]["other_key_ids"],
-        serde_json::json!([format!(
-            "blake3:{}",
-            &blake3::hash(b"CanaryCustomKey").to_hex()[..16]
-        )])
+        serde_json::json!(["redacted:ref:k1"])
     );
     assert!(result["metadata"].get("other_keys").is_none());
     // Outline in document order: A (2 children), A1, A2, B.
@@ -1809,14 +1854,12 @@ fn pdf_peek_canary_never_prints_metadata_values_titles_or_page_text() {
             "{planted} leaked with --explicit: {explicit}"
         );
     }
+    // bd-zwx: outline ids are ordinal refs in outline order (present by default, equal titles
+    // share one); never a hash of the title.
     let result = parse_stdout_from_str(&explicit)["result"].clone();
-    assert_eq!(
-        result["outline"][0]["id"],
-        format!(
-            "blake3:{}",
-            &blake3::hash(b"CANARY-OUTLINE-A-11aa").to_hex()[..16]
-        )
-    );
+    assert_eq!(result["outline"][0]["id"], "redacted:ref:o1");
+    let default = parse_stdout_from_str(&stdout)["result"].clone();
+    assert_eq!(default["outline"][0]["id"], "redacted:ref:o1");
 }
 
 #[test]
@@ -1973,4 +2016,518 @@ fn workbook_formula_text_and_values_never_leak_and_brief_keeps_the_flags() {
     assert!(result.get("columns").is_none() && result.get("rows").is_none());
     assert_eq!(result["sheet_flags"]["formula_cells"], 4);
     assert_eq!(result["sheet_flags"]["merged"]["ranges"], 2);
+}
+
+// ---- bd-zwx: ordinal refs by default, opt-in keyed HMAC markers, no hash of any name ------------
+
+const KEY: &str = "0123456789abcdef";
+const OTHER_KEY: &str = "fedcba9876543210";
+const KEY_ENV: &str = "FINGERPRINT_REDACTION_KEY";
+
+/// `peek` with an optional redaction key and an optional witness ledger.
+fn peek_keyed(path: &Path, extra: &[&str], key: Option<&str>, witness: Option<&Path>) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fingerprint"));
+    command
+        .arg("peek")
+        .arg(path)
+        .args(extra)
+        .env_remove(KEY_ENV);
+    if let Some(key) = key {
+        command.env(KEY_ENV, key);
+    }
+    match witness {
+        Some(ledger) => command.env("EPISTEMIC_WITNESS", ledger),
+        None => command.arg("--no-witness"),
+    };
+    command.output().expect("run fingerprint binary")
+}
+
+/// One file per peek format. The PDF is written into `dir` (it is built from planted canaries).
+fn every_format(dir: &Path) -> Vec<(&'static str, PathBuf)> {
+    let pdf = dir.join("canary.pdf");
+    write_canary_pdf(&pdf);
+    vec![
+        ("csv", fixture("clean_flat.csv")),
+        ("tsv", fixture("tsv.tsv")),
+        ("xlsx", materialize_fixture("watl_msc.xlsx")),
+        ("parquet", parquet_fixture("delivery.parquet")),
+        ("json", json_fixture("delivery.json")),
+        ("jsonl", json_fixture("loans.jsonl")),
+        ("xml", xml_fixture("abs-ee/exh_103.xml")),
+        ("html", fixture("canary.html")),
+        ("pdf", pdf),
+    ]
+}
+
+/// Every `redacted:hmac-sha256:<32 hex>` marker in `text`.
+fn hmac_markers(text: &str) -> Vec<String> {
+    const PREFIX: &str = "redacted:hmac-sha256:";
+    text.match_indices(PREFIX)
+        .map(|(at, _)| text[at..at + PREFIX.len() + 32].to_owned())
+        .collect()
+}
+
+fn old_blake3_id(name: &str) -> String {
+    blake3::hash(name.as_bytes()).to_hex()[..16].to_owned()
+}
+
+#[test]
+fn ordinal_refs_follow_the_data_order_not_the_name_order() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ids =
+        |file: &str, body: &str, explicit: bool, key: Option<&str>| -> Vec<(String, String)> {
+            let path = dir.path().join(file);
+            fs::write(&path, body).unwrap();
+            let output = peek_keyed(
+                &path,
+                if explicit { &["--explicit"] } else { &[] },
+                key,
+                None,
+            );
+            assert_eq!(output.status.code(), Some(0), "{file}");
+            let result = parse_stdout(&output)["result"].clone();
+            let rows = result["fields"]
+                .as_array()
+                .or(result["paths"].as_array())
+                .unwrap();
+            rows.iter()
+                .map(|r| {
+                    (
+                        r["path"].as_str().unwrap().to_owned(),
+                        r["id"].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect()
+        };
+    // JSONL: the same two names in both orders.
+    let zebra_first = ids("a.jsonl", "{\"zebra\":1,\"apple\":\"x\"}\n", true, None);
+    let apple_first = ids("b.jsonl", "{\"apple\":\"x\",\"zebra\":1}\n", true, None);
+    assert_eq!(
+        zebra_first,
+        [
+            ("$".into(), "redacted:ref:p1".into()),
+            ("$.zebra".into(), "redacted:ref:p2".into()),
+            ("$.apple".into(), "redacted:ref:p3".into()),
+        ]
+    );
+    assert_eq!(
+        apple_first,
+        [
+            ("$".into(), "redacted:ref:p1".into()),
+            ("$.apple".into(), "redacted:ref:p2".into()),
+            ("$.zebra".into(), "redacted:ref:p3".into()),
+        ]
+    );
+    // XML: sibling elements in both orders (a name-sorted order would number apple first).
+    let zebra_first = ids("a.xml", "<r><zebra/><apple/></r>", true, None);
+    let apple_first = ids("b.xml", "<r><apple/><zebra/></r>", true, None);
+    assert_eq!(
+        zebra_first,
+        [
+            ("/r".into(), "redacted:ref:p1".into()),
+            ("/r/zebra".into(), "redacted:ref:p2".into()),
+            ("/r/apple".into(), "redacted:ref:p3".into()),
+        ]
+    );
+    assert_eq!(
+        apple_first[1],
+        ("/r/apple".into(), "redacted:ref:p2".into())
+    );
+    // A `.json` document is walked in file order too (serde_json's Value would sort the keys).
+    let nested = ids(
+        "c.json",
+        "{\"zebra\":{\"y\":1,\"b\":2},\"apple\":3}",
+        true,
+        None,
+    );
+    let order: Vec<&str> = nested.iter().map(|(p, _)| p.as_str()).collect();
+    assert_eq!(order, ["$", "$.zebra", "$.zebra.y", "$.zebra.b", "$.apple"]);
+    // Keyed mode: a name's marker does not depend on its position (that is the correlation
+    // feature), while the ordinal ref does.
+    let keyed_a = ids(
+        "d.jsonl",
+        "{\"zebra\":1,\"apple\":\"x\"}\n",
+        true,
+        Some(KEY),
+    );
+    let keyed_b = ids(
+        "e.jsonl",
+        "{\"apple\":\"x\",\"zebra\":1}\n",
+        true,
+        Some(KEY),
+    );
+    let marker_of = |rows: &[(String, String)], path: &str| {
+        rows.iter().find(|(p, _)| p == path).unwrap().1.clone()
+    };
+    assert_eq!(
+        marker_of(&keyed_a, "$.zebra"),
+        marker_of(&keyed_b, "$.zebra")
+    );
+    assert_eq!(
+        marker_of(&keyed_a, "$.apple"),
+        marker_of(&keyed_b, "$.apple")
+    );
+    assert!(marker_of(&keyed_a, "$.zebra").starts_with("redacted:hmac-sha256:"));
+
+    // HTML: equal heading text in ONE output shares a ref; distinct text does not.
+    let html = dir.path().join("h.html");
+    fs::write(&html, "<h1>Same</h1><h2>Other</h2><h2>Same</h2>").unwrap();
+    let headings = parse_stdout(&peek_keyed(&html, &[], None, None))["result"]["headings"].clone();
+    let refs: Vec<&str> = headings
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        refs,
+        ["redacted:ref:h1", "redacted:ref:h2", "redacted:ref:h1"]
+    );
+}
+
+#[test]
+fn default_and_keyed_output_are_byte_identical_across_runs_for_every_format() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for (format, path) in every_format(dir.path()) {
+        for key in [None, Some(KEY)] {
+            for extra in [&[][..], &["--view", "brief"][..], &["--explicit"][..]] {
+                let one = peek_keyed(&path, extra, key, None);
+                let two = peek_keyed(&path, extra, key, None);
+                assert_eq!(one.status.code(), Some(0), "{format} {extra:?}");
+                assert_eq!(
+                    one.stdout,
+                    two.stdout,
+                    "{format} {extra:?} key={}",
+                    key.is_some()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_old_unsalted_blake3_ids_match_nothing_in_any_format_mode_or_view() {
+    // The dictionary a guesser would try: every name in these fixtures, each as a bare name and
+    // as the path forms peek used to hash. bd-zwx's reproduction: blake3(loan_id)[..16].
+    assert_eq!(old_blake3_id("loan_id"), "d3411460f2fd7fe9");
+    let names = [
+        "loan_id",
+        "balance",
+        "status",
+        "tags",
+        "region",
+        "rate",
+        "comments",
+        "commentData",
+        "comment",
+        "itemNumber",
+        "fieldName",
+        "schema",
+        "filings",
+        "meta",
+        "accession",
+        "form",
+        "Servicer Watch List",
+        "Notes",
+        "CanaryCustomKey",
+        "CANARY-OUTLINE-A-11aa",
+        "CANARY-OUTLINE-B-44dd",
+        "CANARY-HEADING-ONE-a8e3",
+        "Title",
+        "Author",
+        "Producer",
+        "edgarSubmission",
+        "assetData",
+        "http://www.sec.gov/edgar/document/absee/cmbs/assetdata",
+    ];
+    let mut dictionary: Vec<String> = Vec::new();
+    for name in names {
+        for form in [
+            name.to_owned(),
+            format!("/{name}"),
+            format!("$.{name}"),
+            format!("$.{name}[]"),
+            format!("/comments/{name}"),
+            format!("/edgarSubmission/{name}"),
+            format!("/assetData/{name}"),
+        ] {
+            dictionary.push(old_blake3_id(&form));
+        }
+    }
+    dictionary.push(old_blake3_id("$"));
+    dictionary.push(old_blake3_id("/comments/commentData"));
+    let leaks = |text: &str| {
+        dictionary
+            .iter()
+            .filter(|id| text.contains(id.as_str()))
+            .count()
+    };
+
+    // The check is not vacuous: it fires on the old output shape.
+    assert_eq!(leaks("\"id\": \"blake3:d3411460f2fd7fe9\""), 1);
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    for (format, path) in every_format(dir.path()) {
+        for key in [None, Some(KEY)] {
+            for extra in [&[][..], &["--view", "brief"][..], &["--explicit"][..]] {
+                let output = peek_keyed(&path, extra, key, None);
+                let text = String::from_utf8(output.stdout).unwrap();
+                assert_eq!(
+                    leaks(&text),
+                    0,
+                    "{format} {extra:?} key={}: {text}",
+                    key.is_some()
+                );
+                assert!(!text.contains("\"blake3:"), "{format} {extra:?}: {text}");
+            }
+        }
+    }
+}
+
+#[test]
+fn keyed_markers_equal_independent_openssl_hmac_known_answers() {
+    // Each value is `printf '<kind>\0<name>' | openssl dgst -sha256 -hmac 0123456789abcdef`,
+    // first 32 hex (OpenSSL 4.1.0), computed outside this crate's HMAC code.
+    let marker = |hex: &str| format!("redacted:hmac-sha256:{hex}");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let formats = every_format(dir.path());
+    let path_of = |name: &str| formats.iter().find(|(f, _)| *f == name).unwrap().1.clone();
+
+    // column loan_id
+    let parquet =
+        parse_stdout(&peek_keyed(&path_of("parquet"), &[], Some(KEY), None))["result"].clone();
+    assert_eq!(parquet["redaction"], "keyed");
+    assert_eq!(
+        parquet["columns"][0]["id"],
+        marker("9f6181c104894742edc83d76f18dc14f")
+    );
+    // path $.loan_id
+    let jsonl = parse_stdout(&peek_keyed(
+        &path_of("jsonl"),
+        &["--explicit"],
+        Some(KEY),
+        None,
+    ))["result"]
+        .clone();
+    let loan_id = jsonl["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["path"] == "$.loan_id")
+        .unwrap();
+    assert_eq!(loan_id["id"], marker("e39f8a955a1092ec102a926ece74a431"));
+    // path /comments/commentData
+    let xml = parse_stdout(&peek_keyed(&path_of("xml"), &[], Some(KEY), None))["result"].clone();
+    assert_eq!(
+        xml["summary"]["record_candidates"][0]["id"],
+        marker("f7a33bc3c68be8cd35f00e8252d5c119")
+    );
+    // sheet Servicer Watch List
+    let sheet = parse_stdout(&peek_keyed(&path_of("xlsx"), &[], Some(KEY), None))["result"].clone();
+    assert_eq!(
+        sheet["sheet"]["id"],
+        marker("56c5353fd9566f00edd608ee7b3999da")
+    );
+    // metadata_key CanaryCustomKey and outline CANARY-OUTLINE-A-11aa
+    let pdf = parse_stdout(&peek_keyed(&path_of("pdf"), &[], Some(KEY), None))["result"].clone();
+    assert_eq!(
+        pdf["metadata"]["other_key_ids"][0],
+        marker("990614e7b6736b5c114e212a880e24c5")
+    );
+    assert_eq!(
+        pdf["outline"][0]["id"],
+        marker("235cdcfc3002476758764e968930d8e4")
+    );
+
+    // Domain separation: the same spelling under two kinds is two markers (column loan_id above
+    // is 9f61..., path $.loan_id is e39f...; and a column and a path "loan_id" differ too).
+    assert_ne!(
+        parquet["columns"][0]["id"], loan_id["id"],
+        "kinds are separate HMAC domains"
+    );
+}
+
+#[test]
+fn a_different_key_changes_every_marker_and_the_same_key_is_stable_across_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for (format, path) in every_format(dir.path()) {
+        if matches!(format, "csv" | "tsv") {
+            continue; // no name ids to mark
+        }
+        let first = String::from_utf8(peek_keyed(&path, &[], Some(KEY), None).stdout).unwrap();
+        let second =
+            String::from_utf8(peek_keyed(&path, &[], Some(OTHER_KEY), None).stdout).unwrap();
+        let (one, two) = (hmac_markers(&first), hmac_markers(&second));
+        assert!(!one.is_empty(), "{format} has no keyed markers: {first}");
+        assert_eq!(one.len(), two.len(), "{format}");
+        for (a, b) in one.iter().zip(&two) {
+            assert_ne!(a, b, "{format}: a different key must change every marker");
+        }
+    }
+    // Across FILES with one key: `$.loan_id` has the same marker in two different JSONL files.
+    let loan_id_marker = |file: &str| {
+        let result = parse_stdout(&peek_keyed(
+            &json_fixture(file),
+            &["--explicit"],
+            Some(KEY),
+            None,
+        ))["result"]
+            .clone();
+        result["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["path"] == "$.loan_id")
+            .unwrap()["id"]
+            .clone()
+    };
+    assert_eq!(
+        loan_id_marker("loans.jsonl"),
+        loan_id_marker("loans_bad.jsonl")
+    );
+    // ...while the default ordinal refs are only comparable inside one output.
+}
+
+#[test]
+fn an_empty_or_short_key_refuses_with_a_typed_code_and_exit_2_for_every_format() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ledger = dir.path().join("witness.jsonl");
+    for (format, path) in every_format(dir.path()) {
+        for (bad, reason) in [
+            ("", "empty"),
+            ("SHORT-KEY-xyz", "too_short"),
+            ("0123456789abcde", "too_short"),
+        ] {
+            let output = peek_keyed(&path, &["--explicit"], Some(bad), Some(&ledger));
+            assert_eq!(output.status.code(), Some(2), "{format} {bad:?}");
+            let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+            let stderr = String::from_utf8(output.stderr.clone()).unwrap();
+            let envelope = parse_stdout(&output);
+            assert_eq!(envelope["outcome"], "REFUSAL", "{format}");
+            assert_eq!(
+                envelope["refusal"]["code"], "E_REDACTION_KEY_INVALID",
+                "{format}"
+            );
+            // The context is exactly the variable name, a reason and the minimum: no key, no length.
+            assert_eq!(
+                envelope["refusal"]["detail"],
+                serde_json::json!({"env": KEY_ENV, "reason": reason, "min_bytes": 16}),
+                "{format} {bad:?}"
+            );
+            assert!(
+                envelope.get("result").is_none(),
+                "{format}: no silent fallback result"
+            );
+            for text in [&stdout, &stderr] {
+                assert!(
+                    bad.is_empty() || !text.contains(bad),
+                    "{format}: key leaked: {text}"
+                );
+            }
+        }
+    }
+    // A refusal never writes a witness record.
+    assert!(!ledger.exists() || fs::read_to_string(&ledger).unwrap().is_empty());
+    // A 16-byte key is accepted (the minimum), an unset variable is ordinal mode.
+    let ok = peek_keyed(
+        &fixture("clean_flat.csv"),
+        &[],
+        Some("0123456789abcdef"),
+        None,
+    );
+    assert_eq!(ok.status.code(), Some(0));
+}
+
+#[test]
+fn the_key_never_appears_in_stdout_stderr_the_witness_ledger_or_doctor() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let secret = "SECRET-KEY-MATERIAL-9f3a1c";
+    for (format, path) in every_format(dir.path()) {
+        let ledger = dir.path().join(format!("witness-{format}.jsonl"));
+        for extra in [&[][..], &["--view", "brief"][..], &["--explicit"][..]] {
+            let output = peek_keyed(&path, extra, Some(secret), Some(&ledger));
+            assert_eq!(output.status.code(), Some(0), "{format} {extra:?}");
+            for (what, text) in [
+                ("stdout", String::from_utf8(output.stdout).unwrap()),
+                ("stderr", String::from_utf8(output.stderr).unwrap()),
+            ] {
+                assert!(!text.contains(secret), "{format} {what}: {text}");
+            }
+        }
+        let recorded = fs::read_to_string(&ledger).expect("witness ledger");
+        assert!(!recorded.is_empty(), "{format}: a record was written");
+        assert!(!recorded.contains(secret), "{format}: key in the ledger");
+    }
+    // Doctor reports only `configured`, never the key, its length or a hash of it.
+    for (key, expected_severity, expected_message) in [
+        (Some(secret), "info", "configured"),
+        (None, "info", "not configured"),
+        (Some("tiny"), "error", "unusable"),
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fingerprint"));
+        command.args(["doctor", "--json"]).env_remove(KEY_ENV);
+        if let Some(key) = key {
+            command.env(KEY_ENV, key);
+        }
+        let output = command.output().unwrap();
+        let text = String::from_utf8(output.stdout).unwrap();
+        if let Some(key) = key {
+            assert!(!text.contains(key), "doctor leaked the key: {text}");
+        }
+        let report: Value = serde_json::from_str(&text).unwrap();
+        let finding = report["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["id"] == "fingerprint.redaction-key")
+            .unwrap_or_else(|| panic!("no redaction-key finding: {text}"));
+        assert_eq!(finding["severity"], expected_severity, "{key:?}");
+        assert!(
+            finding["message"]
+                .as_str()
+                .unwrap()
+                .contains(expected_message),
+            "{key:?}: {finding}"
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(if expected_severity == "error" { 1 } else { 0 }),
+            "{key:?}"
+        );
+    }
+}
+
+#[test]
+fn delimited_text_prints_no_names_or_ids_and_explicit_still_shows_names() {
+    // CSV/TSV peek is row-shape only: the header's names are never printed, with or without a
+    // key (there is nothing to mark).
+    for (file, header_names) in [
+        (
+            "clean_flat.csv",
+            vec!["loan_id", "region", "balance", "rate"],
+        ),
+        ("tsv.tsv", vec![]),
+    ] {
+        for key in [None, Some(KEY)] {
+            let text = String::from_utf8(
+                peek_keyed(&fixture(file), &["--view", "brief"], key, None).stdout,
+            )
+            .unwrap();
+            for name in &header_names {
+                assert!(!text.contains(name), "{file}: {name} printed: {text}");
+            }
+            assert!(!text.contains(&old_blake3_id("loan_id")), "{file}");
+        }
+    }
+    // --explicit keeps showing names; in keyed mode the ids are markers beside the names.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let formats = every_format(dir.path());
+    let path_of = |name: &str| formats.iter().find(|(f, _)| *f == name).unwrap().1.clone();
+    let parquet =
+        String::from_utf8(peek_keyed(&path_of("parquet"), &["--explicit"], Some(KEY), None).stdout)
+            .unwrap();
+    assert!(parquet.contains("\"name\": \"loan_id\"") && parquet.contains("redacted:hmac-sha256:"));
+    let xlsx = String::from_utf8(peek_keyed(&path_of("xlsx"), &["--explicit"], None, None).stdout)
+        .unwrap();
+    assert!(xlsx.contains("Servicer Watch List") && xlsx.contains("redacted:ref:s1"));
 }

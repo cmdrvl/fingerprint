@@ -5,6 +5,7 @@ use std::io::{BufRead, BufReader};
 use serde_json::{Value, json};
 
 use crate::cli::args::{PeekArgs, PeekView};
+use crate::redaction::{Kind, Marker, RedactionKey};
 use crate::witness::ledger::{append, ledger_path_for_append};
 use crate::witness::record::{WitnessInput, WitnessRecord};
 
@@ -144,6 +145,23 @@ fn read_input(
 }
 
 pub fn run(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
+    let key = match RedactionKey::from_env() {
+        Ok(key) => key,
+        Err(error) => {
+            // Fail closed, for every format: a misconfigured key must not quietly downgrade.
+            emit_refusal(
+                crate::redaction::REFUSAL_CODE,
+                "FINGERPRINT_REDACTION_KEY is empty or too short",
+                json!({
+                    "env": crate::redaction::ENV_KEY,
+                    "reason": error.reason(),
+                    "min_bytes": crate::redaction::MIN_KEY_BYTES,
+                }),
+            )?;
+            return Ok(2);
+        }
+    };
+    let mut marker = Marker::new(key.as_ref());
     let max_rows = args.rows.max(1);
     let lower_extension = args
         .file
@@ -154,26 +172,26 @@ pub fn run(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
         .as_deref()
         .is_some_and(|extension| WORKBOOK_EXTENSIONS.contains(&extension))
     {
-        return run_workbook(args, append_witness_record, max_rows);
+        return run_workbook(args, append_witness_record, max_rows, &mut marker);
     }
     if lower_extension.as_deref() == Some("parquet") {
-        return run_parquet(args, append_witness_record);
+        return run_parquet(args, append_witness_record, &mut marker);
     }
     if lower_extension.as_deref() == Some("xml") {
-        return run_xml(args, append_witness_record);
+        return run_xml(args, append_witness_record, &mut marker);
     }
     if matches!(lower_extension.as_deref(), Some("html" | "htm")) {
-        return run_html(args, append_witness_record);
+        return run_html(args, append_witness_record, &mut marker);
     }
     if lower_extension.as_deref() == Some("pdf") {
-        return run_pdf(args, append_witness_record);
+        return run_pdf(args, append_witness_record, &mut marker);
     }
     if let Some(kind) = match lower_extension.as_deref() {
         Some("jsonl" | "ndjson") => Some(JsonPeekKind::Jsonl),
         Some("json") => Some(JsonPeekKind::Json),
         _ => None,
     } {
-        return run_json(args, append_witness_record, max_rows, kind);
+        return run_json(args, append_witness_record, max_rows, kind, &mut marker);
     }
     if let Some(extension) = args
         .file
@@ -381,6 +399,7 @@ fn run_workbook(
     args: &PeekArgs,
     append_witness_record: bool,
     max_rows: usize,
+    marker: &mut Marker<'_>,
 ) -> Result<u8, String> {
     use calamine::{Reader, open_workbook_auto};
 
@@ -411,19 +430,24 @@ fn run_workbook(
                 let (first_row, first_column) = range
                     .start()
                     .map_or((0, 0), |(row, column)| (row + 1, column + 1));
-                sheets.push(json!({
+                let mut entry = json!({
                     "index": index,
-                    "name": name,
+                    "id": marker.mark(Kind::Sheet, name),
                     "rows": range.height(),
                     "columns": range.width(),
                     "first_row": first_row,
                     "first_column": first_column,
-                }));
+                });
+                if args.explicit {
+                    entry["name"] = json!(name);
+                }
+                sheets.push(entry);
             }
-            Err(error) => {
+            Err(_) => {
+                // The reader's error text can quote the sheet name: report the index only.
                 return refuse(
                     "Could not read a worksheet",
-                    json!({ "path": path, "sheet": name, "error": error.to_string() }),
+                    json!({ "path": path, "sheet_index": index }),
                 );
             }
         }
@@ -436,14 +460,16 @@ fn run_workbook(
             None => match selector.parse::<usize>() {
                 Ok(index) if index < names.len() => index,
                 _ => {
-                    return refuse(
-                        "Sheet not found",
-                        json!({
-                            "path": path,
-                            "reason": "sheet_not_found",
-                            "sheets": names,
-                        }),
-                    );
+                    // Sheet names are withheld by default: the count says what indexes exist.
+                    let mut detail = json!({
+                        "path": path,
+                        "reason": "sheet_not_found",
+                        "sheet_count": names.len(),
+                    });
+                    if args.explicit {
+                        detail["sheets"] = json!(names);
+                    }
+                    return refuse("Sheet not found", detail);
                 }
             },
         },
@@ -461,7 +487,7 @@ fn run_workbook(
     if rows.is_empty() {
         return refuse(
             "No rows were available to inspect",
-            json!({ "path": path, "sheet": names[selected] }),
+            json!({ "path": path, "sheet_index": selected }),
         );
     }
 
@@ -570,6 +596,13 @@ fn run_workbook(
         json!({ "ranges": ranges.len(), "cells": area, "ranges_in_inspected_rows": in_window })
     });
 
+    let mut selected_sheet = json!({
+        "index": selected,
+        "id": marker.mark(Kind::Sheet, &names[selected]),
+    });
+    if args.explicit {
+        selected_sheet["name"] = json!(names[selected]);
+    }
     let mut result = json!({
         "file": path,
         "format": "xlsx",
@@ -580,8 +613,9 @@ fn run_workbook(
         "columns": columns,
         "dialect": dialect_json("xlsx", "none", None),
         "column_count": modal_column_count,
-        "sheet": { "index": selected, "name": names[selected] },
+        "sheet": selected_sheet,
         "sheets": sheets,
+        "redaction": marker.mode(),
         "rows_requested": max_rows,
         "rows_observed": rows.len(),
         "summary": summary,
@@ -637,31 +671,20 @@ struct JsonFieldStats {
 
 #[derive(Default)]
 struct JsonShape {
-    /// In first-seen order (object keys arrive sorted: serde_json's map order).
+    /// In first-seen FILE order (never name order).
     fields: Vec<JsonFieldStats>,
     index: BTreeMap<String, usize>,
     truncated: bool,
 }
 
-fn json_type(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(number) if number.is_i64() || number.is_u64() => "integer",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
-}
-
 impl JsonShape {
-    fn visit(&mut self, path: &str, value: &Value, depth: usize, seen: &mut Vec<usize>) {
+    /// Count one occurrence of `kind` at `path`; `None` when the field cap is reached.
+    fn record(&mut self, path: &str, kind: &'static str, seen: &mut Vec<usize>) -> Option<usize> {
         let slot = match self.index.get(path) {
             Some(slot) => *slot,
             None if self.fields.len() >= MAX_JSON_FIELDS => {
                 self.truncated = true;
-                return;
+                return None;
             }
             None => {
                 self.fields.push(JsonFieldStats {
@@ -672,57 +695,216 @@ impl JsonShape {
                 self.fields.len() - 1
             }
         };
-        *self.fields[slot].types.entry(json_type(value)).or_insert(0) += 1;
+        *self.fields[slot].types.entry(kind).or_insert(0) += 1;
         if !seen.contains(&slot) {
             seen.push(slot);
         }
-        if depth >= MAX_JSON_DEPTH {
-            if matches!(value, Value::Object(_) | Value::Array(_)) {
-                self.truncated = true;
-            }
-            return;
-        }
-        match value {
-            Value::Object(map) => {
-                for (key, child) in map {
-                    self.visit(&format!("{path}.{key}"), child, depth + 1, seen);
-                }
-            }
-            Value::Array(items) => {
-                for item in items {
-                    self.visit(&format!("{path}[]"), item, depth + 1, seen);
-                }
-            }
-            _ => {}
-        }
+        Some(slot)
     }
 
-    fn add_record(&mut self, record: &Value) {
-        let mut seen = Vec::new();
-        self.visit("$", record, 0, &mut seen);
+    fn finish_record(&mut self, seen: Vec<usize>) {
         for slot in seen {
             self.fields[slot].present += 1;
         }
     }
 }
 
+/// Walks one JSON value in FILE order (serde_json's `Value` would sort object keys by name, and
+/// field order must not depend on names), recording each path and type into the shared shape.
+/// Nothing but paths and type words is kept; scalar values are dropped as they are read.
+struct ShapeSeed<'a> {
+    shape: &'a std::cell::RefCell<JsonShape>,
+    seen: &'a std::cell::RefCell<Vec<usize>>,
+    path: String,
+    depth: usize,
+}
+
+impl<'a> ShapeSeed<'a> {
+    fn child(&self, path: String) -> ShapeSeed<'a> {
+        ShapeSeed {
+            shape: self.shape,
+            seen: self.seen,
+            path,
+            depth: self.depth + 1,
+        }
+    }
+
+    fn note(&self, kind: &'static str) -> bool {
+        self.shape
+            .borrow_mut()
+            .record(&self.path, kind, &mut self.seen.borrow_mut())
+            .is_some()
+    }
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for ShapeSeed<'_> {
+    type Value = ();
+
+    fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        deserializer.deserialize_any(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for ShapeSeed<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("any JSON value")
+    }
+
+    fn visit_bool<E>(self, _: bool) -> Result<(), E> {
+        self.note("boolean");
+        Ok(())
+    }
+
+    fn visit_i64<E>(self, _: i64) -> Result<(), E> {
+        self.note("integer");
+        Ok(())
+    }
+
+    fn visit_u64<E>(self, _: u64) -> Result<(), E> {
+        self.note("integer");
+        Ok(())
+    }
+
+    fn visit_f64<E>(self, _: f64) -> Result<(), E> {
+        self.note("number");
+        Ok(())
+    }
+
+    fn visit_str<E>(self, _: &str) -> Result<(), E> {
+        self.note("string");
+        Ok(())
+    }
+
+    fn visit_unit<E>(self) -> Result<(), E> {
+        self.note("null");
+        Ok(())
+    }
+
+    fn visit_none<E>(self) -> Result<(), E> {
+        self.note("null");
+        Ok(())
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        let tracked = self.note("object");
+        if !tracked || self.depth >= MAX_JSON_DEPTH {
+            if tracked {
+                self.shape.borrow_mut().truncated = true;
+            }
+            while map
+                .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                .is_some()
+            {}
+            return Ok(());
+        }
+        while let Some(key) = map.next_key::<String>()? {
+            let child = self.child(format!("{}.{key}", self.path));
+            map.next_value_seed(child)?;
+        }
+        Ok(())
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        let tracked = self.note("array");
+        if !tracked || self.depth >= MAX_JSON_DEPTH {
+            if tracked {
+                self.shape.borrow_mut().truncated = true;
+            }
+            while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+            return Ok(());
+        }
+        let element_path = format!("{}[]", self.path);
+        while seq
+            .next_element_seed(self.child(element_path.clone()))?
+            .is_some()
+        {}
+        Ok(())
+    }
+}
+
+/// A top-level JSON array: its first `limit` elements are records, the rest are skipped.
+struct RootArraySeed<'a> {
+    shape: &'a std::cell::RefCell<JsonShape>,
+    limit: usize,
+    records: &'a std::cell::Cell<usize>,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for RootArraySeed<'_> {
+    type Value = ();
+
+    fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        deserializer.deserialize_seq(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for RootArraySeed<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON array")
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        loop {
+            if self.records.get() >= self.limit {
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                return Ok(());
+            }
+            let seen = std::cell::RefCell::new(Vec::new());
+            let element = ShapeSeed {
+                shape: self.shape,
+                seen: &seen,
+                path: "$".to_owned(),
+                depth: 0,
+            };
+            if seq.next_element_seed(element)?.is_none() {
+                return Ok(());
+            }
+            self.shape.borrow_mut().finish_record(seen.into_inner());
+            self.records.set(self.records.get() + 1);
+        }
+    }
+}
+
+/// Add one self-contained JSON value (a JSONL line, or a non-array document) as one record.
+fn add_json_record(shape: &std::cell::RefCell<JsonShape>, bytes: &[u8]) -> Result<(), ()> {
+    use serde::de::DeserializeSeed;
+    let seen = std::cell::RefCell::new(Vec::new());
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    ShapeSeed {
+        shape,
+        seen: &seen,
+        path: "$".to_owned(),
+        depth: 0,
+    }
+    .deserialize(&mut deserializer)
+    .map_err(|_| ())?;
+    deserializer.end().map_err(|_| ())?;
+    shape.borrow_mut().finish_record(seen.into_inner());
+    Ok(())
+}
+
 /// `fingerprint peek x.jsonl|x.json`: the schema tree of the first `--rows` records (a `.json`
 /// array contributes its first elements, a `.json` object is one record): per field path the
-/// presence rate and the counts by JSON type. Never a value. A field is identified by a short
-/// blake3 of its path (`id`); `--explicit` adds the path itself (key names). `.jsonl` streams
+/// presence rate and the counts by JSON type. Never a value. A field is identified by an ordinal
+/// ref in file order (`id`; a keyed marker with a key); `--explicit` adds the path itself (key
+/// names). `.jsonl` streams
 /// the first lines only; a `.json` document is parsed whole (refused over 256 MiB).
 fn run_json(
     args: &PeekArgs,
     append_witness_record: bool,
     max_rows: usize,
     kind: JsonPeekKind,
+    marker: &mut Marker<'_>,
 ) -> Result<u8, String> {
     let path = args.file.display().to_string();
     let refuse = |message: &str, detail: Value| -> Result<u8, String> {
         emit_refusal("E_BAD_INPUT", message, detail)?;
         Ok(2)
     };
-    let mut shape = JsonShape::default();
+    let shape = std::cell::RefCell::new(JsonShape::default());
     let mut records = 0usize;
     let (mut invalid_lines, mut first_invalid_line) = (0usize, None::<usize>);
     let (hash, total_bytes, truncated_lines);
@@ -745,12 +927,11 @@ fn run_json(
                 if raw.iter().all(u8::is_ascii_whitespace) {
                     continue;
                 }
-                match serde_json::from_slice::<Value>(raw) {
-                    Ok(value) => {
+                match add_json_record(&shape, raw) {
+                    Ok(()) => {
                         records += 1;
-                        shape.add_record(&value);
                     }
-                    Err(_) => {
+                    Err(()) => {
                         invalid_lines += 1;
                         first_invalid_line.get_or_insert(index + 1);
                     }
@@ -788,27 +969,47 @@ fn run_json(
                     );
                 }
             };
-            let document: Value = match serde_json::from_slice(&bytes) {
-                Ok(document) => document,
-                Err(error) => {
-                    // Position only: serde_json's message can quote nothing but the syntax error.
-                    return refuse(
-                        "Input is not valid JSON",
-                        json!({ "path": path, "line": error.line(), "column": error.column() }),
-                    );
-                }
+            // Walk the document in FILE order (never through `Value`, which sorts keys by name).
+            let is_array = bytes.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'[');
+            let syntax_error = |error: serde_json::Error| {
+                // Position only: never the message text.
+                refuse(
+                    "Input is not valid JSON",
+                    json!({ "path": path, "line": error.line(), "column": error.column() }),
+                )
             };
-            match &document {
-                Value::Array(items) => {
-                    for item in items.iter().take(max_rows) {
-                        records += 1;
-                        shape.add_record(item);
-                    }
+            if is_array {
+                use serde::de::DeserializeSeed;
+                let counted = std::cell::Cell::new(0usize);
+                let mut deserializer = serde_json::Deserializer::from_slice(&bytes);
+                let outcome = RootArraySeed {
+                    shape: &shape,
+                    limit: max_rows,
+                    records: &counted,
                 }
-                other => {
-                    records = 1;
-                    shape.add_record(other);
+                .deserialize(&mut deserializer)
+                .and_then(|()| deserializer.end());
+                if let Err(error) = outcome {
+                    return syntax_error(error);
                 }
+                records = counted.get();
+            } else {
+                let seen = std::cell::RefCell::new(Vec::new());
+                let mut deserializer = serde_json::Deserializer::from_slice(&bytes);
+                use serde::de::DeserializeSeed;
+                let outcome = ShapeSeed {
+                    shape: &shape,
+                    seen: &seen,
+                    path: "$".to_owned(),
+                    depth: 0,
+                }
+                .deserialize(&mut deserializer)
+                .and_then(|()| deserializer.end());
+                if let Err(error) = outcome {
+                    return syntax_error(error);
+                }
+                shape.borrow_mut().finish_record(seen.into_inner());
+                records = 1;
             }
             hash =
                 append_witness_record.then(|| format!("blake3:{}", blake3::hash(&bytes).to_hex()));
@@ -824,6 +1025,7 @@ fn run_json(
         );
     }
 
+    let shape = shape.into_inner();
     let fields: Vec<Value> = shape
         .fields
         .iter()
@@ -831,7 +1033,7 @@ fn run_json(
         .map(|(index, field)| {
             let mut entry = json!({
                 "index": index,
-                "id": format!("blake3:{}", &blake3::hash(field.path.as_bytes()).to_hex()[..16]),
+                "id": marker.mark(Kind::Path, &field.path),
                 "depth": field.path.matches(['.', '[']).count().saturating_sub(field.path.matches("[]").count()),
                 "present": field.present,
                 "presence_rate": round_confidence(field.present as f64 / records as f64),
@@ -851,6 +1053,7 @@ fn run_json(
         "rows_observed": records,
         "fields_total": fields.len(),
         "fields_truncated": shape.truncated,
+        "redaction": marker.mode(),
         "fields": fields,
     });
     if invalid_lines > 0 {
@@ -937,9 +1140,13 @@ const MAX_PDF_LISTED: usize = 200;
 /// version and whether it is encrypted, the Info dictionary's KEYS (never a value), and the
 /// outline (bookmark) tree as entry count, depth and per-entry depth/children/title-length
 /// bucket. No page content is read, no metadata value and no bookmark title is printed. A key
-/// outside the PDF specification's Info vocabulary is an `id` unless `--explicit`; `--explicit`
-/// also adds a blake3-prefix `id` per outline title (a pseudonym; never the title).
-fn run_pdf(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
+/// outside the PDF specification's Info vocabulary is an ordinal ref (or keyed marker) `id`,
+/// named only with `--explicit`; each outline title is an ordinal ref `id`, never the title.
+fn run_pdf(
+    args: &PeekArgs,
+    append_witness_record: bool,
+    marker: &mut Marker<'_>,
+) -> Result<u8, String> {
     use lopdf::{Dictionary, Document, Object, ObjectId};
 
     let path = args.file.display().to_string();
@@ -1047,12 +1254,16 @@ fn run_pdf(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
             }
         }
     }
+    // Standard keys are the PDF specification's public vocabulary (sorted). Other keys stay in
+    // the Info dictionary's own (file) order: their refs must not follow name order.
     standard_keys.sort();
-    other_keys.sort();
     let mut metadata = json!({
         "key_count": standard_keys.len() + other_keys.len(),
         "standard_keys": standard_keys,
-        "other_key_ids": other_keys.iter().map(|key| short_id(key)).collect::<Vec<_>>(),
+        "other_key_ids": other_keys
+            .iter()
+            .map(|key| marker.mark(Kind::MetadataKey, key))
+            .collect::<Vec<_>>(),
     });
     if args.explicit {
         metadata["other_keys"] = json!(other_keys);
@@ -1112,7 +1323,7 @@ fn run_pdf(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
                 depth,
                 children: 0,
                 title_length: title.chars().count(),
-                id: short_id(&title),
+                id: marker.mark(Kind::Outline, &title),
             });
             if let Some(parent) = parent {
                 entries[parent].children += 1;
@@ -1131,22 +1342,22 @@ fn run_pdf(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
         .take(MAX_PDF_LISTED)
         .enumerate()
         .map(|(index, entry)| {
-            let mut value = json!({
+            // The title is never printed (even with --explicit): only a ref, so equal titles
+            // share one id inside this output.
+            json!({
                 "index": index,
+                "id": entry.id,
                 "depth": entry.depth,
                 "children": entry.children,
                 "title_length_bucket": length_bucket(entry.title_length),
-            });
-            if args.explicit {
-                value["id"] = json!(entry.id);
-            }
-            value
+            })
         })
         .collect();
 
     let mut result = json!({
         "file": path,
         "format": "pdf",
+        "redaction": marker.mode(),
         "dialect": dialect_json("pdf", "none", None),
         "version": document.version,
         "encrypted": document.is_encrypted(),
@@ -1193,9 +1404,13 @@ const MAX_HTML_ITEMS: usize = 200;
 /// and text-length buckets, per-table row/column shapes and a column-width profile, page-section
 /// count and candidate regions (a heading and the tables that follow it before the next heading
 /// of the same or a higher level). No text, no attribute value, no element or class name by
-/// default; `--explicit` adds tag and class names (and a blake3 prefix `id` of each heading's
-/// text, a pseudonym that lets two documents' headings be compared), never any text.
-fn run_html(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
+/// default; `--explicit` adds tag and class names, never any text. Each heading carries an
+/// ordinal ref (or keyed marker) `id`.
+fn run_html(
+    args: &PeekArgs,
+    append_witness_record: bool,
+    marker: &mut Marker<'_>,
+) -> Result<u8, String> {
     use scraper::{ElementRef, Html};
 
     let path = args.file.display().to_string();
@@ -1285,7 +1500,7 @@ fn run_html(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> 
             headings.push(Heading {
                 level,
                 length: text.chars().count(),
-                id: short_id(&text),
+                id: marker.mark(Kind::Heading, &text),
                 tables: 0,
             });
             open.push(headings.len() - 1);
@@ -1397,16 +1612,15 @@ fn run_html(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> 
         .take(MAX_HTML_ITEMS)
         .enumerate()
         .map(|(index, heading)| {
-            let mut entry = json!({
+            // The heading text is never printed (even with --explicit): only a ref, so equal
+            // headings share one id inside this output.
+            json!({
                 "index": index,
+                "id": heading.id,
                 "level": heading.level,
                 "text_length_bucket": length_bucket(heading.length),
                 "tables_in_region": heading.tables,
-            });
-            if args.explicit {
-                entry["id"] = json!(heading.id);
-            }
-            entry
+            })
         })
         .collect();
     let candidate_regions: Vec<Value> = headings
@@ -1422,6 +1636,7 @@ fn run_html(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> 
     let mut result = json!({
         "file": path,
         "format": "html",
+        "redaction": marker.mode(),
         "dialect": dialect_json("html", "none", None),
         "element_count": element_count,
         "headings_total": headings.len(),
@@ -1475,18 +1690,18 @@ fn column_letters(index: usize) -> String {
     letters
 }
 
-fn short_id(text: &str) -> String {
-    format!("blake3:{}", &blake3::hash(text.as_bytes()).to_hex()[..16])
-}
-
 /// `fingerprint peek x.xml`: the element-path skeleton from the streaming index (one pass over
 /// the whole file, O(distinct paths) memory): root, element and path counts, depth, and for
 /// each element path its depth, element count, attribute-name count, whether it repeats within
 /// its parent and whether it is a leaf. Repeating non-leaf paths are the record candidates
-/// (`summary.record_candidates`). Elements are identified by `id` (blake3 prefix of the path);
+/// (`summary.record_candidates`). Elements are identified by an ordinal ref `id` in document order;
 /// `--explicit` adds the paths and the root namespace URI. No text and no attribute value is
 /// ever read into the report, and attribute NAMES appear only as a count.
-fn run_xml(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
+fn run_xml(
+    args: &PeekArgs,
+    append_witness_record: bool,
+    marker: &mut Marker<'_>,
+) -> Result<u8, String> {
     use crate::document::XmlDocument;
 
     let path = args.file.display().to_string();
@@ -1522,25 +1737,27 @@ fn run_xml(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
         repeating: bool,
         leaf: bool,
         attributes: usize,
+        id: String,
     }
+    // Refs are numbered in first-appearance (document) order, then rows are ordered by depth with
+    // a stable sort, so neither the numbering nor the order ever looks at an element name.
     let mut rows: Vec<Row> = xml
-        .paths
+        .path_order
         .iter()
-        .map(|(p, count)| Row {
-            path: p.clone(),
-            depth: depth_of(p),
-            count: *count,
-            repeating: parent_count(p).is_some_and(|parent| *count > parent),
-            leaf: !has_children(p),
-            attributes: xml.attribute_names.get(p).map_or(0, |names| names.len()),
+        .map(|p| {
+            let count = xml.paths.get(p).copied().unwrap_or(0);
+            Row {
+                path: p.clone(),
+                depth: depth_of(p),
+                count,
+                repeating: parent_count(p).is_some_and(|parent| count > parent),
+                leaf: !has_children(p),
+                attributes: xml.attribute_names.get(p).map_or(0, |names| names.len()),
+                id: marker.mark(Kind::Path, p),
+            }
         })
         .collect();
-    // Name-free, deterministic order: depth, then id.
-    rows.sort_by(|a, b| {
-        a.depth
-            .cmp(&b.depth)
-            .then_with(|| short_id(&a.path).cmp(&short_id(&b.path)))
-    });
+    rows.sort_by_key(|row| row.depth);
     let max_depth = rows.iter().map(|row| row.depth).max().unwrap_or(0);
     let repeating_paths = rows.iter().filter(|row| row.repeating).count();
     let candidates: Vec<Value> = rows
@@ -1558,7 +1775,7 @@ fn run_xml(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
                 })
                 .count();
             let mut entry = json!({
-                "id": short_id(&row.path),
+                "id": row.id,
                 "count": row.count,
                 "leaf_children": leaf_children,
             });
@@ -1576,7 +1793,7 @@ fn run_xml(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
         .map(|(index, row)| {
             let mut entry = json!({
                 "index": index,
-                "id": short_id(&row.path),
+                "id": row.id,
                 "depth": row.depth,
                 "count": row.count,
                 "repeating": row.repeating,
@@ -1591,8 +1808,8 @@ fn run_xml(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
         .collect();
 
     let mut root = json!({
-        "id": short_id(&xml.root),
-        "namespace_id": xml.root_namespace.as_deref().map(short_id),
+        "id": marker.mark(Kind::Path, &format!("/{}", xml.root)),
+        "namespace_id": xml.root_namespace.as_deref().map(|ns| marker.mark(Kind::Namespace, ns)),
     });
     if args.explicit {
         root["name"] = json!(xml.root);
@@ -1601,6 +1818,7 @@ fn run_xml(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
     let result = json!({
         "file": path,
         "format": "xml",
+        "redaction": marker.mode(),
         "dialect": dialect_json("xml", "none", None),
         "root": root,
         "element_count": xml.element_count,
@@ -1655,10 +1873,14 @@ fn inspect_type(physical: &str, logical: Option<&str>) -> &'static str {
 
 /// `fingerprint peek x.parquet`: the footer's structure only (no column chunk is read): row and
 /// row-group counts, per-column physical/logical type, repetition, compression and null count.
-/// Columns are identified by a short blake3 of their name (`id`) so two files' schemas can be
-/// compared without printing names; `--explicit` adds the names and the file key/value metadata
-/// keys. Metadata VALUES and statistics min/max are never emitted.
-fn run_parquet(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
+/// Columns are identified by an ordinal ref in column order (`id`; a keyed marker with
+/// `FINGERPRINT_REDACTION_KEY`, which is what makes schemas comparable across files without
+/// printing names); `--explicit` adds the names and the file key/value metadata keys. Metadata VALUES and statistics min/max are never emitted.
+fn run_parquet(
+    args: &PeekArgs,
+    append_witness_record: bool,
+    marker: &mut Marker<'_>,
+) -> Result<u8, String> {
     use parquet::file::metadata::ParquetMetaDataReader;
 
     let path = args.file.display().to_string();
@@ -1717,7 +1939,7 @@ fn run_parquet(args: &PeekArgs, append_witness_record: bool) -> Result<u8, Strin
         let name = column.path().string();
         let mut entry = json!({
             "index": index,
-            "id": format!("blake3:{}", &blake3::hash(name.as_bytes()).to_hex()[..16]),
+            "id": marker.mark(Kind::Column, &name),
             "type": inspect_type(&physical, logical.as_deref()),
             "physical_type": physical,
             "logical_type": logical,
@@ -1742,6 +1964,7 @@ fn run_parquet(args: &PeekArgs, append_witness_record: bool) -> Result<u8, Strin
     let mut result = json!({
         "file": path,
         "format": "parquet",
+        "redaction": marker.mode(),
         "dialect": dialect_json("parquet", "none", None),
         // profile inspect's names for the footer's exact counts (`rows_total` and
         // `columns_total` are kept).
@@ -1809,7 +2032,11 @@ fn emit_refusal(code: &str, message: &str, detail: Value) -> Result<(), String> 
             "code": code,
             "message": message,
             "detail": detail,
-            "next_command": "Rerun fingerprint peek with a readable CSV, TSV, XLSX, Parquet, JSON, JSONL, XML, HTML or PDF file"
+            "next_command": if code == crate::redaction::REFUSAL_CODE {
+                "Set FINGERPRINT_REDACTION_KEY to at least 16 bytes, or unset it to use ordinal refs"
+            } else {
+                "Rerun fingerprint peek with a readable CSV, TSV, XLSX, Parquet, JSON, JSONL, XML, HTML or PDF file"
+            }
         },
         "witness_id": null
     }))

@@ -40,6 +40,9 @@ pub struct XmlDocument {
     pub root_namespace: Option<String>,
     /// Element path -> number of elements at that path.
     pub paths: BTreeMap<String, u64>,
+    /// The same paths in the order each first appeared in the file (document order). `peek`
+    /// numbers its refs from this, so the order never depends on element names.
+    pub path_order: Vec<String>,
     /// Element path -> attribute local names seen on elements at that path (never values).
     pub attribute_names: BTreeMap<String, BTreeSet<String>>,
     pub element_count: u64,
@@ -184,6 +187,7 @@ impl XmlDocument {
         let mut root = String::new();
         let mut root_namespace = None;
         let mut paths: BTreeMap<String, u64> = BTreeMap::new();
+        let mut path_order: Vec<String> = Vec::new();
         let mut attribute_names: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut element_count = 0u64;
         let display = path.display().to_string();
@@ -201,6 +205,9 @@ impl XmlDocument {
                         "invalid xml '{display}': more than {MAX_DISTINCT_PATHS} distinct element paths"
                     ));
                 }
+                if !paths.contains_key(start.path) {
+                    path_order.push(start.path.to_owned());
+                }
                 *paths.entry(start.path.to_owned()).or_insert(0) += 1;
                 if !start.attributes.is_empty() {
                     let names = attribute_names.entry(start.path.to_owned()).or_default();
@@ -217,6 +224,7 @@ impl XmlDocument {
             root,
             root_namespace,
             paths,
+            path_order,
             attribute_names,
             element_count,
         })
