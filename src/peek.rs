@@ -163,6 +163,9 @@ pub fn run(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
     if lower_extension.as_deref() == Some("xml") {
         return run_xml(args, append_witness_record);
     }
+    if matches!(lower_extension.as_deref(), Some("html" | "htm")) {
+        return run_html(args, append_witness_record);
+    }
     if let Some(kind) = match lower_extension.as_deref() {
         Some("jsonl" | "ndjson") => Some(JsonPeekKind::Jsonl),
         Some("json") => Some(JsonPeekKind::Json),
@@ -782,23 +785,306 @@ fn apply_view(args: &PeekArgs, mut result: Value) -> Value {
     }
     let mut omitted = Vec::new();
     if let Some(object) = result.as_object_mut() {
-        for key in ["rows", "columns", "fields", "paths", "sheets"] {
+        for key in [
+            "rows", "columns", "fields", "paths", "sheets", "headings", "tables", "tags", "classes",
+        ] {
             if object.remove(key).is_some() {
                 omitted.push(key);
             }
         }
-        if let Some(candidates) = object
-            .get_mut("summary")
-            .and_then(|summary| summary.get_mut("record_candidates"))
-            .and_then(Value::as_array_mut)
-            && candidates.len() > BRIEF_MAX_CANDIDATES
-        {
-            candidates.truncate(BRIEF_MAX_CANDIDATES);
+        for list in ["record_candidates", "candidate_regions"] {
+            if let Some(candidates) = object
+                .get_mut("summary")
+                .and_then(|summary| summary.get_mut(list))
+                .and_then(Value::as_array_mut)
+                && candidates.len() > BRIEF_MAX_CANDIDATES
+            {
+                candidates.truncate(BRIEF_MAX_CANDIDATES);
+            }
         }
     }
     result["view"] = json!("brief");
     result["omitted"] = json!(omitted);
     result
+}
+
+/// Largest HTML file parsed in memory.
+const MAX_HTML_PEEK_BYTES: u64 = 256 * 1024 * 1024;
+/// Headings and tables listed individually (the counts are always exact).
+const MAX_HTML_ITEMS: usize = 200;
+
+/// `fingerprint peek x.html`: the document's structural skeleton from its DOM: heading levels
+/// and text-length buckets, per-table row/column shapes and a column-width profile, page-section
+/// count and candidate regions (a heading and the tables that follow it before the next heading
+/// of the same or a higher level). No text, no attribute value, no element or class name by
+/// default; `--explicit` adds tag and class names (and a blake3 prefix `id` of each heading's
+/// text, a pseudonym that lets two documents' headings be compared), never any text.
+fn run_html(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
+    use scraper::{ElementRef, Html};
+
+    let path = args.file.display().to_string();
+    let refuse = |message: &str, detail: Value| -> Result<u8, String> {
+        emit_refusal("E_BAD_INPUT", message, detail)?;
+        Ok(2)
+    };
+    let size = match fs::metadata(&args.file) {
+        Ok(metadata) => metadata.len(),
+        Err(error) => {
+            return refuse(
+                "Could not read input file",
+                json!({ "path": path, "error": error.kind().to_string() }),
+            );
+        }
+    };
+    if size == 0 {
+        return refuse("Input file is empty", json!({ "path": path }));
+    }
+    if size > MAX_HTML_PEEK_BYTES {
+        return refuse(
+            "html file is over the in-memory limit",
+            json!({ "path": path, "bytes": size, "limit": MAX_HTML_PEEK_BYTES }),
+        );
+    }
+    let bytes = match fs::read(&args.file) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return refuse(
+                "Could not read input file",
+                json!({ "path": path, "error": error.kind().to_string() }),
+            );
+        }
+    };
+    let document = Html::parse_document(&String::from_utf8_lossy(&bytes));
+
+    let text_of = |element: ElementRef<'_>| -> String {
+        element
+            .text()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+
+    struct Heading {
+        level: usize,
+        length: usize,
+        id: String,
+        tables: usize,
+    }
+    let mut headings: Vec<Heading> = Vec::new();
+    let mut open: Vec<usize> = Vec::new();
+    let mut table_items: Vec<Value> = Vec::new();
+    let mut table_count = 0usize;
+    let mut element_count = 0u64;
+    let mut page_sections = 0usize;
+    let mut tags: BTreeMap<String, usize> = BTreeMap::new();
+    let mut classes: BTreeMap<String, usize> = BTreeMap::new();
+    let mut modal_widths: Vec<usize> = Vec::new();
+
+    for node in document.tree.root().descendants() {
+        let Some(element) = ElementRef::wrap(node) else {
+            continue;
+        };
+        element_count += 1;
+        let name = element.value().name();
+        if element.value().attr("data-page-number").is_some() {
+            page_sections += 1;
+        }
+        if args.explicit {
+            *tags.entry(name.to_owned()).or_insert(0) += 1;
+            for class in element.value().classes() {
+                *classes.entry(class.to_owned()).or_insert(0) += 1;
+            }
+        }
+        if let [b'h', digit @ b'1'..=b'6'] = name.as_bytes() {
+            let level = usize::from(digit - b'0');
+            while open
+                .last()
+                .is_some_and(|last| headings[*last].level >= level)
+            {
+                open.pop();
+            }
+            let text = text_of(element);
+            headings.push(Heading {
+                level,
+                length: text.chars().count(),
+                id: short_id(&text),
+                tables: 0,
+            });
+            open.push(headings.len() - 1);
+        } else if name == "table" {
+            for index in &open {
+                headings[*index].tables += 1;
+            }
+            let this_table = element.id();
+            let mut widths: BTreeMap<usize, usize> = BTreeMap::new();
+            let mut widest = 0usize;
+            let (mut rows, mut header_rows, mut leading_headers) = (0usize, 0usize, true);
+            let (mut colspan_cells, mut rowspan_cells, mut full_width_rows) =
+                (0usize, 0usize, 0usize);
+            let mut cell_types = empty_type_counts();
+            let tr = scraper::Selector::parse("tr").map_err(|e| format!("{e:?}"))?;
+            for row in element.select(&tr) {
+                // Rows of a nested table belong to that table.
+                let owner = row
+                    .ancestors()
+                    .filter_map(ElementRef::wrap)
+                    .find(|ancestor| ancestor.value().name() == "table");
+                if owner.map(|owner| owner.id()) != Some(this_table) {
+                    continue;
+                }
+                let cells: Vec<ElementRef<'_>> = row
+                    .children()
+                    .filter_map(ElementRef::wrap)
+                    .filter(|cell| matches!(cell.value().name(), "td" | "th"))
+                    .collect();
+                rows += 1;
+                let mut width = 0usize;
+                let mut all_headers = !cells.is_empty();
+                let mut single_span = 1usize;
+                for cell in &cells {
+                    let span = cell
+                        .value()
+                        .attr("colspan")
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                        .unwrap_or(1)
+                        .max(1);
+                    if span > 1 {
+                        colspan_cells += 1;
+                    }
+                    if cell
+                        .value()
+                        .attr("rowspan")
+                        .is_some_and(|value| value.trim() != "1")
+                    {
+                        rowspan_cells += 1;
+                    }
+                    if cell.value().name() != "th" {
+                        all_headers = false;
+                    }
+                    single_span = span;
+                    width += span;
+                    *cell_types
+                        .entry(classify_cell(&text_of(*cell)))
+                        .or_insert(0) += 1;
+                }
+                if cells.len() == 1 && single_span >= 2 {
+                    full_width_rows += 1;
+                }
+                if leading_headers && all_headers {
+                    header_rows += 1;
+                } else {
+                    leading_headers = false;
+                }
+                if width > 0 {
+                    *widths.entry(width).or_insert(0) += 1;
+                    modal_widths.push(width);
+                }
+                widest = widest.max(width);
+            }
+            let widths_flat: Vec<usize> = widths
+                .iter()
+                .flat_map(|(width, count)| std::iter::repeat_n(*width, *count))
+                .collect();
+            let nested = element
+                .select(&scraper::Selector::parse("table").map_err(|e| format!("{e:?}"))?)
+                .count();
+            if table_items.len() < MAX_HTML_ITEMS {
+                table_items.push(json!({
+                    "index": table_count,
+                    "rows": rows,
+                    "columns_max": widest,
+                    "columns_modal": most_common_count(&widths_flat).map(|(width, _)| width),
+                    "header_rows": header_rows,
+                    "colspan_cells": colspan_cells,
+                    "rowspan_cells": rowspan_cells,
+                    "full_width_rows": full_width_rows,
+                    "nested_tables": nested,
+                    "row_width_histogram": widths
+                        .iter()
+                        .map(|(width, count)| (width.to_string(), *count))
+                        .collect::<BTreeMap<String, usize>>(),
+                    "cell_type_counts": cell_types,
+                }));
+            }
+            table_count += 1;
+        }
+    }
+
+    let mut by_level: BTreeMap<String, usize> = BTreeMap::new();
+    for heading in &headings {
+        *by_level.entry(heading.level.to_string()).or_insert(0) += 1;
+    }
+    let heading_items: Vec<Value> = headings
+        .iter()
+        .take(MAX_HTML_ITEMS)
+        .enumerate()
+        .map(|(index, heading)| {
+            let mut entry = json!({
+                "index": index,
+                "level": heading.level,
+                "text_length_bucket": length_bucket(heading.length),
+                "tables_in_region": heading.tables,
+            });
+            if args.explicit {
+                entry["id"] = json!(heading.id);
+            }
+            entry
+        })
+        .collect();
+    let candidate_regions: Vec<Value> = headings
+        .iter()
+        .enumerate()
+        .filter(|(_, heading)| heading.tables > 0)
+        .take(MAX_HTML_ITEMS)
+        .map(|(index, heading)| {
+            json!({ "heading_index": index, "level": heading.level, "tables": heading.tables })
+        })
+        .collect();
+
+    let mut result = json!({
+        "file": path,
+        "format": "html",
+        "dialect": dialect_json("html", "none", None),
+        "element_count": element_count,
+        "headings_total": headings.len(),
+        "tables_total": table_count,
+        "items_truncated": headings.len() > MAX_HTML_ITEMS || table_count > MAX_HTML_ITEMS,
+        "summary": {
+            "headings_by_level": by_level,
+            "page_sections": page_sections,
+            "modal_table_columns": most_common_count(&modal_widths).map(|(width, _)| width),
+            "candidate_regions": candidate_regions,
+        },
+        "headings": heading_items,
+        "tables": table_items,
+    });
+    if args.explicit {
+        let mut tag_list: Vec<(&String, &usize)> = tags.iter().collect();
+        tag_list.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        result["tags"] = json!(tag_list.into_iter().take(30).collect::<BTreeMap<_, _>>());
+        let mut class_list: Vec<(&String, &usize)> = classes.iter().collect();
+        class_list.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        result["classes"] = json!(class_list.into_iter().take(20).collect::<BTreeMap<_, _>>());
+    }
+    let result = apply_view(args, result);
+
+    let witness_id = if append_witness_record {
+        let hash = format!("blake3:{}", blake3::hash(&bytes).to_hex());
+        append_peek_witness(args, Some(hash), size, &result)
+    } else {
+        None
+    };
+    emit_json(&json!({
+        "version": ENVELOPE_VERSION,
+        "outcome": "SUCCESS",
+        "exit_code": 0,
+        "subcommand": "peek",
+        "result": result,
+        "witness_id": witness_id
+    }))?;
+    Ok(0)
 }
 
 fn short_id(text: &str) -> String {

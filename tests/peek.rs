@@ -1352,3 +1352,259 @@ fn brief_view_is_still_zero_retention() {
         assert!(!stdout.contains(planted), "{name:?}: {stdout}");
     }
 }
+
+// ---- bd-hra: html structural skeleton ---------------------------------------------------------------
+
+fn html_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/html")
+        .join(name)
+}
+
+fn html_result(path: &Path, extra: &[&str]) -> Value {
+    let output = peek_path(path, extra);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{path:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    parse_stdout(&output)["result"].clone()
+}
+
+fn heading_shape(result: &Value) -> Vec<(u64, u64)> {
+    result["headings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| {
+            (
+                h["level"].as_u64().unwrap(),
+                h["tables_in_region"].as_u64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn html_peek_reports_headings_tables_widths_and_candidate_regions() {
+    // Expected values are read off the fixtures by hand (tests/fixtures/html/*.html).
+    // bdc_soi_ares_like: h1 + two h2, three page sections, two 6-column tables of 3 rows
+    // (a header row of <th>, a full-width colspan row, a data row).
+    let ares = html_result(&html_fixture("bdc_soi_ares_like.html"), &[]);
+    assert_eq!(ares["format"], "html");
+    assert_eq!(
+        ares["dialect"],
+        serde_json::json!({"name": "html", "delimiter": "none"})
+    );
+    assert_eq!(ares["headings_total"], 3);
+    assert_eq!(ares["tables_total"], 2);
+    assert_eq!(heading_shape(&ares), [(1, 2), (2, 1), (2, 0)]);
+    assert_eq!(ares["summary"]["page_sections"], 3);
+    assert_eq!(ares["summary"]["modal_table_columns"], 6);
+    assert_eq!(
+        ares["summary"]["headings_by_level"],
+        serde_json::json!({"1": 1, "2": 2})
+    );
+    assert_eq!(
+        ares["summary"]["candidate_regions"],
+        serde_json::json!([
+            {"heading_index": 0, "level": 1, "tables": 2},
+            {"heading_index": 1, "level": 2, "tables": 1}
+        ])
+    );
+    for table in ares["tables"].as_array().unwrap() {
+        assert_eq!(table["rows"], 3);
+        assert_eq!(table["columns_max"], 6);
+        assert_eq!(table["columns_modal"], 6);
+        assert_eq!(table["header_rows"], 1);
+        assert_eq!(table["colspan_cells"], 1);
+        assert_eq!(table["full_width_rows"], 1);
+        assert_eq!(table["row_width_histogram"], serde_json::json!({"6": 3}));
+    }
+
+    // bdc_soi_golub_like: h1, h2 (table 1), h2 (table 2): each h2 region holds one table.
+    let golub = html_result(&html_fixture("bdc_soi_golub_like.html"), &[]);
+    assert_eq!(heading_shape(&golub), [(1, 2), (2, 1), (2, 1)]);
+    assert_eq!(golub["summary"]["page_sections"], 2);
+    assert_eq!(golub["summary"]["modal_table_columns"], 5);
+
+    // soi_subsections_repeated_period: no <h*> at all, four tables of 6, 6, 5 and 4 columns.
+    let subsections = html_result(&html_fixture("soi_subsections_repeated_period.html"), &[]);
+    assert_eq!(subsections["headings_total"], 0);
+    assert_eq!(subsections["tables_total"], 4);
+    let widths: Vec<u64> = subsections["tables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["columns_max"].as_u64().unwrap())
+        .collect();
+    assert_eq!(widths, [6, 6, 5, 4]);
+    assert_eq!(
+        subsections["summary"]["candidate_regions"],
+        serde_json::json!([])
+    );
+}
+
+#[test]
+fn html_peek_counts_spans_and_cell_classes_without_text() {
+    // canary.html's first table: 4 rows of width 3 (header of <th>, a full-width colspan row,
+    // two data rows, one cell with rowspan); cells: 1 date, 3 numeric, 2 text, 4 mixed (they
+    // contain digits and letters).
+    let result = html_result(&fixture("canary.html"), &[]);
+    assert_eq!(result["element_count"], 33);
+    assert_eq!(result["summary"]["page_sections"], 2);
+    let table = &result["tables"][0];
+    assert_eq!(table["rows"], 4);
+    assert_eq!(table["columns_max"], 3);
+    assert_eq!(table["header_rows"], 1);
+    assert_eq!(table["colspan_cells"], 1);
+    assert_eq!(table["rowspan_cells"], 1);
+    assert_eq!(table["full_width_rows"], 1);
+    assert_eq!(table["nested_tables"], 0);
+    assert_eq!(table["row_width_histogram"], serde_json::json!({"3": 4}));
+    assert_eq!(
+        table["cell_type_counts"],
+        serde_json::json!({"boolean": 0, "date": 1, "empty": 0, "mixed": 4, "numeric": 3, "text": 2})
+    );
+    assert_eq!(heading_shape(&result), [(1, 2), (2, 1)]);
+    // Deterministic.
+    assert_eq!(result, html_result(&fixture("canary.html"), &[]));
+}
+
+#[test]
+fn html_peek_canary_never_prints_text_attribute_values_or_names_by_default() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let witness = dir.path().join("witness.jsonl");
+    let path = fixture("canary.html");
+    let output = run_fingerprint_with_witness(&["peek", path.to_str().unwrap()], &witness);
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let ledger = fs::read_to_string(&witness).unwrap();
+    // Text, attribute values, comment, script, title, href and SSN-like strings (uppercase
+    // CANARY- markers) never appear; neither do the lowercase class/attribute/id names, nor tag
+    // names (the `tags` and `classes` objects are --explicit only).
+    let always_hidden = [
+        "CANARY-",
+        "078-05-1120",
+        "canary.example",
+        "https://",
+        "1,250.50",
+        "2026-01-31",
+        "Prose with",
+        "Amount",
+        "Share",
+    ];
+    let hidden_names = [
+        "canary-",
+        "canary_script_var",
+        "data-canary-attr",
+        "\"tags\"",
+        "\"classes\"",
+        "tbody",
+        "<table",
+        "\"section\"", // a tag-name key; the output's own `page_sections` is not one
+        "script",
+    ];
+    for text in [&stdout, &ledger] {
+        for planted in always_hidden.iter().chain(hidden_names.iter()) {
+            assert!(
+                !text.contains(planted),
+                "{planted} leaked by default: {text}"
+            );
+        }
+    }
+    assert!(parse_stdout_from_str(&stdout)["witness_id"].is_string());
+
+    // --explicit adds tag and class names and heading pseudonyms, still never text or values.
+    let explicit = String::from_utf8(peek_path(&path, &["--explicit"]).stdout).unwrap();
+    assert!(
+        explicit.contains("canary-table-class") && explicit.contains("\"tbody\""),
+        "{explicit}"
+    );
+    for planted in always_hidden {
+        assert!(
+            !explicit.contains(planted),
+            "{planted} leaked with --explicit: {explicit}"
+        );
+    }
+    for attribute_name in ["data-canary-attr", "canary_script_var"] {
+        assert!(
+            !explicit.contains(attribute_name),
+            "{attribute_name}: {explicit}"
+        );
+    }
+    // The heading pseudonym is a hash of the text, not the text.
+    let result = parse_stdout_from_str(&explicit)["result"].clone();
+    assert_eq!(
+        result["headings"][0]["id"],
+        format!(
+            "blake3:{}",
+            &blake3::hash(b"CANARY-HEADING-ONE-a8e3").to_hex()[..16]
+        )
+    );
+}
+
+#[test]
+fn html_peek_brief_view_is_bounded_and_witness_and_refusals_work() {
+    for name in [
+        "bdc_soi_ares_like.html",
+        "bdc_soi_golub_like.html",
+        "ares_multi_soi.html",
+        "soi_subsections_repeated_period.html",
+        "oxsq_pagebreaks.html",
+    ] {
+        let brief = peek_path(&html_fixture(name), &["--view", "brief", "--explicit"]);
+        assert_eq!(brief.status.code(), Some(0), "{name}");
+        let compact = serde_json::to_vec(&parse_stdout(&brief)).unwrap();
+        assert!(
+            compact.len() < 2000,
+            "{name}: brief is {} bytes",
+            compact.len()
+        );
+        let result = parse_stdout(&brief)["result"].clone();
+        assert_eq!(result["view"], "brief");
+        for dropped in ["headings", "tables", "tags", "classes"] {
+            assert!(result.get(dropped).is_none(), "{name}: {dropped}");
+        }
+        let full = html_result(&html_fixture(name), &[]);
+        assert_eq!(result["tables_total"], full["tables_total"], "{name}");
+        assert_eq!(result["headings_total"], full["headings_total"], "{name}");
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let witness = dir.path().join("witness.jsonl");
+    let path = html_fixture("bdc_soi_ares_like.html");
+    let output = run_fingerprint_with_witness(
+        &["peek", path.to_str().unwrap(), "--view", "brief"],
+        &witness,
+    );
+    assert_eq!(output.status.code(), Some(0));
+    let record: Value = serde_json::from_str(
+        fs::read_to_string(&witness)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        record["inputs"][0]["hash"],
+        format!(
+            "blake3:{}",
+            blake3::hash(&fs::read(&path).unwrap()).to_hex()
+        )
+    );
+    let printed = parse_stdout(&output)["result"].clone();
+    assert_eq!(
+        record["output_hash"],
+        format!(
+            "blake3:{}",
+            blake3::hash(&serde_json::to_vec(&printed).unwrap()).to_hex()
+        )
+    );
+
+    let empty = dir.path().join("empty.html");
+    fs::write(&empty, "").unwrap();
+    assert_eq!(peek_path(&empty, &[]).status.code(), Some(2));
+}
