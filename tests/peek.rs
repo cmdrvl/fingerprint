@@ -358,7 +358,7 @@ fn invalid_utf8_inside_the_inspected_rows_still_refuses() {
 fn non_csv_containers_are_refused_as_format_not_applicable() {
     let dir = tempfile::tempdir().expect("tempdir");
     // (.xlsx/.xls are supported workbooks since bd-jxd: a fake one is "could not open", below.)
-    for name in ["data.parquet", "doc.pdf", "archive.zip"] {
+    for name in ["doc.pdf", "archive.zip"] {
         let path = dir.path().join(name);
         fs::write(&path, b"PK\x03\x04 not really").unwrap();
         let output = run_fingerprint(&["peek", path.to_str().unwrap(), "--no-witness"]);
@@ -563,4 +563,360 @@ fn workbook_witness_hashes_the_whole_file_and_records_the_sheet() {
     assert_eq!(record["params"]["sheet"], "Notes");
     let text = fs::read_to_string(&witness).unwrap();
     assert!(!text.contains("Harbor Plaza"));
+}
+
+// ---- bd-hra: parquet footer peek -----------------------------------------------------------------
+
+fn parquet_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/parquet")
+        .join(name)
+}
+
+#[test]
+fn parquet_peek_reports_the_footer_structure() {
+    // delivery.parquet is written by pyarrow (tests/fixtures/parquet/make_parquet_fixtures.py):
+    // 30 rows in 3 row groups of 10, 8 leaf columns. 20 of the 30 `tags` lists are empty, which
+    // is 20 nulls at the list's element leaf.
+    let output = peek_path(&parquet_fixture("delivery.parquet"), &[]);
+    assert_eq!(output.status.code(), Some(0));
+    let result = parse_stdout(&output)["result"].clone();
+    assert_eq!(result["format"], "parquet");
+    assert_eq!(result["rows_total"], 30);
+    assert_eq!(
+        result["row_groups"],
+        serde_json::json!({"count": 3, "rows_min": 10, "rows_max": 10})
+    );
+    assert_eq!(result["columns_total"], 8);
+    let summary = &result["summary"];
+    assert_eq!(
+        summary["physical_types"],
+        serde_json::json!({"boolean": 1, "byte_array": 2, "double": 1, "fixed_len_byte_array": 1, "int32": 1, "int64": 2})
+    );
+    assert_eq!(
+        summary["logical_types"],
+        serde_json::json!({"date": 1, "decimal": 1, "string": 2, "timestamp": 1})
+    );
+    assert_eq!(summary["nested_columns"], 1);
+    assert_eq!(summary["columns_with_unknown_null_count"], 0);
+    let columns = result["columns"].as_array().unwrap();
+    assert_eq!(columns.len(), 8);
+    assert!(
+        columns
+            .iter()
+            .all(|c| c["compression"] == serde_json::json!(["uncompressed"]))
+    );
+    assert!(columns.iter().take(7).all(|c| c["null_count"] == 0));
+    let tags = &columns[7];
+    assert_eq!(tags["null_count"], 20);
+    assert_eq!(tags["max_repetition_level"], 1);
+    assert_eq!(result["key_value_metadata_count"], 4);
+    assert!(result.get("key_value_metadata_keys").is_none());
+    // Columns are identified by a short hash of the name; no name by default.
+    assert_eq!(
+        columns[0]["id"],
+        format!("blake3:{}", &blake3::hash(b"loan_id").to_hex()[..16])
+    );
+    assert!(columns[0].get("name").is_none());
+}
+
+#[test]
+fn parquet_peek_reads_only_the_footer() {
+    // Every data page is zeroed; the footer is intact. Peek still reports everything.
+    let output = peek_path(&parquet_fixture("body_zeroed.parquet"), &[]);
+    assert_eq!(output.status.code(), Some(0));
+    let result = parse_stdout(&output)["result"].clone();
+    assert_eq!(result["rows_total"], 3000);
+    assert_eq!(result["row_groups"]["count"], 3);
+    assert_eq!(result["columns_total"], 8);
+}
+
+#[test]
+fn parquet_peek_canary_never_prints_cells_or_metadata_values() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let witness = dir.path().join("witness.jsonl");
+    let path = parquet_fixture("canary.parquet");
+    let canaries_always_hidden = [
+        "CANARY-CELL-7f3a",
+        "CANARY-CELL-7f3b",
+        "CANARY-META-VALUE-9c1d",
+    ];
+
+    // Default: not even the column NAME or the metadata KEY (witness included).
+    let output = run_fingerprint_with_witness(&["peek", path.to_str().unwrap()], &witness);
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let ledger = fs::read_to_string(&witness).unwrap();
+    for text in [&stdout, &ledger] {
+        for canary in canaries_always_hidden
+            .iter()
+            .chain(["canary_column_name", "canary_key"].iter())
+        {
+            assert!(!text.contains(canary), "{canary} leaked by default: {text}");
+        }
+    }
+    assert!(parse_stdout_from_str(&stdout)["witness_id"].is_string());
+
+    // --explicit adds the names and metadata keys, and still never a cell or a metadata value.
+    let output = peek_path(&path, &["--explicit"]);
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("canary_column_name") && stdout.contains("canary_key"),
+        "{stdout}"
+    );
+    for canary in canaries_always_hidden {
+        assert!(
+            !stdout.contains(canary),
+            "{canary} leaked with --explicit: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn parquet_peek_witness_hashes_the_whole_file_and_a_bad_footer_refuses() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let witness = dir.path().join("witness.jsonl");
+    let path = parquet_fixture("delivery.parquet");
+    let output = run_fingerprint_with_witness(&["peek", path.to_str().unwrap()], &witness);
+    assert_eq!(output.status.code(), Some(0));
+    let record: Value = serde_json::from_str(
+        fs::read_to_string(&witness)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        record["inputs"][0]["hash"],
+        format!(
+            "blake3:{}",
+            blake3::hash(&fs::read(&path).unwrap()).to_hex()
+        )
+    );
+
+    let fake = dir.path().join("fake.parquet");
+    fs::write(&fake, b"loan_id,balance\nL1,1\n").unwrap();
+    let output = peek_path(&fake, &[]);
+    assert_eq!(output.status.code(), Some(2));
+    let envelope = parse_stdout(&output);
+    assert_eq!(
+        envelope["refusal"]["message"],
+        "Could not read parquet footer"
+    );
+}
+
+// ---- bd-hra: json / jsonl schema-tree peek -------------------------------------------------------
+
+fn json_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/json")
+        .join(name)
+}
+
+fn field<'a>(result: &'a Value, path_hash_of: &str) -> &'a Value {
+    let id = format!(
+        "blake3:{}",
+        &blake3::hash(path_hash_of.as_bytes()).to_hex()[..16]
+    );
+    result["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["id"] == id.as_str())
+        .unwrap_or_else(|| panic!("no field {path_hash_of}"))
+}
+
+#[test]
+fn jsonl_peek_reports_presence_rates_and_types_per_field_path() {
+    // loans.jsonl: 5 records {loan_id, balance, status, tags[]}; balance is 3 integers and 2
+    // non-integer numbers; 3 of 5 records have a non-empty tags list (4 string elements).
+    let output = peek_path(&json_fixture("loans.jsonl"), &[]);
+    assert_eq!(output.status.code(), Some(0));
+    let result = parse_stdout(&output)["result"].clone();
+    assert_eq!(result["format"], "jsonl");
+    assert_eq!(result["rows_observed"], 5);
+    assert_eq!(result["fields_total"], 6);
+    assert_eq!(result["fields_truncated"], false);
+    assert_eq!(
+        field(&result, "$")["types"],
+        serde_json::json!({"object": 5})
+    );
+    assert_eq!(
+        field(&result, "$.balance")["types"],
+        serde_json::json!({"integer": 3, "number": 2})
+    );
+    assert_eq!(
+        field(&result, "$.loan_id")["types"],
+        serde_json::json!({"string": 5})
+    );
+    assert_eq!(
+        field(&result, "$.tags")["types"],
+        serde_json::json!({"array": 5})
+    );
+    let elements = field(&result, "$.tags[]");
+    assert_eq!(elements["types"], serde_json::json!({"string": 4}));
+    assert_eq!(elements["present"], 3);
+    assert_eq!(elements["presence_rate"], 0.6);
+    // Names are not printed by default.
+    assert!(result["fields"][1].get("path").is_none());
+}
+
+#[test]
+fn json_peek_uses_array_elements_or_the_object_as_records() {
+    let result =
+        parse_stdout(&peek_path(&json_fixture("delivery.json"), &["--explicit"]))["result"].clone();
+    assert_eq!(result["format"], "json");
+    assert_eq!(result["rows_observed"], 1);
+    let paths: Vec<&str> = result["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    // Document order, with object keys sorted (serde_json's map order): deterministic.
+    assert_eq!(
+        paths,
+        [
+            "$",
+            "$.filings",
+            "$.filings[]",
+            "$.filings[].accession",
+            "$.filings[].form",
+            "$.filings[].pages",
+            "$.meta",
+            "$.meta.complete",
+            "$.meta.count",
+            "$.meta.generated",
+            "$.schema"
+        ]
+    );
+    // `filings` holds 2 objects: element paths count every element, presence counts records.
+    let id = |p: &str| format!("blake3:{}", &blake3::hash(p.as_bytes()).to_hex()[..16]);
+    let elements = result["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["id"] == id("$.filings[]").as_str())
+        .unwrap();
+    assert_eq!(elements["types"], serde_json::json!({"object": 2}));
+    assert_eq!(elements["present"], 1);
+
+    // A top-level array: each element is a record; --rows limits them.
+    let result =
+        parse_stdout(&peek_path(&fixture("canary.json"), &["--rows", "1"]))["result"].clone();
+    assert_eq!(result["rows_observed"], 1);
+    let result = parse_stdout(&peek_path(&fixture("canary.json"), &[]))["result"].clone();
+    assert_eq!(result["rows_observed"], 2);
+}
+
+#[test]
+fn jsonl_invalid_lines_are_counted_by_position_only() {
+    let result = parse_stdout(&peek_path(&json_fixture("loans_bad.jsonl"), &[]))["result"].clone();
+    assert_eq!(result["rows_observed"], 3);
+    assert_eq!(result["invalid_lines"], 1);
+    assert_eq!(result["first_invalid_line"], 3);
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let broken = dir.path().join("broken.json");
+    fs::write(&broken, "{\"secret_key\": \"SECRET-TEXT-VALUE\" oops}").unwrap();
+    let output = peek_path(&broken, &[]);
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Input is not valid JSON") && stdout.contains("\"line\""));
+    assert!(
+        !stdout.contains("SECRET-TEXT-VALUE") && !stdout.contains("secret_key"),
+        "{stdout}"
+    );
+
+    let none = dir.path().join("none.jsonl");
+    fs::write(&none, "not json\nalso not json\n").unwrap();
+    assert_eq!(peek_path(&none, &[]).status.code(), Some(2));
+}
+
+#[test]
+fn json_and_jsonl_canary_never_print_keys_by_default_or_values_ever() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for name in ["canary.jsonl", "canary.json"] {
+        let path = fixture(name);
+        let witness = dir.path().join(format!("{name}.witness"));
+        let output = run_fingerprint_with_witness(&["peek", path.to_str().unwrap()], &witness);
+        assert_eq!(output.status.code(), Some(0), "{name}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let ledger = fs::read_to_string(&witness).unwrap();
+        for text in [&stdout, &ledger] {
+            for planted in [
+                "CANARY-VALUE",
+                "CANARY-INNER",
+                "CANARY-SSN",
+                "078-05-1120",
+                "canary_key_alpha",
+                "canary_inner_key",
+                "ssn",
+                "nested",
+                "amounts",
+            ] {
+                assert!(
+                    !text.contains(planted),
+                    "{name}: {planted} leaked by default: {text}"
+                );
+            }
+        }
+        // --explicit prints key names, still never a value.
+        let output = peek_path(&path, &["--explicit"]);
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            stdout.contains("canary_key_alpha") && stdout.contains("$.nested.canary_inner_key"),
+            "{name}: {stdout}"
+        );
+        for planted in [
+            "CANARY-VALUE",
+            "CANARY-INNER",
+            "CANARY-SSN",
+            "078-05-1120",
+            "11.5",
+        ] {
+            assert!(
+                !stdout.contains(planted),
+                "{name}: {planted} leaked with --explicit: {stdout}"
+            );
+        }
+    }
+}
+
+#[test]
+fn jsonl_peek_streams_and_hashes_the_whole_file_in_the_witness() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("big.jsonl");
+    {
+        let mut file = fs::File::create(&path).expect("create");
+        for i in 0..100_000 {
+            writeln!(file, "{{\"id\":{i},\"name\":\"n{i}\"}}").unwrap();
+        }
+        // Garbage after the inspected rows must not matter.
+        file.write_all(&vec![0xFFu8; 1024 * 1024]).unwrap();
+    }
+    let witness = dir.path().join("witness.jsonl");
+    let output =
+        run_fingerprint_with_witness(&["peek", path.to_str().unwrap(), "--rows", "10"], &witness);
+    assert_eq!(output.status.code(), Some(0));
+    let result = parse_stdout(&output)["result"].clone();
+    assert_eq!(result["rows_observed"], 10);
+    let record: Value = serde_json::from_str(
+        fs::read_to_string(&witness)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        record["inputs"][0]["hash"],
+        format!(
+            "blake3:{}",
+            blake3::hash(&fs::read(&path).unwrap()).to_hex()
+        )
+    );
 }

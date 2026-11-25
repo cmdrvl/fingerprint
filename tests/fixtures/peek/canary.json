@@ -1,0 +1,4 @@
+[
+  {"canary_key_alpha": "CANARY-VALUE-1d4e", "nested": {"canary_inner_key": "CANARY-INNER-8b2f", "amounts": [11.5, 22]}, "ssn": "CANARY-SSN-078-05-1120"},
+  {"canary_key_alpha": "CANARY-VALUE-9a7c", "nested": {"canary_inner_key": null, "amounts": []}, "ssn": "CANARY-SSN-219-09-9999"}
+]

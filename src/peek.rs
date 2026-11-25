@@ -28,9 +28,8 @@ const GUESS_LINES: usize = 25;
 
 /// Binary containers peek has no reader for: refused up front as "format not applicable"
 /// instead of failing later with a UTF-8 error.
-const NOT_APPLICABLE_EXTENSIONS: &[&str] = &[
-    "parquet", "pdf", "zip", "gz", "docx", "pptx", "png", "jpg", "jpeg",
-];
+const NOT_APPLICABLE_EXTENSIONS: &[&str] =
+    &["pdf", "zip", "gz", "docx", "pptx", "png", "jpg", "jpeg"];
 
 /// Workbook containers peek reads through calamine (bd-jxd).
 const WORKBOOK_EXTENSIONS: &[&str] = &["xlsx", "xlsm", "xls"];
@@ -157,6 +156,16 @@ pub fn run(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
         .is_some_and(|extension| WORKBOOK_EXTENSIONS.contains(&extension))
     {
         return run_workbook(args, append_witness_record, max_rows);
+    }
+    if lower_extension.as_deref() == Some("parquet") {
+        return run_parquet(args, append_witness_record);
+    }
+    if let Some(kind) = match lower_extension.as_deref() {
+        Some("jsonl" | "ndjson") => Some(JsonPeekKind::Jsonl),
+        Some("json") => Some(JsonPeekKind::Json),
+        _ => None,
+    } {
+        return run_json(args, append_witness_record, max_rows, kind);
     }
     if let Some(extension) = args
         .file
@@ -459,6 +468,407 @@ fn run_workbook(
             Ok((hash, bytes)) => append_peek_witness(args, Some(hash), bytes, &result),
             Err(error) => {
                 eprintln!("Warning: Failed to hash workbook for the witness record: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    emit_json(&json!({
+        "version": ENVELOPE_VERSION,
+        "outcome": "SUCCESS",
+        "exit_code": 0,
+        "subcommand": "peek",
+        "result": result,
+        "witness_id": witness_id
+    }))?;
+    Ok(0)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JsonPeekKind {
+    Json,
+    Jsonl,
+}
+
+/// Distinct field paths tracked and nesting levels followed; beyond these the report says so.
+const MAX_JSON_FIELDS: usize = 500;
+const MAX_JSON_DEPTH: usize = 8;
+/// Largest single `.json` document parsed in memory (same limit as the `json` DSL format).
+const MAX_JSON_PEEK_BYTES: u64 = 256 * 1024 * 1024;
+
+#[derive(Default)]
+struct JsonFieldStats {
+    path: String,
+    /// Records in which the path occurs at least once.
+    present: usize,
+    /// Occurrences by JSON type (an array element path counts every element).
+    types: BTreeMap<&'static str, usize>,
+}
+
+#[derive(Default)]
+struct JsonShape {
+    /// In first-seen order (object keys arrive sorted: serde_json's map order).
+    fields: Vec<JsonFieldStats>,
+    index: BTreeMap<String, usize>,
+    truncated: bool,
+}
+
+fn json_type(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(number) if number.is_i64() || number.is_u64() => "integer",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+impl JsonShape {
+    fn visit(&mut self, path: &str, value: &Value, depth: usize, seen: &mut Vec<usize>) {
+        let slot = match self.index.get(path) {
+            Some(slot) => *slot,
+            None if self.fields.len() >= MAX_JSON_FIELDS => {
+                self.truncated = true;
+                return;
+            }
+            None => {
+                self.fields.push(JsonFieldStats {
+                    path: path.to_owned(),
+                    ..JsonFieldStats::default()
+                });
+                self.index.insert(path.to_owned(), self.fields.len() - 1);
+                self.fields.len() - 1
+            }
+        };
+        *self.fields[slot].types.entry(json_type(value)).or_insert(0) += 1;
+        if !seen.contains(&slot) {
+            seen.push(slot);
+        }
+        if depth >= MAX_JSON_DEPTH {
+            if matches!(value, Value::Object(_) | Value::Array(_)) {
+                self.truncated = true;
+            }
+            return;
+        }
+        match value {
+            Value::Object(map) => {
+                for (key, child) in map {
+                    self.visit(&format!("{path}.{key}"), child, depth + 1, seen);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    self.visit(&format!("{path}[]"), item, depth + 1, seen);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn add_record(&mut self, record: &Value) {
+        let mut seen = Vec::new();
+        self.visit("$", record, 0, &mut seen);
+        for slot in seen {
+            self.fields[slot].present += 1;
+        }
+    }
+}
+
+/// `fingerprint peek x.jsonl|x.json`: the schema tree of the first `--rows` records (a `.json`
+/// array contributes its first elements, a `.json` object is one record): per field path the
+/// presence rate and the counts by JSON type. Never a value. A field is identified by a short
+/// blake3 of its path (`id`); `--explicit` adds the path itself (key names). `.jsonl` streams
+/// the first lines only; a `.json` document is parsed whole (refused over 256 MiB).
+fn run_json(
+    args: &PeekArgs,
+    append_witness_record: bool,
+    max_rows: usize,
+    kind: JsonPeekKind,
+) -> Result<u8, String> {
+    let path = args.file.display().to_string();
+    let refuse = |message: &str, detail: Value| -> Result<u8, String> {
+        emit_refusal("E_BAD_INPUT", message, detail)?;
+        Ok(2)
+    };
+    let mut shape = JsonShape::default();
+    let mut records = 0usize;
+    let (mut invalid_lines, mut first_invalid_line) = (0usize, None::<usize>);
+    let (hash, total_bytes, truncated_lines);
+
+    match kind {
+        JsonPeekKind::Jsonl => {
+            let input = match read_input(&args.file, max_rows, append_witness_record) {
+                Ok(input) => input,
+                Err(error) => {
+                    return refuse(
+                        "Could not read input file",
+                        json!({ "path": path, "error": error.kind().to_string() }),
+                    );
+                }
+            };
+            if input.total_bytes == 0 {
+                return refuse("Input file is empty", json!({ "path": path }));
+            }
+            for (index, raw) in input.row_lines.iter().enumerate() {
+                if raw.iter().all(u8::is_ascii_whitespace) {
+                    continue;
+                }
+                match serde_json::from_slice::<Value>(raw) {
+                    Ok(value) => {
+                        records += 1;
+                        shape.add_record(&value);
+                    }
+                    Err(_) => {
+                        invalid_lines += 1;
+                        first_invalid_line.get_or_insert(index + 1);
+                    }
+                }
+            }
+            hash = input.blake3;
+            total_bytes = input.total_bytes;
+            truncated_lines = input.truncated_lines;
+        }
+        JsonPeekKind::Json => {
+            let size = match fs::metadata(&args.file) {
+                Ok(metadata) => metadata.len(),
+                Err(error) => {
+                    return refuse(
+                        "Could not read input file",
+                        json!({ "path": path, "error": error.kind().to_string() }),
+                    );
+                }
+            };
+            if size == 0 {
+                return refuse("Input file is empty", json!({ "path": path }));
+            }
+            if size > MAX_JSON_PEEK_BYTES {
+                return refuse(
+                    "json file is over the in-memory limit; use jsonl for large inputs",
+                    json!({ "path": path, "bytes": size, "limit": MAX_JSON_PEEK_BYTES }),
+                );
+            }
+            let bytes = match fs::read(&args.file) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    return refuse(
+                        "Could not read input file",
+                        json!({ "path": path, "error": error.kind().to_string() }),
+                    );
+                }
+            };
+            let document: Value = match serde_json::from_slice(&bytes) {
+                Ok(document) => document,
+                Err(error) => {
+                    // Position only: serde_json's message can quote nothing but the syntax error.
+                    return refuse(
+                        "Input is not valid JSON",
+                        json!({ "path": path, "line": error.line(), "column": error.column() }),
+                    );
+                }
+            };
+            match &document {
+                Value::Array(items) => {
+                    for item in items.iter().take(max_rows) {
+                        records += 1;
+                        shape.add_record(item);
+                    }
+                }
+                other => {
+                    records = 1;
+                    shape.add_record(other);
+                }
+            }
+            hash =
+                append_witness_record.then(|| format!("blake3:{}", blake3::hash(&bytes).to_hex()));
+            total_bytes = size;
+            truncated_lines = 0;
+        }
+    }
+
+    if records == 0 {
+        return refuse(
+            "No valid records were available to inspect",
+            json!({ "path": path, "invalid_lines": invalid_lines }),
+        );
+    }
+
+    let fields: Vec<Value> = shape
+        .fields
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            let mut entry = json!({
+                "index": index,
+                "id": format!("blake3:{}", &blake3::hash(field.path.as_bytes()).to_hex()[..16]),
+                "depth": field.path.matches(['.', '[']).count().saturating_sub(field.path.matches("[]").count()),
+                "present": field.present,
+                "presence_rate": round_confidence(field.present as f64 / records as f64),
+                "types": field.types,
+            });
+            if args.explicit {
+                entry["path"] = json!(field.path);
+            }
+            entry
+        })
+        .collect();
+    let mut result = json!({
+        "file": path,
+        "format": if kind == JsonPeekKind::Jsonl { "jsonl" } else { "json" },
+        "rows_requested": max_rows,
+        "rows_observed": records,
+        "fields_total": fields.len(),
+        "fields_truncated": shape.truncated,
+        "fields": fields,
+    });
+    if invalid_lines > 0 {
+        result["invalid_lines"] = json!(invalid_lines);
+        result["first_invalid_line"] = json!(first_invalid_line);
+    }
+    if truncated_lines > 0 {
+        result["truncated_lines"] = json!(truncated_lines);
+    }
+
+    let witness_id = if append_witness_record {
+        append_peek_witness(args, hash, total_bytes, &result)
+    } else {
+        None
+    };
+    emit_json(&json!({
+        "version": ENVELOPE_VERSION,
+        "outcome": "SUCCESS",
+        "exit_code": 0,
+        "subcommand": "peek",
+        "result": result,
+        "witness_id": witness_id
+    }))?;
+    Ok(0)
+}
+
+/// `fingerprint peek x.parquet`: the footer's structure only (no column chunk is read): row and
+/// row-group counts, per-column physical/logical type, repetition, compression and null count.
+/// Columns are identified by a short blake3 of their name (`id`) so two files' schemas can be
+/// compared without printing names; `--explicit` adds the names and the file key/value metadata
+/// keys. Metadata VALUES and statistics min/max are never emitted.
+fn run_parquet(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
+    use parquet::file::metadata::ParquetMetaDataReader;
+
+    let path = args.file.display().to_string();
+    let refuse = |message: &str, detail: Value| -> Result<u8, String> {
+        emit_refusal("E_BAD_INPUT", message, detail)?;
+        Ok(2)
+    };
+    let file = match fs::File::open(&args.file) {
+        Ok(file) => file,
+        Err(error) => {
+            return refuse(
+                "Could not read input file",
+                json!({ "path": path, "error": error.kind().to_string() }),
+            );
+        }
+    };
+    let metadata = match ParquetMetaDataReader::new().parse_and_finish(&file) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            return refuse(
+                "Could not read parquet footer",
+                json!({ "path": path, "error": error.to_string() }),
+            );
+        }
+    };
+
+    let file_meta = metadata.file_metadata();
+    let schema = file_meta.schema_descr();
+    let row_groups = metadata.row_groups();
+    let mut physical_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut logical_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut columns = Vec::with_capacity(schema.num_columns());
+    for (index, column) in schema.columns().iter().enumerate() {
+        let physical = format!("{:?}", column.physical_type()).to_ascii_lowercase();
+        let logical = column.logical_type_ref().map(|logical| {
+            let debug = format!("{logical:?}");
+            let end = debug
+                .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .unwrap_or(debug.len());
+            debug[..end].to_ascii_lowercase()
+        });
+        *physical_counts.entry(physical.clone()).or_insert(0) += 1;
+        if let Some(logical) = &logical {
+            *logical_counts.entry(logical.clone()).or_insert(0) += 1;
+        }
+        let mut compressions = std::collections::BTreeSet::new();
+        let mut nulls: Option<u64> = Some(0);
+        for group in row_groups {
+            let chunk = group.column(index);
+            compressions.insert(format!("{:?}", chunk.compression_codec()).to_ascii_lowercase());
+            nulls = match (nulls, chunk.statistics().and_then(|s| s.null_count_opt())) {
+                (Some(total), Some(count)) => Some(total + count),
+                _ => None,
+            };
+        }
+        let name = column.path().string();
+        let mut entry = json!({
+            "index": index,
+            "id": format!("blake3:{}", &blake3::hash(name.as_bytes()).to_hex()[..16]),
+            "physical_type": physical,
+            "logical_type": logical,
+            "repetition": format!("{:?}", column.self_type().get_basic_info().repetition()).to_ascii_lowercase(),
+            "max_definition_level": column.max_def_level(),
+            "max_repetition_level": column.max_rep_level(),
+            "compression": compressions,
+            "null_count": nulls,
+        });
+        if args.explicit {
+            entry["name"] = json!(name);
+        }
+        columns.push(entry);
+    }
+
+    let group_rows: Vec<i64> = row_groups.iter().map(|group| group.num_rows()).collect();
+    let nested = schema
+        .columns()
+        .iter()
+        .filter(|column| column.max_rep_level() > 0 || column.path().parts().len() > 1)
+        .count();
+    let mut result = json!({
+        "file": path,
+        "format": "parquet",
+        "rows_total": file_meta.num_rows(),
+        "row_groups": {
+            "count": row_groups.len(),
+            "rows_min": group_rows.iter().min(),
+            "rows_max": group_rows.iter().max(),
+        },
+        "columns_total": columns.len(),
+        "summary": {
+            "physical_types": physical_counts,
+            "logical_types": logical_counts,
+            "nested_columns": nested,
+            "columns_with_unknown_null_count": columns.iter().filter(|c| c["null_count"].is_null()).count(),
+        },
+        "columns": columns,
+        "key_value_metadata_count": file_meta.key_value_metadata().map_or(0, Vec::len),
+        "created_by": file_meta.created_by(),
+    });
+    if args.explicit {
+        result["key_value_metadata_keys"] = json!(
+            file_meta
+                .key_value_metadata()
+                .map(|pairs| pairs
+                    .iter()
+                    .map(|pair| pair.key.clone())
+                    .collect::<Vec<_>>())
+                .unwrap_or_default()
+        );
+    }
+
+    let witness_id = if append_witness_record {
+        match hash_file(&args.file) {
+            Ok((hash, bytes)) => append_peek_witness(args, Some(hash), bytes, &result),
+            Err(error) => {
+                eprintln!("Warning: Failed to hash parquet file for the witness record: {error}");
                 None
             }
         }

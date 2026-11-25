@@ -255,6 +255,11 @@ pub struct PeekArgs {
     /// 0-based index (default: the first sheet). Ignored for CSV-like files.
     #[arg(long, value_name = "NAME|INDEX")]
     pub sheet: Option<String>,
+
+    /// Parquet only: also print column names and file key/value metadata keys. By default a
+    /// column is identified by a short hash of its name and metadata keys are only counted.
+    #[arg(long)]
+    pub explicit: bool,
 }
 
 #[derive(Debug, Args)]

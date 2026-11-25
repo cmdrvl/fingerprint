@@ -56,3 +56,14 @@ footer_start = len(data) - 8 - footer_len
 assert data[:4] == b"PAR1" and data[-4:] == b"PAR1"
 data[4:footer_start] = bytes(footer_start - 4)
 open(big, "wb").write(bytes(data))
+
+# canary.parquet: unique marker strings in a cell, a column NAME, a metadata key and a metadata
+# value. `fingerprint peek` must never print the cell or the metadata value, and prints the name
+# and key only with --explicit (tests/peek.rs).
+canary = pa.table(
+    {
+        "canary_column_name": ["CANARY-CELL-7f3a", "CANARY-CELL-7f3b"],
+        "amount": [1.5, 2.5],
+    }
+).replace_schema_metadata({"canary_key": "CANARY-META-VALUE-9c1d"})
+pq.write_table(canary, f"{out}/canary.parquet", compression="none")
