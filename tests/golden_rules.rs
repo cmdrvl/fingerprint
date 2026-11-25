@@ -9,5 +9,7 @@ golden_rules_suite! {
         "src/pipeline/enricher.rs",
         "src/dsl/assertions.rs",
         "src/output/jsonl.rs",
+        // `materialize` emits its own typed refusal codes from here.
+        "src/materialize/mod.rs",
     ],
 }

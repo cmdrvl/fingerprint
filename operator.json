@@ -39,6 +39,7 @@
     { "name": "robot-docs", "description": "Print paste-ready operating notes for agents", "read_only": true },
     { "name": "doctor", "description": "Read-only health, capabilities, and triage diagnostics", "aliases": ["doctor health", "doctor --robot-triage"], "read_only": true },
     { "name": "peek", "description": "Inspect delimited row shape without emitting cell content" },
+    { "name": "materialize", "description": "Project a matched extract section (XLSX header-anchored range) into a deterministic CSV/JSONL/Parquet table plus a provenance sidecar; fails closed" },
     { "name": "match", "description": "Match files or directories directly (walk, blake3 hash, fingerprint) with no vacuum | hashbytes pipe; --view full|brief|delta" },
     { "name": "compile", "description": "Compile a fingerprint DSL definition" },
     { "name": "infer", "description": "Infer a fingerprint definition from example documents" },
@@ -62,7 +63,14 @@
     { "code": "E_INVALID_SELECTOR", "message": "Invalid CSS selector", "action": "escalate" },
     { "code": "E_INVALID_YAML", "message": "Fingerprint YAML is invalid", "action": "escalate" },
     { "code": "E_UNKNOWN_ASSERTION", "message": "Fingerprint assertion is unknown", "action": "escalate" },
-    { "code": "E_MISSING_FIELD", "message": "Fingerprint field is missing", "action": "escalate" }
+    { "code": "E_MISSING_FIELD", "message": "Fingerprint field is missing", "action": "escalate" },
+    { "code": "E_IO", "message": "materialize: cannot read the input or write the output", "action": "escalate" },
+    { "code": "E_NOT_MATCHED", "message": "materialize: the document does not match the fingerprint", "action": "fix_input" },
+    { "code": "E_AMBIGUOUS_ROUTING", "message": "materialize: more than one child fingerprint matches", "action": "escalate" },
+    { "code": "E_UNKNOWN_EXTRACT", "message": "materialize: the fingerprint has no extract with that name", "action": "fix_input" },
+    { "code": "E_EXTRACT_UNSUPPORTED", "message": "materialize: no tabular projection exists for this extract type and document format", "action": "escalate" },
+    { "code": "E_PROJECTION", "message": "materialize: the range cannot be projected (empty or duplicate header, error cell, bad range)", "action": "fix_input" },
+    { "code": "E_OUT_EXISTS", "message": "materialize: the output or its provenance sidecar already exists; it is never overwritten", "action": "fix_input" }
   ],
   "env_vars": [
     { "name": "FINGERPRINT_DEFINITIONS", "description": "Installed definition discovery override" },

@@ -67,6 +67,65 @@ impl Fingerprint for DslFingerprint {
     }
 }
 
+/// An installed `.fp.yaml` definition with where it came from and a hash of its exact bytes.
+#[derive(Debug, Clone)]
+pub struct InstalledDefinition {
+    pub definition: FingerprintDefinition,
+    pub path: PathBuf,
+    /// `blake3:<hex>` of the definition file bytes (pins the exact YAML a result came from).
+    pub source_hash: String,
+}
+
+/// Every valid installed definition, sorted by file name so callers see a stable order. Invalid
+/// definitions are skipped, as in run mode. `fingerprint materialize` uses this to reach a
+/// definition's `extract:` sections, which the run pipeline summarizes but does not expose.
+pub fn installed_definitions() -> Vec<InstalledDefinition> {
+    scan_definitions().0
+}
+
+/// [`installed_definitions`] plus the definition files that were skipped as invalid, each with
+/// the reason (so a caller that cannot find an id can say why a file did not load).
+pub fn scan_definitions() -> (Vec<InstalledDefinition>, Vec<(PathBuf, String)>) {
+    let dir = definitions_dir();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return (Vec::new(), Vec::new());
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            let yaml = path
+                .extension()
+                .is_some_and(|ext| ext == "yaml" || ext == "yml");
+            let fp_stem = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.contains(".fp."));
+            yaml && fp_stem
+        })
+        .collect();
+    paths.sort();
+    let mut valid = Vec::new();
+    let mut invalid = Vec::new();
+    for path in paths {
+        let loaded = (|| {
+            let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+            let definition = crate::dsl::parser::parse(&path)?;
+            crate::compile::validate::validate_definition(&definition)?;
+            Ok::<_, String>(InstalledDefinition {
+                definition,
+                source_hash: format!("blake3:{}", blake3::hash(&bytes).to_hex()),
+                path: path.clone(),
+            })
+        })();
+        match loaded {
+            Ok(definition) => valid.push(definition),
+            Err(error) => invalid.push((path, error)),
+        }
+    }
+    (valid, invalid)
+}
+
 /// Default directory for installed fingerprint definitions.
 fn definitions_dir() -> PathBuf {
     crate::config::definitions_dir_for_read().unwrap_or_else(|error| {

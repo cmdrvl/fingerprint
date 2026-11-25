@@ -307,6 +307,17 @@ pub fn evaluate_named_assertions_with_diagnose(
     doc: &Document,
     diagnose: bool,
 ) -> Vec<AssertionResult> {
+    evaluate_named_assertions_with_bindings(assertions, doc, diagnose).0
+}
+
+/// Like [`evaluate_named_assertions_with_diagnose`], also returning the sheet-name bindings the
+/// assertions established (`sheet_name_regex` with `bind:`), keyed by binding name without the
+/// leading `$`. `fingerprint materialize` uses them to resolve `sheet: $name` in extracts.
+pub fn evaluate_named_assertions_with_bindings(
+    assertions: &[NamedAssertion],
+    doc: &Document,
+    diagnose: bool,
+) -> (Vec<AssertionResult>, HashMap<String, String>) {
     let mut context = EvaluationContext::default();
     let mut results = Vec::with_capacity(assertions.len());
     for assertion in assertions {
@@ -318,7 +329,7 @@ pub fn evaluate_named_assertions_with_diagnose(
             break;
         }
     }
-    results
+    (results, context.sheet_bindings)
 }
 
 /// Evaluate a single assertion against a document.

@@ -9,6 +9,7 @@ pub mod doctor;
 pub mod document;
 pub mod dsl;
 pub mod infer;
+pub mod materialize;
 pub mod output;
 pub mod peek;
 pub mod pipeline;
@@ -131,6 +132,7 @@ pub fn run() -> u8 {
         }
         Some(Command::Witness { action }) => handle_witness_command(action),
         Some(Command::Match(args)) => handle_match_command(args, cli.no_witness),
+        Some(Command::Materialize(args)) => materialize::run(&args),
         Some(Command::Peek(args)) => match peek::run(&args, !cli.no_witness) {
             Ok(code) => code,
             Err(error) => {
@@ -241,6 +243,7 @@ fn is_subcommand_token(arg: &std::ffi::OsStr) -> bool {
                 | "doctor"
                 | "peek"
                 | "match"
+                | "materialize"
         )
     )
 }

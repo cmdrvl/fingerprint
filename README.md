@@ -463,6 +463,18 @@ Peek mode is read-only. It inspects CSV-like row shape and emits metadata only, 
 | `--suggest` | flag | | Include `profile_pre_parse` suggestions |
 | `--no-witness` | flag | | Suppress witness ledger recording |
 
+### Materialize mode (document → clean table)
+
+```bash
+fingerprint materialize watchlist.xlsx --fp cmbs-watl.v2 --extract watl_table --out watl.parquet [--format csv|jsonl|parquet]
+```
+
+Real data rooms are messy workbooks (header on row 11, a bound sheet name like `{{watl_sheet}}`, footnotes). `materialize` projects a matched `extract:` section into a clean rectangular table that `shape`, `rvl`, `verify` and `profile slice` read directly, plus `<out>.provenance.json` pinning the source `bytes_hash`, the fingerprint id and the `source_hash` of its exact `.fp.yaml`, the projection `content_hash` (blake3 of the canonical CSV rendering, the same for every output format), the exact locator (bound sheet name, A1 range, header row) and what was skipped.
+
+Supported today: a `range` extract on an XLSX/XLS workbook. The first row of the range is the header row (so the YAML names the header-anchored range); fully empty rows inside the range are skipped and counted; `sheet: $name` resolves to the sheet a `sheet_name_regex` assertion bound. Cells render canonically (dates `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS`, integral numbers without `.0`, shortest round-trip floats); every value is text. An empty cell is `""` in CSV and null in JSONL and Parquet. It does **not** normalize headers, strip units or scope keys: pipe the output into `profile slice`.
+
+Outputs are byte-deterministic (CSV `\n` line ends; Parquet uncompressed with no statistics or timestamps). It fails closed with exit `2`, a typed refusal envelope and nothing written: `E_NOT_MATCHED`, `E_AMBIGUOUS_ROUTING` (more than one child fingerprint matches), `E_UNKNOWN_FP`, `E_UNKNOWN_EXTRACT`, `E_EXTRACT_UNSUPPORTED`, `E_PROJECTION` (empty or duplicate header, Excel error cell, bad range), `E_OUT_EXISTS` (it never overwrites), `E_IO`. Refusals name coordinates and counts, never cell values. Not yet: HTML `region`/`table` extracts and XML records (HTML projection is the next slice of bd-uai; XML waits on real fixtures, see bd-yq3).
+
 ### Match mode (no pipes)
 
 ```bash

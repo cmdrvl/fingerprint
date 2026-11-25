@@ -67,6 +67,8 @@ pub enum Command {
     Peek(PeekArgs),
     /// Match files or directories directly, with no vacuum | hashbytes pipe.
     Match(MatchArgs),
+    /// Project a matched extract section into a clean CSV/JSONL/Parquet table plus provenance.
+    Materialize(MaterializeArgs),
     /// Compile DSL fingerprint to Rust crate
     Compile {
         /// DSL fingerprint file (.fp.yaml)
@@ -147,6 +149,42 @@ pub enum Command {
         #[arg(long = "out", visible_alias = "output")]
         out: Option<PathBuf>,
     },
+}
+
+/// Output table format for `fingerprint materialize`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum MaterializeFormat {
+    Csv,
+    Jsonl,
+    Parquet,
+}
+
+#[derive(Debug, Args)]
+pub struct MaterializeArgs {
+    /// Document to project.
+    #[arg(value_name = "FILE")]
+    pub file: PathBuf,
+
+    /// Fingerprint ID (an installed .fp.yaml definition) the document must match.
+    #[arg(long = "fp", alias = "fingerprint", value_name = "ID")]
+    pub fp: String,
+
+    /// Name of the `extract:` section to project.
+    #[arg(long, value_name = "NAME")]
+    pub extract: String,
+
+    /// Output table path. The provenance sidecar is written next to it as <PATH>.provenance.json.
+    /// Existing files are never overwritten.
+    #[arg(long = "out", visible_alias = "output", value_name = "PATH")]
+    pub out: PathBuf,
+
+    /// Output format (default: from the --out extension, else csv).
+    #[arg(long, value_enum)]
+    pub format: Option<MaterializeFormat>,
+
+    /// Accept structured-output intent; materialize output is always JSON.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// Output view for `fingerprint match`.

@@ -193,7 +193,8 @@ fn parse_cell_ref(cell: &str) -> Result<CellRef, String> {
     Ok((row - 1, column - 1))
 }
 
-fn parse_range_ref(range: &str) -> Result<CellRange, String> {
+/// `A1:C3` -> zero-based `((row, col), (row, col))`.
+pub(crate) fn parse_range_ref(range: &str) -> Result<CellRange, String> {
     let (left, right) = range
         .split_once(':')
         .ok_or_else(|| format!("invalid range reference '{range}'"))?;
