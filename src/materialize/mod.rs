@@ -331,6 +331,7 @@ fn document_kind(document: &Document) -> &'static str {
         Document::Text(_) => "text",
         Document::Json(_) => "json",
         Document::Parquet(_) => "parquet",
+        Document::Xml(_) => "xml",
         Document::Unknown(_) => "unknown",
     }
 }

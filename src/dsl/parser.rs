@@ -259,6 +259,22 @@ fn assertion_base_name(assertion: &crate::dsl::assertions::Assertion) -> String 
         Assertion::ParquetColumnType { column, .. } => {
             format!("parquet_column_type__{}", literal_excerpt(column, 24, true))
         }
+        Assertion::XmlRoot(root) => format!("xml_root__{}", literal_excerpt(root, 24, true)),
+        Assertion::XmlNamespace(_) => "xml_namespace".to_owned(),
+        Assertion::XmlPathExists(path) => {
+            format!("xml_path_exists__{}", literal_excerpt(path, 24, true))
+        }
+        Assertion::XmlPathCount { path, .. } => {
+            format!("xml_path_count__{}", literal_excerpt(path, 24, true))
+        }
+        Assertion::XmlAttrRegex { path, attr, .. } => format!(
+            "xml_attr_regex__{}__{}",
+            literal_excerpt(path, 16, true),
+            literal_excerpt(attr, 16, true)
+        ),
+        Assertion::XmlTextRegex { path, .. } => {
+            format!("xml_text_regex__{}", literal_excerpt(path, 24, true))
+        }
         Assertion::ParquetRowCount { .. } => "parquet_row_count".to_owned(),
         Assertion::ParquetRowGroups { .. } => "parquet_row_groups".to_owned(),
         Assertion::ParquetKvMetadata { key, .. } => {

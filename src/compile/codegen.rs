@@ -549,6 +549,37 @@ fn codegen_assertion(assertion: &crate::dsl::assertions::Assertion) -> String {
             s(column),
             s(parquet_type)
         ),
+        Assertion::XmlRoot(root) => format!("XmlRoot({})", s(root)),
+        Assertion::XmlNamespace(namespace) => format!("XmlNamespace({})", s(namespace)),
+        Assertion::XmlPathExists(path) => format!("XmlPathExists({})", s(path)),
+        Assertion::XmlPathCount { path, min, max } => format!(
+            "XmlPathCount {{ path: {}, min: {:?}, max: {:?} }}",
+            s(path),
+            min,
+            max
+        ),
+        Assertion::XmlAttrRegex {
+            path,
+            attr,
+            pattern,
+            min_matches,
+        } => format!(
+            "XmlAttrRegex {{ path: {}, attr: {}, pattern: {}, min_matches: {} }}",
+            s(path),
+            s(attr),
+            s(pattern),
+            min_matches
+        ),
+        Assertion::XmlTextRegex {
+            path,
+            pattern,
+            min_matches,
+        } => format!(
+            "XmlTextRegex {{ path: {}, pattern: {}, min_matches: {} }}",
+            s(path),
+            s(pattern),
+            min_matches
+        ),
         Assertion::ParquetRowCount { min, max } => {
             format!("ParquetRowCount {{ min: {:?}, max: {:?} }}", min, max)
         }

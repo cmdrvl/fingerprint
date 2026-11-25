@@ -3,7 +3,7 @@ use crate::dsl::parser::{ContentHashConfig, ExtractSection, FingerprintDefinitio
 use std::collections::BTreeSet;
 
 const SUPPORTED_FORMATS: &[&str] = &[
-    "xlsx", "csv", "pdf", "markdown", "text", "html", "json", "jsonl", "parquet",
+    "xlsx", "csv", "pdf", "markdown", "text", "html", "json", "jsonl", "parquet", "xml",
 ];
 const SUPPORTED_EXTRACT_TYPES: &[&str] = &[
     "range",
@@ -174,6 +174,62 @@ fn validate_assertion(format: &str, assertion: &NamedAssertion) -> Result<(), St
             require_json_format("json_record_count", format)?;
             validate_bounds("json_record_count", *min, *max)?;
         }
+        Assertion::XmlRoot(root) => {
+            require_xml_format("xml_root", format)?;
+            if root.trim().is_empty() || root.contains(['/', ':', ' ']) {
+                return Err(
+                    "xml_root must be a local element name (no '/', ':' or spaces)".to_owned(),
+                );
+            }
+        }
+        Assertion::XmlNamespace(_) => {
+            require_xml_format("xml_namespace", format)?;
+        }
+        Assertion::XmlPathExists(path) => {
+            require_xml_format("xml_path_exists", format)?;
+            crate::document::xml::validate_path(path)
+                .map_err(|error| format!("xml_path_exists.path: {error}"))?;
+        }
+        Assertion::XmlPathCount { path, min, max } => {
+            require_xml_format("xml_path_count", format)?;
+            crate::document::xml::validate_path(path)
+                .map_err(|error| format!("xml_path_count.path: {error}"))?;
+            validate_bounds("xml_path_count", *min, *max)?;
+        }
+        Assertion::XmlAttrRegex {
+            path,
+            attr,
+            pattern,
+            min_matches,
+        } => {
+            require_xml_format("xml_attr_regex", format)?;
+            crate::document::xml::validate_path(path)
+                .map_err(|error| format!("xml_attr_regex.path: {error}"))?;
+            if attr.trim().is_empty() || attr.contains(':') {
+                return Err(
+                    "xml_attr_regex.attr must be a local attribute name (no prefix)".to_owned(),
+                );
+            }
+            regex::Regex::new(pattern)
+                .map_err(|error| format!("xml_attr_regex.pattern is not a valid regex: {error}"))?;
+            if *min_matches == 0 {
+                return Err("xml_attr_regex.min_matches must be >= 1".to_owned());
+            }
+        }
+        Assertion::XmlTextRegex {
+            path,
+            pattern,
+            min_matches,
+        } => {
+            require_xml_format("xml_text_regex", format)?;
+            crate::document::xml::validate_path(path)
+                .map_err(|error| format!("xml_text_regex.path: {error}"))?;
+            regex::Regex::new(pattern)
+                .map_err(|error| format!("xml_text_regex.pattern is not a valid regex: {error}"))?;
+            if *min_matches == 0 {
+                return Err("xml_text_regex.min_matches must be >= 1".to_owned());
+            }
+        }
         Assertion::ParquetColumnExists(column) => {
             require_parquet_format("parquet_column_exists", format)?;
             validate_parquet_column("parquet_column_exists", column)?;
@@ -211,6 +267,16 @@ fn validate_assertion(format: &str, assertion: &NamedAssertion) -> Result<(), St
     }
 
     Ok(())
+}
+
+fn require_xml_format(assertion_name: &str, format: &str) -> Result<(), String> {
+    if format == "xml" {
+        Ok(())
+    } else {
+        Err(format!(
+            "assertion '{assertion_name}' requires format 'xml', found '{format}'"
+        ))
+    }
 }
 
 fn require_parquet_format(assertion_name: &str, format: &str) -> Result<(), String> {
@@ -576,10 +642,11 @@ mod tests {
     #[test]
     fn validate_definition_rejects_unsupported_format() {
         let mut definition = base_html_definition();
-        definition.format = "xml".to_owned();
+        // `xml` used to be the example of an unsupported format; it is native now (bd-yq3).
+        definition.format = "docx".to_owned();
 
         let error = validate_definition(&definition).expect_err("unsupported format should fail");
-        assert!(error.contains("unsupported format 'xml'"));
+        assert!(error.contains("unsupported format 'docx'"));
     }
 
     #[test]

@@ -908,6 +908,7 @@ dependencies = [
  "lol_html",
  "lopdf",
  "parquet",
+ "quick-xml",
  "regex",
  "scraper",
  "serde",

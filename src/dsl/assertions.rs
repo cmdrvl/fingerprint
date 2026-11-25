@@ -232,6 +232,35 @@ pub enum Assertion {
         #[serde(default)]
         pattern: Option<String>,
     },
+    /// XML: the root element's local name equals this.
+    XmlRoot(String),
+    /// XML: the root element's namespace URI equals this (empty string: no namespace).
+    XmlNamespace(String),
+    /// XML: at least one element exists at this absolute path (`/a/b/c`, local names only).
+    XmlPathExists(String),
+    /// XML: the number of elements at `path` is within `[min, max]`.
+    XmlPathCount {
+        path: String,
+        min: Option<u64>,
+        max: Option<u64>,
+    },
+    /// XML: at least `min_matches` values of attribute `attr` on elements at `path` match the
+    /// regex. Values are streamed and counted, never stored or echoed.
+    XmlAttrRegex {
+        path: String,
+        attr: String,
+        pattern: String,
+        #[serde(default = "default_min_matches")]
+        min_matches: usize,
+    },
+    /// XML: at least `min_matches` elements at `path` have trimmed text matching the regex.
+    /// Text is streamed and counted, never stored or echoed.
+    XmlTextRegex {
+        path: String,
+        pattern: String,
+        #[serde(default = "default_min_matches")]
+        min_matches: usize,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -421,6 +450,23 @@ fn evaluate_with_diagnose_and_context(
             Assertion::ParquetKvMetadata { key, pattern } => {
                 evaluate_parquet_kv_metadata(doc, key, pattern.as_deref())
             }
+            Assertion::XmlRoot(root) => evaluate_xml_root(doc, root),
+            Assertion::XmlNamespace(namespace) => evaluate_xml_namespace(doc, namespace),
+            Assertion::XmlPathExists(path) => evaluate_xml_path_exists(doc, path),
+            Assertion::XmlPathCount { path, min, max } => {
+                evaluate_xml_path_count(doc, path, *min, *max)
+            }
+            Assertion::XmlAttrRegex {
+                path,
+                attr,
+                pattern,
+                min_matches,
+            } => evaluate_xml_attr_regex(doc, path, attr, pattern, *min_matches),
+            Assertion::XmlTextRegex {
+                path,
+                pattern,
+                min_matches,
+            } => evaluate_xml_text_regex(doc, path, pattern, *min_matches),
             _ => Err(format!(
                 "assertion '{}' is not implemented in v0.1",
                 assertion_type_name(assertion)
@@ -511,6 +557,11 @@ fn diagnostic_context(
             })),
             _ => None,
         },
+        Assertion::XmlRoot(_) | Assertion::XmlNamespace(_) => xml_diagnostic_context(doc, None),
+        Assertion::XmlPathExists(path)
+        | Assertion::XmlPathCount { path, .. }
+        | Assertion::XmlAttrRegex { path, .. }
+        | Assertion::XmlTextRegex { path, .. } => xml_diagnostic_context(doc, Some(path)),
         Assertion::ParquetColumnExists(column) | Assertion::ParquetColumnType { column, .. } => {
             parquet_diagnostic_context(doc, Some(column))
         }
@@ -1308,6 +1359,12 @@ fn assertion_type_name(assertion: &Assertion) -> &'static str {
         Assertion::ParquetRowCount { .. } => "parquet_row_count",
         Assertion::ParquetRowGroups { .. } => "parquet_row_groups",
         Assertion::ParquetKvMetadata { .. } => "parquet_kv_metadata",
+        Assertion::XmlRoot(_) => "xml_root",
+        Assertion::XmlNamespace(_) => "xml_namespace",
+        Assertion::XmlPathExists(_) => "xml_path_exists",
+        Assertion::XmlPathCount { .. } => "xml_path_count",
+        Assertion::XmlAttrRegex { .. } => "xml_attr_regex",
+        Assertion::XmlTextRegex { .. } => "xml_text_regex",
     }
 }
 
@@ -1516,6 +1573,162 @@ fn json_diagnostic_context(doc: &Document, path: &str) -> Option<Value> {
         "available_keys": available,
         "nearest_match": nearest,
     }))
+}
+
+fn xml_document<'a>(
+    doc: &'a Document,
+    assertion: &str,
+) -> Result<&'a crate::document::XmlDocument, String> {
+    match doc {
+        Document::Xml(xml) => Ok(xml),
+        _ => Err(format!("{assertion} requires an xml document")),
+    }
+}
+
+fn evaluate_xml_root(doc: &Document, expected: &str) -> Result<(), String> {
+    let xml = xml_document(doc, "xml_root")?;
+    if xml.root == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "xml root element is '{}', expected '{expected}'",
+            xml.root
+        ))
+    }
+}
+
+fn evaluate_xml_namespace(doc: &Document, expected: &str) -> Result<(), String> {
+    let xml = xml_document(doc, "xml_namespace")?;
+    let actual = xml.root_namespace.as_deref().unwrap_or("");
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "xml root namespace is '{actual}', expected '{expected}'"
+        ))
+    }
+}
+
+fn evaluate_xml_path_exists(doc: &Document, path: &str) -> Result<(), String> {
+    let xml = xml_document(doc, "xml_path_exists")?;
+    crate::document::xml::validate_path(path)?;
+    if xml.count_at(path) > 0 {
+        Ok(())
+    } else {
+        Err(format!("xml path '{path}' not found"))
+    }
+}
+
+fn evaluate_xml_path_count(
+    doc: &Document,
+    path: &str,
+    min: Option<u64>,
+    max: Option<u64>,
+) -> Result<(), String> {
+    let xml = xml_document(doc, "xml_path_count")?;
+    crate::document::xml::validate_path(path)?;
+    within_bounds(
+        &format!("element count at '{path}'"),
+        xml.count_at(path),
+        min,
+        max,
+    )
+}
+
+fn evaluate_xml_attr_regex(
+    doc: &Document,
+    path: &str,
+    attr: &str,
+    pattern: &str,
+    min_matches: usize,
+) -> Result<(), String> {
+    let xml = xml_document(doc, "xml_attr_regex")?;
+    crate::document::xml::validate_path(path)?;
+    let regex =
+        Regex::new(pattern).map_err(|error| format!("invalid regex '{pattern}': {error}"))?;
+    let (seen, matched) = xml.scan_attribute(path, attr, &|value| regex.is_match(value))?;
+    if matched as usize >= min_matches {
+        Ok(())
+    } else {
+        // Counts only: the attribute values themselves are never reported.
+        Err(format!(
+            "attribute '{attr}' at '{path}': {matched} of {seen} value(s) matched /{pattern}/, expected at least {min_matches}"
+        ))
+    }
+}
+
+fn evaluate_xml_text_regex(
+    doc: &Document,
+    path: &str,
+    pattern: &str,
+    min_matches: usize,
+) -> Result<(), String> {
+    let xml = xml_document(doc, "xml_text_regex")?;
+    crate::document::xml::validate_path(path)?;
+    let regex =
+        Regex::new(pattern).map_err(|error| format!("invalid regex '{pattern}': {error}"))?;
+    let (seen, matched) = xml.scan_text(path, &|text| regex.is_match(text))?;
+    if matched as usize >= min_matches {
+        Ok(())
+    } else {
+        Err(format!(
+            "text at '{path}': {matched} of {seen} element(s) matched /{pattern}/, expected at least {min_matches}"
+        ))
+    }
+}
+
+/// Structure-only context for a failed XML assertion: root, namespace, the deepest existing
+/// prefix of the path, child element names there, the nearest name to the first missing
+/// segment, and attribute NAMES at the path. Never an attribute value or any text.
+fn xml_diagnostic_context(doc: &Document, path: Option<&str>) -> Option<Value> {
+    let Document::Xml(xml) = doc else {
+        return None;
+    };
+    let mut context = json!({
+        "format": "xml",
+        "root": xml.root,
+        "root_namespace": xml.root_namespace,
+        "element_count": xml.element_count,
+        "distinct_paths": xml.paths.len(),
+    });
+    let Some(path) = path else {
+        return Some(context);
+    };
+    let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    let mut resolved = String::new();
+    let mut missing: Option<&str> = None;
+    for segment in &segments {
+        let candidate = format!("{resolved}/{segment}");
+        if xml.paths.contains_key(&candidate) {
+            resolved = candidate;
+        } else {
+            missing = Some(segment);
+            break;
+        }
+    }
+    let prefix = format!("{resolved}/");
+    let mut children: Vec<String> = xml
+        .paths
+        .keys()
+        .filter_map(|key| key.strip_prefix(&prefix))
+        .filter(|rest| !rest.contains('/'))
+        .map(ToOwned::to_owned)
+        .collect();
+    children.sort();
+    children.truncate(20);
+    let nearest = missing.and_then(|segment| nearest_match_by_edit_distance(segment, &children));
+    context["path"] = json!(path);
+    context["resolved_prefix"] = json!(if resolved.is_empty() { "/" } else { &resolved });
+    context["elements_at_path"] = json!(xml.count_at(path));
+    context["child_elements"] = json!(children);
+    context["nearest_match"] = json!(nearest);
+    context["attribute_names"] = json!(
+        xml.attribute_names
+            .get(path)
+            .map(|names| names.iter().take(20).collect::<Vec<_>>())
+            .unwrap_or_default()
+    );
+    Some(context)
 }
 
 fn parquet_document<'a>(

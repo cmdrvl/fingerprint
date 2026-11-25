@@ -465,6 +465,7 @@ fn format_matches(fingerprint_format: &str, document: &Document) -> bool {
         Document::Text(_) => fingerprint_format.eq_ignore_ascii_case("text"),
         Document::Json(json) => fingerprint_format.eq_ignore_ascii_case(json.kind.as_str()),
         Document::Parquet(_) => fingerprint_format.eq_ignore_ascii_case("parquet"),
+        Document::Xml(_) => fingerprint_format.eq_ignore_ascii_case("xml"),
         Document::Unknown(_) => false,
     }
 }

@@ -9,6 +9,7 @@ pub mod pdf;
 pub mod raw;
 pub mod text;
 pub mod xlsx;
+pub mod xml;
 
 pub use dispatch::{
     open_document, open_document_from_path, open_document_from_path_with_text_path,
@@ -20,6 +21,7 @@ pub use markdown::{Heading, MarkdownDocument, Section, Table};
 pub use parquet::{ParquetColumn, ParquetDocument};
 use std::path::{Path, PathBuf};
 pub use text::TextDocument;
+pub use xml::XmlDocument;
 
 /// Format-specific document access.
 ///
@@ -34,6 +36,7 @@ pub enum Document {
     Text(TextDocument),
     Json(JsonDocument),
     Parquet(ParquetDocument),
+    Xml(XmlDocument),
     Unknown(RawDocument),
 }
 
@@ -56,6 +59,7 @@ impl Document {
             Document::Text(d) => &d.path,
             Document::Json(d) => &d.path,
             Document::Parquet(d) => &d.path,
+            Document::Xml(d) => &d.path,
             Document::Unknown(d) => &d.path,
         }
     }

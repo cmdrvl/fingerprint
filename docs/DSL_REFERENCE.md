@@ -49,7 +49,10 @@ and its main target. Names are useful in diagnostics and tests.
 | `text` | Plain text file. | Text assertions and `filename_regex`. |
 | `json` | A single JSON document, parsed whole (refused over 256 MiB: use `jsonl`). | `json_*` assertions and `filename_regex`. |
 | `jsonl` | JSON Lines (`.jsonl`/`.ndjson`), streamed line by line; every non-empty line must parse. Path assertions run on the first record. | `json_*` assertions and `filename_regex`. |
+| `xml` | Streaming namespace-aware XML (quick-xml). One pass builds an index of element paths, counts and attribute names; value assertions stream the file again and keep only counts. Entities are not expanded and no DTD or external resource is fetched. Accepts real EDGAR XML, which starts with a stray carriage return before the declaration. | `xml_*` assertions and `filename_regex`. |
 | `parquet` | Footer metadata only (schema, row groups, row count, key/value metadata). No column chunk is read or decompressed, so cost is independent of file size. | `parquet_*` assertions and `filename_regex`. |
+
+XML paths are absolute and use local element names only: `/edgarSubmission/formData/genInfo/regName`. No predicates, wildcards, attribute steps or namespace prefixes: a path names a set of elements, and the namespace is asserted separately with `xml_namespace`. Failed XML assertions report the root, the deepest existing prefix, child element names, the nearest name and attribute names, never an attribute value or any text.
 
 JSON paths are a deliberately small subset of JSONPath: `$`, `.key`, `[index]`. No wildcards, filters or recursive descent, so a path names exactly one place. Diagnose context for a failed path reports key names and types only, never values.
 
@@ -92,6 +95,12 @@ in parity with `fingerprint compile --schema`.
 | `parquet_row_count` | `parquet` | at least one of `min` or `max` | Footer total row count is within bounds. |
 | `parquet_row_groups` | `parquet` | at least one of `min` or `max` | Footer row group count is within bounds. |
 | `range_non_null` | `xlsx`, `csv` | `sheet`, `range` | All cells in the range are populated. |
+| `xml_attr_regex` | `xml` | `path`, `attr`, `pattern`, optional `min_matches` default `1` | At least `min_matches` values of attribute `attr` (local name) on elements at `path` match `pattern`; only counts are reported. |
+| `xml_namespace` | `xml` | string URI (empty = no namespace) | The root element's namespace URI equals the string. |
+| `xml_path_count` | `xml` | `path`, at least one of `min` or `max` | The number of elements at the absolute path is within bounds. |
+| `xml_path_exists` | `xml` | string absolute path | At least one element exists at `/a/b/c` (local names only). |
+| `xml_root` | `xml` | string local name | The root element's local name equals the string. |
+| `xml_text_regex` | `xml` | `path`, `pattern`, optional `min_matches` default `1` | At least `min_matches` elements at `path` have trimmed text matching `pattern`; only counts are reported. |
 | `range_populated` | `xlsx`, `csv` | `sheet`, `range`, `min_pct` | Range population ratio is at least `min_pct`. |
 | `section_min_lines` | `html`, `markdown`, `pdf` with `text_path` | `heading`, `min_lines` | Section under matching heading has at least `min_lines`. |
 | `section_non_empty` | `html`, `markdown`, `pdf` with `text_path` | `heading` | Section under matching heading has content. |

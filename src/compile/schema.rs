@@ -13,7 +13,7 @@ pub fn dsl_json_schema() -> String {
             },
             "format": {
                 "type": "string",
-                "enum": ["xlsx", "csv", "pdf", "markdown", "text", "html", "json", "jsonl", "parquet"],
+                "enum": ["xlsx", "csv", "pdf", "markdown", "text", "html", "json", "jsonl", "parquet", "xml"],
             },
             "valid_from": {
                 "type": "string",
@@ -87,6 +87,12 @@ pub fn dsl_json_schema() -> String {
                     { "$ref": "#/$defs/assertion_parquet_row_count" },
                     { "$ref": "#/$defs/assertion_parquet_row_groups" },
                     { "$ref": "#/$defs/assertion_parquet_kv_metadata" },
+                    { "$ref": "#/$defs/assertion_xml_root" },
+                    { "$ref": "#/$defs/assertion_xml_namespace" },
+                    { "$ref": "#/$defs/assertion_xml_path_exists" },
+                    { "$ref": "#/$defs/assertion_xml_path_count" },
+                    { "$ref": "#/$defs/assertion_xml_attr_regex" },
+                    { "$ref": "#/$defs/assertion_xml_text_regex" },
                 ],
             },
             "assertion_filename_regex": {
@@ -886,6 +892,103 @@ pub fn dsl_json_schema() -> String {
                         "properties": {
                             "key": { "type": "string", "minLength": 1 },
                             "pattern": { "type": "string", "minLength": 1 },
+                        },
+                    },
+                },
+            },
+            "assertion_xml_root": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["xml_root"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "xml_root": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Local name of the root element.",
+                    },
+                },
+            },
+            "assertion_xml_namespace": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["xml_namespace"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "xml_namespace": {
+                        "type": "string",
+                        "description": "Namespace URI of the root element; the empty string means no namespace.",
+                    },
+                },
+            },
+            "assertion_xml_path_exists": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["xml_path_exists"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "xml_path_exists": {
+                        "type": "string",
+                        "pattern": "^/",
+                        "description": "Absolute element path of local names, /a/b/c (no predicates, wildcards or prefixes).",
+                    },
+                },
+            },
+            "assertion_xml_path_count": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["xml_path_count"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "xml_path_count": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["path"],
+                        "properties": {
+                            "path": { "type": "string", "pattern": "^/" },
+                            "min": { "type": "integer", "minimum": 0 },
+                            "max": { "type": "integer", "minimum": 0 },
+                        },
+                        "anyOf": [
+                            { "required": ["min"] },
+                            { "required": ["max"] },
+                        ],
+                    },
+                },
+            },
+            "assertion_xml_attr_regex": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["xml_attr_regex"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "xml_attr_regex": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["path", "attr", "pattern"],
+                        "properties": {
+                            "path": { "type": "string", "pattern": "^/" },
+                            "attr": { "type": "string", "minLength": 1 },
+                            "pattern": { "type": "string", "minLength": 1 },
+                            "min_matches": { "type": "integer", "minimum": 1, "default": 1 },
+                        },
+                    },
+                },
+            },
+            "assertion_xml_text_regex": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["xml_text_regex"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "xml_text_regex": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["path", "pattern"],
+                        "properties": {
+                            "path": { "type": "string", "pattern": "^/" },
+                            "pattern": { "type": "string", "minLength": 1 },
+                            "min_matches": { "type": "integer", "minimum": 1, "default": 1 },
                         },
                     },
                 },
