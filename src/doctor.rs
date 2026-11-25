@@ -1,77 +1,42 @@
+use serde_json::{Value, json};
 use std::path::Path;
-
-use serde::Serialize;
-use serde_json::json;
 
 use crate::cli::args::{DoctorAction, DoctorArgs, RobotDocsAction};
 
-const DOCTOR_SCHEMA_VERSION: &str = "fingerprint.doctor.v1";
-const DOCTOR_CONTRACT_VERSION: &str = "cmdrvl.read_only_doctor.v1";
+const DOCTOR_SCHEMA_VERSION: &str = "cmdrvl.doctor.v1";
+const OPERATOR_JSON: &str = crate::OPERATOR_JSON;
 
 pub fn run(args: &DoctorArgs, json_output: bool) -> Result<u8, Box<dyn std::error::Error>> {
     if args.fix {
         return Ok(emit_fix_unavailable());
     }
-
     if args.robot_triage {
         return emit_robot_triage();
     }
 
+    let json_output = json_output || args.json;
     match &args.action {
-        Some(DoctorAction::Health(health_args)) => health(health_args.json || json_output),
+        Some(DoctorAction::Health(health_args)) => emit_health(health_args.json || json_output),
         Some(DoctorAction::Capabilities(capabilities_args)) => {
-            emit_capabilities(capabilities_args.json || json_output)
+            emit_doctor_capabilities(capabilities_args.json || json_output)
         }
+        Some(DoctorAction::Triage(triage_args)) => emit_triage(triage_args.json || json_output),
         Some(DoctorAction::RobotDocs) => emit_robot_docs(None),
-        None if json_output => health(true),
-        None => human_triage(),
+        None => emit_health(json_output),
     }
 }
 
-fn health(json: bool) -> Result<u8, Box<dyn std::error::Error>> {
-    let report = build_report();
-    if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else {
-        println!(
-            "fingerprint doctor {}: {} checks passed, {} findings",
-            report.summary.status,
-            report.summary.checks_passed,
-            report.findings.len()
-        );
-    }
-    Ok(report.exit_code)
-}
-
-fn human_triage() -> Result<u8, Box<dyn std::error::Error>> {
-    let report = build_report();
-    println!("FINGERPRINT DOCTOR");
-    println!();
-    println!("Status: {}", report.summary.status);
-    println!("Checks passed: {}", report.summary.checks_passed);
-    println!("Findings: {}", report.findings.len());
-    if !report.findings.is_empty() {
-        println!();
-        for finding in &report.findings {
-            println!("- {}: {}", finding.id, finding.summary);
-            println!("  next: {}", finding.next_step);
-        }
-    }
-    println!();
-    println!("Next: fingerprint capabilities --json");
-    Ok(report.exit_code)
-}
-
+/// The top-level capabilities document is the same contract emitted by
+/// `--describe`.
 pub fn emit_capabilities(json: bool) -> Result<u8, Box<dyn std::error::Error>> {
-    let payload = build_capabilities();
     if json {
-        println!("{}", serde_json::to_string_pretty(&payload)?);
+        print_operator_json();
     } else {
         println!("fingerprint capabilities");
-        println!("schema_version: {}", payload.schema_version);
-        println!("contract_version: {}", payload.contract_version);
-        println!("read_only: {}", payload.read_only);
-        println!("json: fingerprint capabilities --json");
+        println!("operator contract: fingerprint --describe");
+        println!("doctor: fingerprint doctor --json");
+        println!("triage: fingerprint doctor triage --json");
+        println!("robot docs: fingerprint robot-docs guide");
     }
     Ok(0)
 }
@@ -80,48 +45,32 @@ pub fn emit_robot_docs(action: Option<&RobotDocsAction>) -> Result<u8, Box<dyn s
     match action {
         Some(RobotDocsAction::Guide) | None => {}
     }
-
     println!("# fingerprint robot-docs guide");
     println!();
+    println!("Use `fingerprint --robot-triage` for a single read-only triage report.");
+    println!("Use `fingerprint capabilities --json` for the operator.v1 contract.");
     println!(
-        "fingerprint's agent surfaces are read-only in this release. They never repair files, delete files, run network probes, write witness ledgers, mutate fingerprint definitions, or write run artifacts."
+        "Use `fingerprint doctor --json` for health, `fingerprint doctor capabilities --json` for the embedded contract, and `fingerprint doctor triage --json` for next actions."
     );
-    println!();
-    println!("Top-level commands:");
-    println!("- fingerprint --robot-triage");
-    println!("- fingerprint capabilities --json");
-    println!("- fingerprint robot-docs guide");
-    println!("- fingerprint --json --fp <ID> <INPUT> # accepted; run output is already JSONL");
-    println!();
-    println!("Composition:");
-    println!("- fingerprint consumes hash.v0 JSONL and emits fingerprint.v0 JSONL.");
     println!(
-        "- Canonical chain: vacuum --json <ROOT>... | hashbytes | fingerprint --fp <ID> | lock --dataset-id <DATASET> > dataset.lock.json"
+        "Legacy aliases remain supported: `fingerprint doctor health --json` and `fingerprint doctor --robot-triage`."
     );
-    println!("- Seal: pack seal dataset.lock.json --output evidence/<DATASET>/");
-    println!();
-    println!("Doctor commands:");
-    println!("- fingerprint doctor health");
-    println!("- fingerprint doctor health --json");
-    println!("- fingerprint doctor capabilities --json");
-    println!("- fingerprint doctor robot-docs");
-    println!("- fingerprint doctor --robot-triage");
-    println!();
-    println!("Exit codes:");
-    println!("- 0: healthy");
-    println!("- 1: findings present");
-    println!("- 2: command-line usage error from clap or doctor runtime error");
-    println!();
     println!(
-        "Repair policy: fingerprint doctor --fix is unavailable. File follow-up work with detector, backup, inverse, fixture, and undo coverage before adding one."
+        "Canonical generated-definition output is `--out`; legacy `--output` remains an alias where supported."
+    );
+    println!(
+        "Composition: vacuum --json <ROOT>... | hashbytes | fingerprint --fp <ID> | lock --dataset-id <DATASET> > dataset.lock.json"
+    );
+    println!("Seal: pack seal dataset.lock.json --out evidence/<DATASET>/");
+    println!("NO_COLOR=1 and non-TTY output are ANSI-free.");
+    println!(
+        "Repair policy: `fingerprint doctor --fix` is unavailable and exits 2 without stdout."
     );
     Ok(0)
 }
 
 pub fn emit_robot_triage() -> Result<u8, Box<dyn std::error::Error>> {
-    let report = build_report();
-    println!("{}", serde_json::to_string_pretty(&report)?);
-    Ok(report.exit_code)
+    emit_triage(true)
 }
 
 pub fn emit_fix_unavailable() -> u8 {
@@ -132,447 +81,186 @@ pub fn emit_fix_unavailable() -> u8 {
     2
 }
 
-fn build_report() -> DoctorReport {
-    let capabilities = build_capabilities();
-    let mut checks = vec![
-        Check {
-            id: "binary-metadata",
-            status: CheckStatus::Pass,
-            summary: format!("fingerprint {} is runnable", env!("CARGO_PKG_VERSION")),
-        },
-        Check {
-            id: "operator-manifest",
-            status: operator_manifest_status(),
-            summary: "compiled operator manifest is readable".to_string(),
-        },
-        Check {
-            id: "definition-registry-contract",
-            status: CheckStatus::Pass,
-            summary: "doctor commands do not load or mutate fingerprint definitions".to_string(),
-        },
-        Check {
-            id: "witness-ledger-contract",
-            status: CheckStatus::Pass,
-            summary: "doctor commands do not append witness records".to_string(),
-        },
-    ];
-
-    if let Some(check) = source_checkout_gitignore_check() {
-        checks.push(check);
-    }
-
-    let findings: Vec<Finding> = checks
-        .iter()
-        .filter(|check| check.status == CheckStatus::Fail)
-        .map(|check| Finding {
-            id: check.id,
-            severity: "warning",
-            summary: check.summary.clone(),
-            next_step: match check.id {
-                "source-gitignore-doctor" => "add .doctor/ to .gitignore",
-                "operator-manifest" => "rebuild fingerprint with a valid operator.json",
-                _ => "inspect fingerprint doctor capabilities --json",
-            },
-        })
-        .collect();
-
-    let status = if findings.is_empty() {
-        "healthy"
+fn emit_health(json_output: bool) -> Result<u8, Box<dyn std::error::Error>> {
+    let report = doctor_report("health");
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        "findings_present"
-    };
-    let exit_code = if findings.is_empty() { 0 } else { 1 };
-    let checks_passed = checks
+        println!(
+            "fingerprint doctor {}",
+            if report["healthy"].as_bool() == Some(true) {
+                "healthy"
+            } else {
+                "unhealthy"
+            }
+        );
+    }
+    Ok(doctor_exit_code(&report))
+}
+
+fn emit_doctor_capabilities(json_output: bool) -> Result<u8, Box<dyn std::error::Error>> {
+    let report = doctor_report("capabilities");
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("fingerprint doctor capabilities");
+        println!("contract: fingerprint capabilities --json");
+        println!("healthy: {}", report["healthy"]);
+    }
+    Ok(doctor_exit_code(&report))
+}
+
+fn emit_triage(json_output: bool) -> Result<u8, Box<dyn std::error::Error>> {
+    let report = doctor_report("triage");
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "fingerprint doctor {}",
+            if report["healthy"].as_bool() == Some(true) {
+                "healthy"
+            } else {
+                "unhealthy"
+            }
+        );
+        println!("next: fingerprint capabilities --json");
+    }
+    Ok(doctor_exit_code(&report))
+}
+
+fn doctor_report(mode: &str) -> Value {
+    let findings = health_findings();
+    let healthy = !findings
         .iter()
-        .filter(|check| check.status == CheckStatus::Pass)
-        .count();
+        .any(|finding| finding["severity"].as_str() == Some("error"));
+    let mut report = json!({
+        "schema_version": DOCTOR_SCHEMA_VERSION,
+        "mode": mode,
+        "tool": "fingerprint",
+        "tool_version": env!("CARGO_PKG_VERSION"),
+        "healthy": healthy,
+        "findings": findings,
+    });
 
-    DoctorReport {
-        schema_version: DOCTOR_SCHEMA_VERSION,
-        tool: "fingerprint",
-        version: env!("CARGO_PKG_VERSION"),
-        contract_version: DOCTOR_CONTRACT_VERSION,
-        read_only: true,
-        summary: Summary {
-            status,
-            checks_passed,
-            checks_total: checks.len(),
-            findings_count: findings.len(),
-        },
-        findings,
-        checks,
-        actions_planned: Vec::new(),
-        recommended_command: if status == "healthy" {
-            "fingerprint capabilities --json"
-        } else {
-            "fingerprint --robot-triage"
-        },
-        capabilities_url: "command:fingerprint capabilities --json",
-        capabilities,
-        exit_code,
+    match mode {
+        "health" => {}
+        "capabilities" => report["contract"] = operator_contract(),
+        "triage" => report["next_actions"] = json!(["fingerprint capabilities --json"]),
+        _ => unreachable!("doctor mode is fixed by the caller"),
     }
+    report
 }
 
-fn operator_manifest_status() -> CheckStatus {
-    match serde_json::from_str::<serde_json::Value>(crate::OPERATOR_JSON) {
-        Ok(value) if value.get("name").and_then(|name| name.as_str()) == Some("fingerprint") => {
-            CheckStatus::Pass
-        }
-        _ => CheckStatus::Fail,
+fn health_findings() -> Vec<Value> {
+    let mut checks = vec![
+        ("binary-metadata", true, "fingerprint binary is runnable"),
+        (
+            "operator-manifest",
+            operator_manifest_is_valid(),
+            "compiled operator manifest is valid and names fingerprint",
+        ),
+        (
+            "definition-registry-contract",
+            true,
+            "doctor does not load or mutate fingerprint definitions",
+        ),
+        (
+            "witness-ledger-contract",
+            true,
+            "doctor does not append witness records",
+        ),
+    ];
+    if let Some(path_check) = source_checkout_gitignore_check() {
+        checks.push(path_check);
     }
+
+    checks
+        .into_iter()
+        .map(|(id, ok, message)| {
+            let mut finding = json!({
+                "id": format!("fingerprint.{id}"),
+                "severity": if ok { "info" } else { "error" },
+                "message": message,
+            });
+            if !ok {
+                finding["fix"] = json!("inspect fingerprint doctor capabilities --json");
+            }
+            finding
+        })
+        .collect()
 }
 
-fn source_checkout_gitignore_check() -> Option<Check> {
+fn operator_contract() -> Value {
+    serde_json::from_str(OPERATOR_JSON).expect("operator.json must be valid JSON")
+}
+
+fn operator_manifest_is_valid() -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(OPERATOR_JSON) else {
+        return false;
+    };
+    let version = value
+        .get("tool_version")
+        .or_else(|| value.get("version"))
+        .and_then(Value::as_str);
+    value["schema_version"] == "operator.v1"
+        && value["name"] == "fingerprint"
+        && version == Some(env!("CARGO_PKG_VERSION"))
+        && ["capabilities", "robot-docs", "doctor"]
+            .iter()
+            .all(|name| has_command(&value, name))
+}
+
+fn has_command(value: &Value, name: &str) -> bool {
+    value
+        .get("commands")
+        .and_then(Value::as_array)
+        .is_some_and(|commands| {
+            commands
+                .iter()
+                .any(|command| command.get("name").and_then(Value::as_str) == Some(name))
+        })
+}
+
+fn source_checkout_gitignore_check() -> Option<(&'static str, bool, &'static str)> {
     let cwd = std::env::current_dir().ok()?;
     if !looks_like_fingerprint_source_checkout(&cwd) {
         return None;
     }
-
     let gitignore = cwd.join(".gitignore");
-    let status = match std::fs::read_to_string(&gitignore) {
-        Ok(contents) if contents.lines().any(|line| line.trim() == ".doctor/") => CheckStatus::Pass,
-        _ => CheckStatus::Fail,
-    };
-
-    Some(Check {
-        id: "source-gitignore-doctor",
-        status,
-        summary: ".doctor/ is ignored in this fingerprint checkout".to_string(),
-    })
+    let ignored = std::fs::read_to_string(gitignore)
+        .map(|contents| contents.lines().any(|line| line.trim() == ".doctor/"))
+        .unwrap_or(false);
+    Some((
+        "source-gitignore-doctor",
+        ignored,
+        ".doctor/ is ignored in this checkout",
+    ))
 }
 
 fn looks_like_fingerprint_source_checkout(path: &Path) -> bool {
     let cargo_toml = path.join("Cargo.toml");
     let operator_json = path.join("operator.json");
-    match std::fs::read_to_string(cargo_toml) {
-        Ok(contents) => {
+    std::fs::read_to_string(cargo_toml)
+        .map(|contents| {
             contents
                 .lines()
                 .any(|line| line.trim() == r#"name = "fingerprint""#)
                 && operator_json.exists()
-        }
-        Err(_) => false,
+        })
+        .unwrap_or(false)
+}
+
+fn doctor_exit_code(report: &Value) -> u8 {
+    if report["healthy"].as_bool() == Some(true) {
+        0
+    } else {
+        1
     }
 }
 
-fn build_capabilities() -> DoctorCapabilities {
-    DoctorCapabilities {
-        schema_version: "fingerprint.doctor.capabilities.v1",
-        tool: "fingerprint",
-        version: env!("CARGO_PKG_VERSION"),
-        contract_version: DOCTOR_CONTRACT_VERSION,
-        read_only: true,
-        online_default: false,
-        fix_mode: FixMode {
-            available: false,
-            reason: "fingerprint doctor is audit-only until detectors, backups, inverses, and fixtures exist",
-        },
-        commands: vec![
-            CommandCapability {
-                command: "fingerprint --robot-triage",
-                output: "json",
-                mutates: false,
-            },
-            CommandCapability {
-                command: "fingerprint capabilities --json",
-                output: "json",
-                mutates: false,
-            },
-            CommandCapability {
-                command: "fingerprint robot-docs guide",
-                output: "markdown",
-                mutates: false,
-            },
-            CommandCapability {
-                command: "fingerprint doctor health",
-                output: "one-line text",
-                mutates: false,
-            },
-            CommandCapability {
-                command: "fingerprint doctor health --json",
-                output: "json",
-                mutates: false,
-            },
-            CommandCapability {
-                command: "fingerprint doctor capabilities --json",
-                output: "json",
-                mutates: false,
-            },
-            CommandCapability {
-                command: "fingerprint doctor robot-docs",
-                output: "markdown",
-                mutates: false,
-            },
-            CommandCapability {
-                command: "fingerprint doctor --robot-triage",
-                output: "json",
-                mutates: false,
-            },
-            CommandCapability {
-                command: "fingerprint doctor --fix",
-                output: "stderr text and exit 2",
-                mutates: false,
-            },
-        ],
-        agent_surfaces: json!({
-            "global_json": {
-                "argv": ["fingerprint", "--json"],
-                "description": "Accepted as structured-output intent; run-mode output is already JSONL"
-            },
-            "robot_triage": {
-                "argv": ["fingerprint", "--robot-triage"],
-                "description": "Return one read-only machine-readable health, capability, and recommendation report"
-            },
-            "capabilities": {
-                "argv": ["fingerprint", "capabilities", "--json"],
-                "description": "Return machine-readable tool capabilities without reading stdin or appending witness records"
-            },
-            "robot_docs": {
-                "argv": ["fingerprint", "robot-docs", "guide"],
-                "description": "Print paste-ready agent guidance for safe fingerprint operation"
-            }
-        }),
-        fingerprint_capabilities: json!({
-            "streaming_jsonl": true,
-            "operator_describe": true,
-            "schema_describe": true,
-            "witness_query": true,
-            "row_shape_peek": true,
-            "definition_compile": true,
-            "definition_infer": true,
-            "formats": ["csv", "xlsx", "pdf", "html", "markdown", "text"]
-        }),
-        composition: json!({
-            "family": {
-                "name": "cmdrvl-spine",
-                "siblings": [
-                    {"tool": "vacuum", "capabilities": "vacuum capabilities --json"},
-                    {"tool": "hashbytes", "capabilities": "hashbytes capabilities --json"},
-                    {"tool": "fingerprint", "capabilities": "fingerprint capabilities --json"},
-                    {"tool": "lock", "capabilities": "lock capabilities --json"},
-                    {"tool": "pack", "capabilities": "pack capabilities --json"}
-                ]
-            },
-            "role": "middle of the evidence stream; recognize hashed artifacts with fingerprint definitions",
-            "position": 3,
-            "accepts": ["hash.v0 JSONL"],
-            "produces": ["fingerprint.v0 JSONL"],
-            "canonical_chain": [
-                "vacuum --json <ROOT>... | hashbytes | fingerprint --fp <ID> | lock --dataset-id <DATASET> > dataset.lock.json",
-                "pack seal dataset.lock.json --output evidence/<DATASET>/"
-            ],
-            "agent_rules": [
-                "Run fingerprint after hashbytes when lockfiles need matched template evidence.",
-                "Order repeated --fp definitions from specific to general; first match wins.",
-                "Pipe fingerprint JSONL to lock; do not convert it to human text."
-            ]
-        }),
-        side_effects: json!({
-            "reads_stdin": false,
-            "reads_input_manifest": false,
-            "opens_artifact_files": false,
-            "evaluates_fingerprints": false,
-            "writes_witness_ledger": false,
-            "creates_witness_directory": false,
-            "writes_doctor_artifacts": false,
-            "mutates_fingerprint_definitions": false,
-            "changes_cwd": false,
-            "uses_network": false
-        }),
-        detectors: vec![
-            DetectorCapability {
-                id: "binary-metadata",
-                description: "Confirms the fingerprint binary can report its compiled version.",
-                online_required: false,
-            },
-            DetectorCapability {
-                id: "operator-manifest",
-                description: "Confirms the compiled operator manifest is present and names fingerprint.",
-                online_required: false,
-            },
-            DetectorCapability {
-                id: "source-gitignore-doctor",
-                description: "When run from the fingerprint source checkout, confirms .doctor/ is ignored.",
-                online_required: false,
-            },
-            DetectorCapability {
-                id: "definition-registry-contract",
-                description: "Confirms this doctor release does not load or mutate fingerprint definitions.",
-                online_required: false,
-            },
-            DetectorCapability {
-                id: "witness-ledger-contract",
-                description: "Confirms this doctor release does not append witness records.",
-                online_required: false,
-            },
-        ],
-        fixers: Vec::new(),
-        exit_codes: vec![
-            ExitCodeCapability {
-                code: 0,
-                meaning: "healthy or display command succeeded",
-            },
-            ExitCodeCapability {
-                code: 1,
-                meaning: "doctor findings present or fingerprint partial outcome",
-            },
-            ExitCodeCapability {
-                code: 2,
-                meaning: "command-line usage error, doctor runtime error, or fingerprint refusal",
-            },
-        ],
-        env_vars: vec![
-            EnvVarCapability {
-                name: "FINGERPRINT_DEFINITIONS",
-                description: "Overrides installed definition discovery for run mode; doctor commands do not read or write it.",
-            },
-            EnvVarCapability {
-                name: "FINGERPRINT_TRUST",
-                description: "Overrides trust policy for installed definitions; doctor commands do not read or write it.",
-            },
-            EnvVarCapability {
-                name: "EPISTEMIC_WITNESS",
-                description: "Overrides the witness ledger path for run/infer commands; doctor commands do not write it.",
-            },
-            EnvVarCapability {
-                name: "HOME",
-                description: "Used by run-mode registry and witness fallbacks; doctor commands do not write home-scoped files.",
-            },
-        ],
-        data_paths: vec![
-            DataPathCapability {
-                path: ".doctor/",
-                purpose: "reserved and gitignored for future doctor run artifacts",
-                mutates_in_this_release: false,
-            },
-            DataPathCapability {
-                path: "$FINGERPRINT_DEFINITIONS",
-                purpose: "run-mode installed definition directory; not touched by doctor commands",
-                mutates_in_this_release: false,
-            },
-            DataPathCapability {
-                path: "~/.cmdrvl/config/fingerprint/trust.yaml",
-                purpose: "run-mode installed definition trust config; not touched by doctor commands",
-                mutates_in_this_release: false,
-            },
-            DataPathCapability {
-                path: "~/.cmdrvl/config/fingerprint/definitions/",
-                purpose: "run-mode installed definition directory; not touched by doctor commands",
-                mutates_in_this_release: false,
-            },
-            DataPathCapability {
-                path: "~/.cmdrvl/state/witness/witness.jsonl",
-                purpose: "run/infer witness ledger; not touched by doctor commands",
-                mutates_in_this_release: false,
-            },
-        ],
+fn print_operator_json() {
+    print!("{OPERATOR_JSON}");
+    if !OPERATOR_JSON.ends_with('\n') {
+        println!();
     }
-}
-
-#[derive(Debug, Serialize)]
-struct DoctorReport {
-    schema_version: &'static str,
-    tool: &'static str,
-    version: &'static str,
-    contract_version: &'static str,
-    read_only: bool,
-    summary: Summary,
-    findings: Vec<Finding>,
-    checks: Vec<Check>,
-    actions_planned: Vec<String>,
-    recommended_command: &'static str,
-    capabilities_url: &'static str,
-    capabilities: DoctorCapabilities,
-    #[serde(skip)]
-    exit_code: u8,
-}
-
-#[derive(Debug, Serialize)]
-struct Summary {
-    status: &'static str,
-    checks_passed: usize,
-    checks_total: usize,
-    findings_count: usize,
-}
-
-#[derive(Debug, Serialize)]
-struct Finding {
-    id: &'static str,
-    severity: &'static str,
-    summary: String,
-    next_step: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-struct Check {
-    id: &'static str,
-    status: CheckStatus,
-    summary: String,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum CheckStatus {
-    Pass,
-    Fail,
-}
-
-#[derive(Debug, Serialize)]
-struct DoctorCapabilities {
-    schema_version: &'static str,
-    tool: &'static str,
-    version: &'static str,
-    contract_version: &'static str,
-    read_only: bool,
-    online_default: bool,
-    fix_mode: FixMode,
-    commands: Vec<CommandCapability>,
-    agent_surfaces: serde_json::Value,
-    fingerprint_capabilities: serde_json::Value,
-    composition: serde_json::Value,
-    side_effects: serde_json::Value,
-    detectors: Vec<DetectorCapability>,
-    fixers: Vec<String>,
-    exit_codes: Vec<ExitCodeCapability>,
-    env_vars: Vec<EnvVarCapability>,
-    data_paths: Vec<DataPathCapability>,
-}
-
-#[derive(Debug, Serialize)]
-struct FixMode {
-    available: bool,
-    reason: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-struct CommandCapability {
-    command: &'static str,
-    output: &'static str,
-    mutates: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct DetectorCapability {
-    id: &'static str,
-    description: &'static str,
-    online_required: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct ExitCodeCapability {
-    code: u8,
-    meaning: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-struct EnvVarCapability {
-    name: &'static str,
-    description: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-struct DataPathCapability {
-    path: &'static str,
-    purpose: &'static str,
-    mutates_in_this_release: bool,
 }

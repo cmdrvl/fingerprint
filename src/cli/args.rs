@@ -1,8 +1,8 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, ColorChoice, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
-#[command(name = "fingerprint", version)]
+#[command(name = "fingerprint", version, color = ColorChoice::Never)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -72,7 +72,7 @@ pub enum Command {
         yaml: Option<PathBuf>,
 
         /// Output directory for generated crate
-        #[arg(long, requires = "yaml")]
+        #[arg(long = "out", visible_alias = "output", requires = "yaml")]
         out: Option<PathBuf>,
 
         /// Validate only, don't generate code
@@ -110,7 +110,7 @@ pub enum Command {
         no_extract: bool,
 
         /// Output .fp.yaml path (default: stdout)
-        #[arg(long)]
+        #[arg(long = "out", visible_alias = "output")]
         out: Option<PathBuf>,
     },
     /// Check directory structure against pattern rules
@@ -142,7 +142,7 @@ pub enum Command {
         id: Option<String>,
 
         /// Output .fp.yaml path (default: stdout)
-        #[arg(long)]
+        #[arg(long = "out", visible_alias = "output")]
         out: Option<PathBuf>,
     },
 }
@@ -175,6 +175,10 @@ pub struct DoctorArgs {
     #[arg(long, hide = true)]
     pub fix: bool,
 
+    /// Emit the default health report as JSON.
+    #[arg(long)]
+    pub json: bool,
+
     #[command(subcommand)]
     pub action: Option<DoctorAction>,
 }
@@ -198,6 +202,8 @@ pub enum DoctorAction {
     Health(DoctorHealthArgs),
     /// Print the machine-readable doctor capability contract.
     Capabilities(DoctorCapabilitiesArgs),
+    /// Print the machine-readable triage report.
+    Triage(DoctorTriageArgs),
     /// Print paste-ready operating notes for agents.
     RobotDocs,
 }
@@ -211,6 +217,13 @@ pub struct DoctorHealthArgs {
 
 #[derive(Debug, Args)]
 pub struct DoctorCapabilitiesArgs {
+    /// Emit JSON output.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct DoctorTriageArgs {
     /// Emit JSON output.
     #[arg(long)]
     pub json: bool,
@@ -368,6 +381,35 @@ mod tests {
     }
 
     #[test]
+    fn parses_legacy_output_alias_for_generated_definition_commands() {
+        let cli = Cli::parse_from([
+            "fingerprint",
+            "compile",
+            "argus-model.fp.yaml",
+            "--output",
+            "out-dir",
+        ]);
+        assert!(
+            matches!(cli.command, Some(Command::Compile { out: Some(path), .. }) if path == PathBuf::from("out-dir"))
+        );
+
+        let cli = Cli::parse_from([
+            "fingerprint",
+            "infer",
+            "examples",
+            "--format",
+            "csv",
+            "--id",
+            "csv.v0",
+            "--output",
+            "out.fp.yaml",
+        ]);
+        assert!(
+            matches!(cli.command, Some(Command::Infer { out: Some(path), .. }) if path == PathBuf::from("out.fp.yaml"))
+        );
+    }
+
+    #[test]
     fn parses_doctor_robot_triage_without_input() {
         let cli = Cli::parse_from(["fingerprint", "doctor", "--robot-triage"]);
 
@@ -377,6 +419,7 @@ mod tests {
             Some(Command::Doctor(super::DoctorArgs {
                 robot_triage: true,
                 fix: false,
+                json: false,
                 action: None,
             }))
         ));
