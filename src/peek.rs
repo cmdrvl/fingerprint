@@ -470,16 +470,121 @@ fn run_workbook(
         .iter()
         .map(|row| row_to_json(row, modal_column_count))
         .collect::<Vec<_>>();
+    let summary = summarize_rows(&rows, modal_column_count);
+
+    // Column type distributions over the inspected DATA rows (those from `data_starts_at` on),
+    // by column position. Counts only, in profile inspect's type words for the dominant type.
+    let data_starts_at = summary["data_starts_at"].as_u64().unwrap_or(1) as usize;
+    let last_inspected_row = first_row + rows.len() - 1;
+    let width = range.width();
+    let mut per_column: Vec<BTreeMap<&'static str, usize>> =
+        (0..width).map(|_| empty_type_counts()).collect();
+    for (offset, cells) in range.rows().take(max_rows).enumerate() {
+        if first_row + offset < data_starts_at {
+            continue;
+        }
+        for (column, cell) in cells.iter().enumerate() {
+            let (text, class) = workbook_cell(cell);
+            let trimmed = text.trim();
+            let class = if trimmed.is_empty() {
+                "empty"
+            } else {
+                class.unwrap_or_else(|| classify_cell(trimmed))
+            };
+            *per_column[column].entry(class).or_insert(0) += 1;
+        }
+    }
+    let column_start = range.start().map_or(0, |(_, column)| column as usize);
+    let columns: Vec<Value> = per_column
+        .iter()
+        .enumerate()
+        .map(|(index, counts)| {
+            let non_empty: usize = counts
+                .iter()
+                .filter(|(class, _)| **class != "empty")
+                .map(|(_, count)| *count)
+                .sum();
+            let total: usize = counts.values().sum();
+            let dominant = counts
+                .iter()
+                .filter(|(class, count)| **class != "empty" && **count > 0)
+                .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))
+                .map(|(class, _)| *class);
+            let inspect_type = match dominant {
+                Some("numeric") => "number",
+                Some("boolean") => "boolean",
+                Some(_) => "text",
+                None => "unknown",
+            };
+            json!({
+                "index": index,
+                "column": column_letters(column_start + index),
+                "type": inspect_type,
+                "dominant_class": dominant,
+                "cell_type_counts": counts,
+                "null_count": counts.get("empty").copied().unwrap_or(0),
+                "null_rate": if total == 0 { 0.0 } else { round_confidence(counts.get("empty").copied().unwrap_or(0) as f64 / total as f64) },
+                "non_empty": non_empty,
+            })
+        })
+        .collect();
+
+    // Merged ranges and formula cells of the selected sheet (counts only: no formula text).
+    let sheet_name = names[selected].clone();
+    let merged: Option<Vec<(u32, u32, u32, u32)>> = match &mut workbook {
+        calamine::Sheets::Xlsx(xlsx) => xlsx
+            .worksheet_merge_cells(&sheet_name)
+            .and_then(Result::ok)
+            .map(|dims| {
+                dims.iter()
+                    .map(|d| (d.start.0, d.start.1, d.end.0, d.end.1))
+                    .collect()
+            }),
+        calamine::Sheets::Xls(xls) => xls.worksheet_merge_cells(&sheet_name).map(|dims| {
+            dims.iter()
+                .map(|d| (d.start.0, d.start.1, d.end.0, d.end.1))
+                .collect()
+        }),
+        _ => None,
+    };
+    let formula_cells = workbook
+        .worksheet_formula(&sheet_name)
+        .ok()
+        .map(|formulas| {
+            formulas
+                .cells()
+                .filter(|(_, _, formula)| !formula.trim().is_empty())
+                .count()
+        });
+    let merged_flags = merged.as_ref().map(|ranges| {
+        let in_window = ranges
+            .iter()
+            .filter(|(start_row, _, end_row, _)| {
+                (*start_row as usize) < last_inspected_row && (*end_row as usize) + 1 >= first_row
+            })
+            .count();
+        let area: u64 = ranges
+            .iter()
+            .map(|(r0, c0, r1, c1)| u64::from(r1 - r0 + 1) * u64::from(c1 - c0 + 1))
+            .sum();
+        json!({ "ranges": ranges.len(), "cells": area, "ranges_in_inspected_rows": in_window })
+    });
+
     let mut result = json!({
         "file": path,
         "format": "xlsx",
+        "sheet_flags": {
+            "merged": merged_flags,
+            "formula_cells": formula_cells,
+        },
+        "columns": columns,
         "dialect": dialect_json("xlsx", "none", None),
         "column_count": modal_column_count,
         "sheet": { "index": selected, "name": names[selected] },
         "sheets": sheets,
         "rows_requested": max_rows,
         "rows_observed": rows.len(),
-        "summary": summarize_rows(&rows, modal_column_count),
+        "summary": summary,
         "rows": shape_rows,
     });
     if args.suggest {
@@ -1356,6 +1461,18 @@ fn run_html(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> 
         "witness_id": witness_id
     }))?;
     Ok(0)
+}
+
+/// Zero-based column index to spreadsheet letters (0 -> A, 26 -> AA).
+fn column_letters(index: usize) -> String {
+    let mut n = index + 1;
+    let mut letters = String::new();
+    while n > 0 {
+        let rem = (n - 1) % 26;
+        letters.insert(0, (b'A' + rem as u8) as char);
+        n = (n - 1) / 26;
+    }
+    letters
 }
 
 fn short_id(text: &str) -> String {

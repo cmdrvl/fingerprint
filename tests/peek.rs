@@ -1884,3 +1884,93 @@ fn pdf_peek_brief_view_witness_and_refusals() {
     fs::write(&empty, "").unwrap();
     assert_eq!(peek_path(&empty, &[]).status.code(), Some(2));
 }
+
+// ---- bd-hra: workbook column type distributions, merged ranges, formula cells ------------------------
+
+#[test]
+fn workbook_peek_reports_merged_ranges_formula_cells_and_column_types() {
+    // merged_formulas.xlsx (tests/fixtures/peek/make_peek_xlsx.py, synthetic): A1:C1 and A7:C7
+    // merged (2 ranges, 6 cells), 4 formula cells (D4:D7; openpyxl stores no cached result, so
+    // those cells' VALUES are empty), header on row 3, data rows 4-6, a boolean column E.
+    let path = fixture("merged_formulas.xlsx");
+    let result = parse_stdout(&peek_path(&path, &[]))["result"].clone();
+    assert_eq!(
+        result["sheet_flags"],
+        serde_json::json!({"merged": {"ranges": 2, "cells": 6, "ranges_in_inspected_rows": 2}, "formula_cells": 4})
+    );
+    assert_eq!(result["summary"]["header_at_row"], 3);
+    assert_eq!(result["summary"]["data_starts_at"], 4);
+    let columns = result["columns"].as_array().unwrap();
+    let kinds: Vec<(&str, &str)> = columns
+        .iter()
+        .map(|c| (c["column"].as_str().unwrap(), c["type"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("A", "text"),
+            ("B", "number"),
+            ("C", "number"),
+            ("D", "unknown"),
+            ("E", "boolean")
+        ]
+    );
+    // Rows 4-7 are inspected as data: B holds 3 numbers and 1 empty (the merged total row).
+    assert_eq!(
+        columns[1]["cell_type_counts"],
+        serde_json::json!({"boolean": 0, "date": 0, "empty": 1, "mixed": 0, "numeric": 3, "text": 0})
+    );
+    assert_eq!(columns[1]["null_count"], 1);
+    assert_eq!(columns[1]["null_rate"], 0.25);
+    // The formula column has formulas but no cached values: all four cells read as empty.
+    assert_eq!(columns[3]["dominant_class"], Value::Null);
+    assert_eq!(columns[3]["null_count"], 4);
+    // Booleans are classified by Excel type.
+    assert_eq!(columns[4]["cell_type_counts"]["boolean"], 3);
+}
+
+#[test]
+fn workbook_flags_are_zero_without_merges_or_formulas_and_types_follow_the_data() {
+    // watl_msc.xlsx has neither merged cells nor formulas; its data window (rows 12 on)
+    // includes the blank row 16 and the footnotes.
+    let result =
+        parse_stdout(&peek_path(&materialize_fixture("watl_msc.xlsx"), &[]))["result"].clone();
+    assert_eq!(
+        result["sheet_flags"],
+        serde_json::json!({"merged": {"ranges": 0, "cells": 0, "ranges_in_inspected_rows": 0}, "formula_cells": 0})
+    );
+    let types: Vec<&str> = result["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["type"].as_str().unwrap())
+        .collect();
+    // Loan ID, Property Name, Status: text; Maturity Date: dates are text in inspect's words;
+    // Balance and DSCR: numbers.
+    assert_eq!(types, ["text", "text", "text", "text", "number", "number"]);
+    assert_eq!(result["columns"][3]["dominant_class"], "date");
+}
+
+#[test]
+fn workbook_formula_text_and_values_never_leak_and_brief_keeps_the_flags() {
+    let path = fixture("merged_formulas.xlsx");
+    let stdout = String::from_utf8(peek_path(&path, &["--explicit"]).stdout).unwrap();
+    for planted in [
+        "B4*C4",
+        "SUM(",
+        "Widget",
+        "Gadget",
+        "Gizmo",
+        "Quarterly stock",
+        "Item",
+    ] {
+        assert!(!stdout.contains(planted), "{planted} leaked: {stdout}");
+    }
+    let brief = peek_path(&path, &["--view", "brief"]);
+    let compact = serde_json::to_vec(&parse_stdout(&brief)).unwrap();
+    assert!(compact.len() < 2000, "brief is {} bytes", compact.len());
+    let result = parse_stdout(&brief)["result"].clone();
+    assert!(result.get("columns").is_none() && result.get("rows").is_none());
+    assert_eq!(result["sheet_flags"]["formula_cells"], 4);
+    assert_eq!(result["sheet_flags"]["merged"]["ranges"], 2);
+}
