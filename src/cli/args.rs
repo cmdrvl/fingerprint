@@ -250,6 +250,11 @@ pub struct PeekArgs {
     /// Include pre-parse suggestions for profile draft/slice flows.
     #[arg(long)]
     pub suggest: bool,
+
+    /// Worksheet to inspect when FILE is an .xlsx/.xlsm/.xls workbook: a sheet name or a
+    /// 0-based index (default: the first sheet). Ignored for CSV-like files.
+    #[arg(long, value_name = "NAME|INDEX")]
+    pub sheet: Option<String>,
 }
 
 #[derive(Debug, Args)]

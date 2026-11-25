@@ -451,8 +451,12 @@ For spreadsheet corpora, `--format xlsx` covers both `.xlsx` and `.xls` inputs; 
 ### Peek mode
 
 ```bash
-fingerprint peek <FILE> [--rows N] [--json] [--suggest] [--no-witness]
+fingerprint peek <FILE> [--rows N] [--sheet NAME|INDEX] [--json] [--suggest] [--no-witness]
 ```
+
+**Workbooks (`.xlsx`, `.xlsm`, `.xls`):** peek reports the same zero-retention row shapes for one sheet (`--sheet` by name or 0-based index; default the first), plus a `sheets` list with each sheet's `rows`, `columns`, `first_row` and `first_column` (the used range). Row numbers are Excel row numbers, so `header_at_row`/`data_starts_at` can be read straight off the spreadsheet; classes come from Excel types (numbers, booleans, dates) and cell text is classified in-process but never emitted (no values, no header text). A workbook has no delimiter, so `delimiter` is absent. Calamine reads one sheet at a time, so memory is O(largest sheet), not O(rows inspected); the witness hash still covers the whole file. An unknown `--sheet` refuses with `reason: sheet_not_found` and the sheet names.
+
+**Shared inspection vocabulary** (the names a `profile inspect` and `cmdrvl inspect` should reuse, defined here because neither exists yet; see bd-47o): `format` (`csv`, `tsv`, `xlsx`), `rows_requested`, `rows_observed`, `summary` (`modal_column_count`, `preamble_rows`, `header_at_row`, `data_starts_at`, `shape_classes`) and `rows[]` (`row_index`, `column_count`, `non_empty_count`, `shape_class`, `cell_type_counts`, `cell_length_histogram`), and `suggestions.profile_pre_parse`.
 
 Peek streams: it reads only the first `--rows` lines (plus the first 25 non-blank lines for the delimiter guess), so a 100 MB file costs the same as a small one; the witness record, when enabled, still hashes the whole file in 64 KiB chunks. A line longer than 1 MiB is truncated for shape purposes (it is a `paragraph` either way) and reported as `truncated_lines`. Text that is not UTF-8 is refused only if it is inside the inspected rows. Binary containers (`.xlsx`, `.xls`, `.parquet`, `.pdf`, `.zip`, ...) are refused up front with `E_BAD_INPUT` and `detail.reason: "format_not_applicable"`.
 

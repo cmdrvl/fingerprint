@@ -29,8 +29,11 @@ const GUESS_LINES: usize = 25;
 /// Binary containers peek has no reader for: refused up front as "format not applicable"
 /// instead of failing later with a UTF-8 error.
 const NOT_APPLICABLE_EXTENSIONS: &[&str] = &[
-    "xlsx", "xlsm", "xls", "parquet", "pdf", "zip", "gz", "docx", "pptx", "png", "jpg", "jpeg",
+    "parquet", "pdf", "zip", "gz", "docx", "pptx", "png", "jpg", "jpeg",
 ];
+
+/// Workbook containers peek reads through calamine (bd-jxd).
+const WORKBOOK_EXTENSIONS: &[&str] = &["xlsx", "xlsm", "xls"];
 
 /// What peek reads from the file: only the lines it reports on, never the whole file.
 struct PeekInput {
@@ -144,6 +147,17 @@ fn read_input(
 
 pub fn run(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
     let max_rows = args.rows.max(1);
+    let lower_extension = args
+        .file
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    if lower_extension
+        .as_deref()
+        .is_some_and(|extension| WORKBOOK_EXTENSIONS.contains(&extension))
+    {
+        return run_workbook(args, append_witness_record, max_rows);
+    }
     if let Some(extension) = args
         .file
         .extension()
@@ -218,6 +232,8 @@ pub fn run(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
     let summary = summarize_rows(&rows, modal_column_count);
     let mut result = json!({
         "file": args.file.display().to_string(),
+        // Shared inspection vocabulary (bd-jxd): `format` is csv or tsv for delimited text.
+        "format": if matches!(lower_extension.as_deref(), Some("tsv" | "tab")) { "tsv" } else { "csv" },
         "rows_requested": max_rows,
         "rows_observed": rows.len(),
         "delimiter": {
@@ -238,7 +254,7 @@ pub fn run(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
     }
 
     let witness_id = if append_witness_record {
-        append_peek_witness(args, &input, &result)
+        append_peek_witness(args, input.blake3.clone(), input.total_bytes, &result)
     } else {
         None
     };
@@ -252,6 +268,211 @@ pub fn run(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
         "witness_id": witness_id
     });
     emit_json(&envelope)?;
+    Ok(0)
+}
+
+/// What peek sees of one workbook cell: text for classification and an optional fixed class
+/// (numbers, booleans and dates are classified by their Excel type, not by their text).
+fn workbook_cell(cell: &calamine::Data) -> (String, Option<&'static str>) {
+    use calamine::Data;
+    match cell {
+        Data::Empty => (String::new(), None),
+        Data::String(text) => (text.clone(), None),
+        Data::Float(value) => (value.to_string(), Some("numeric")),
+        Data::Int(value) => (value.to_string(), Some("numeric")),
+        Data::Bool(value) => (value.to_string(), Some("boolean")),
+        // Rendered length only feeds the length histogram; a date is a 10-character ISO form.
+        Data::DateTime(_) => ("0000-00-00".to_owned(), Some("date")),
+        Data::DateTimeIso(text) => (text.clone(), Some("date")),
+        Data::DurationIso(text) => (text.clone(), None),
+        Data::Error(_) => ("#ERR".to_owned(), Some("text")),
+    }
+}
+
+fn workbook_row_shape(row_index: usize, cells: &[calamine::Data]) -> RawRowShape {
+    let views: Vec<(String, Option<&'static str>)> = cells.iter().map(workbook_cell).collect();
+    // Trailing empty cells do not count as columns (a worksheet range is rectangular).
+    let used = views
+        .iter()
+        .rposition(|(text, _)| !text.trim().is_empty())
+        .map_or(0, |last| last + 1);
+    let mut non_empty_count = 0usize;
+    let mut type_counts = empty_type_counts();
+    let mut length_buckets = empty_length_buckets();
+    let mut has_unit_tokens = false;
+    for (text, class) in &views[..used] {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            non_empty_count += 1;
+        }
+        let class = class.unwrap_or_else(|| classify_cell(trimmed));
+        *type_counts.entry(class).or_insert(0) += 1;
+        *length_buckets
+            .entry(length_bucket(trimmed.len()))
+            .or_insert(0) += 1;
+        if looks_like_unit_token(trimmed) {
+            has_unit_tokens = true;
+        }
+    }
+    RawRowShape {
+        row_index,
+        column_count: used,
+        non_empty_count,
+        type_counts,
+        length_buckets,
+        has_unit_tokens,
+    }
+}
+
+/// Stream the file through blake3 (the workbook is read by calamine anyway; this keeps the
+/// witness hash independent of how the reader treats the file).
+fn hash_file(path: &std::path::Path) -> std::io::Result<(String, u64)> {
+    use std::io::Read;
+    let mut file = fs::File::open(path)?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buffer = vec![0u8; 64 * 1024];
+    let mut total = 0u64;
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        total += read as u64;
+    }
+    Ok((format!("blake3:{}", hasher.finalize().to_hex()), total))
+}
+
+/// `fingerprint peek book.xlsx [--sheet NAME|INDEX]`: the same zero-retention row-shape report
+/// as for CSV (classes, counts and histograms; never a cell value), plus the workbook's sheet
+/// list with dimensions. Row numbers are Excel row numbers. A workbook is read by calamine one
+/// sheet at a time, so memory is O(largest sheet), not O(rows inspected).
+fn run_workbook(
+    args: &PeekArgs,
+    append_witness_record: bool,
+    max_rows: usize,
+) -> Result<u8, String> {
+    use calamine::{Reader, open_workbook_auto};
+
+    let refuse = |message: &str, detail: Value| -> Result<u8, String> {
+        emit_refusal("E_BAD_INPUT", message, detail)?;
+        Ok(2)
+    };
+    let path = args.file.display().to_string();
+    let mut workbook = match open_workbook_auto(&args.file) {
+        Ok(workbook) => workbook,
+        Err(error) => {
+            return refuse(
+                "Could not open workbook",
+                json!({ "path": path, "error": error.to_string() }),
+            );
+        }
+    };
+    let names: Vec<String> = workbook.sheet_names().to_vec();
+    if names.is_empty() {
+        return refuse("Workbook has no sheets", json!({ "path": path }));
+    }
+
+    // Sheet dimensions, one sheet at a time (each range is dropped before the next is read).
+    let mut sheets = Vec::with_capacity(names.len());
+    for (index, name) in names.iter().enumerate() {
+        match workbook.worksheet_range(name) {
+            Ok(range) => {
+                let (first_row, first_column) = range
+                    .start()
+                    .map_or((0, 0), |(row, column)| (row + 1, column + 1));
+                sheets.push(json!({
+                    "index": index,
+                    "name": name,
+                    "rows": range.height(),
+                    "columns": range.width(),
+                    "first_row": first_row,
+                    "first_column": first_column,
+                }));
+            }
+            Err(error) => {
+                return refuse(
+                    "Could not read a worksheet",
+                    json!({ "path": path, "sheet": name, "error": error.to_string() }),
+                );
+            }
+        }
+    }
+
+    let selected = match &args.sheet {
+        None => 0,
+        Some(selector) => match names.iter().position(|name| name == selector) {
+            Some(index) => index,
+            None => match selector.parse::<usize>() {
+                Ok(index) if index < names.len() => index,
+                _ => {
+                    return refuse(
+                        "Sheet not found",
+                        json!({
+                            "path": path,
+                            "reason": "sheet_not_found",
+                            "sheets": names,
+                        }),
+                    );
+                }
+            },
+        },
+    };
+    let range = workbook
+        .worksheet_range(&names[selected])
+        .map_err(|error| format!("failed to read sheet: {error}"))?;
+    let first_row = range.start().map_or(1, |(row, _)| row as usize + 1);
+    let rows: Vec<RawRowShape> = range
+        .rows()
+        .take(max_rows)
+        .enumerate()
+        .map(|(offset, cells)| workbook_row_shape(first_row + offset, cells))
+        .collect();
+    if rows.is_empty() {
+        return refuse(
+            "No rows were available to inspect",
+            json!({ "path": path, "sheet": names[selected] }),
+        );
+    }
+
+    let modal_column_count = modal_positive_column_count(&rows);
+    let shape_rows = rows
+        .iter()
+        .map(|row| row_to_json(row, modal_column_count))
+        .collect::<Vec<_>>();
+    let mut result = json!({
+        "file": path,
+        "format": "xlsx",
+        "sheet": { "index": selected, "name": names[selected] },
+        "sheets": sheets,
+        "rows_requested": max_rows,
+        "rows_observed": rows.len(),
+        "summary": summarize_rows(&rows, modal_column_count),
+        "rows": shape_rows,
+    });
+    if args.suggest {
+        result["suggestions"] = suggestions(&rows, modal_column_count);
+    }
+
+    let witness_id = if append_witness_record {
+        match hash_file(&args.file) {
+            Ok((hash, bytes)) => append_peek_witness(args, Some(hash), bytes, &result),
+            Err(error) => {
+                eprintln!("Warning: Failed to hash workbook for the witness record: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    emit_json(&json!({
+        "version": ENVELOPE_VERSION,
+        "outcome": "SUCCESS",
+        "exit_code": 0,
+        "subcommand": "peek",
+        "result": result,
+        "witness_id": witness_id
+    }))?;
     Ok(0)
 }
 
@@ -684,7 +905,12 @@ fn round_confidence(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
 }
 
-fn append_peek_witness(args: &PeekArgs, input: &PeekInput, result: &Value) -> Option<String> {
+fn append_peek_witness(
+    args: &PeekArgs,
+    input_hash: Option<String>,
+    input_bytes: u64,
+    result: &Value,
+) -> Option<String> {
     let output_bytes = match serde_json::to_vec(result) {
         Ok(output_bytes) => output_bytes,
         Err(error) => {
@@ -697,15 +923,22 @@ fn append_peek_witness(args: &PeekArgs, input: &PeekInput, result: &Value) -> Op
         crate::current_binary_hash(),
         vec![WitnessInput {
             path: args.file.display().to_string(),
-            hash: input.blake3.clone(),
-            bytes: Some(input.total_bytes),
+            hash: input_hash,
+            bytes: Some(input_bytes),
         }],
-        json!({
-            "subcommand": "peek",
-            "rows": args.rows.max(1),
-            "suggest": args.suggest,
-            "file": args.file.display().to_string()
-        }),
+        {
+            let mut params = json!({
+                "subcommand": "peek",
+                "rows": args.rows.max(1),
+                "suggest": args.suggest,
+                "file": args.file.display().to_string()
+            });
+            // Recorded only when given, so CSV witness params are unchanged.
+            if let (Some(sheet), Some(object)) = (&args.sheet, params.as_object_mut()) {
+                object.insert("sheet".to_owned(), json!(sheet));
+            }
+            params
+        },
         "SUCCESS",
         0,
         format!("blake3:{}", blake3::hash(&output_bytes).to_hex()),

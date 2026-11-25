@@ -357,7 +357,8 @@ fn invalid_utf8_inside_the_inspected_rows_still_refuses() {
 #[test]
 fn non_csv_containers_are_refused_as_format_not_applicable() {
     let dir = tempfile::tempdir().expect("tempdir");
-    for name in ["book.xlsx", "data.parquet", "doc.pdf", "archive.zip"] {
+    // (.xlsx/.xls are supported workbooks since bd-jxd: a fake one is "could not open", below.)
+    for name in ["data.parquet", "doc.pdf", "archive.zip"] {
         let path = dir.path().join(name);
         fs::write(&path, b"PK\x03\x04 not really").unwrap();
         let output = run_fingerprint(&["peek", path.to_str().unwrap(), "--no-witness"]);
@@ -369,4 +370,197 @@ fn non_csv_containers_are_refused_as_format_not_applicable() {
             "{name}"
         );
     }
+}
+
+// ---- bd-jxd: workbooks and the shared inspection vocabulary -------------------------------------
+
+fn materialize_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/materialize")
+        .join(name)
+}
+
+fn peek_path(path: &Path, extra: &[&str]) -> Output {
+    let mut args = vec!["peek", path.to_str().expect("path"), "--no-witness"];
+    args.extend_from_slice(extra);
+    run_fingerprint(&args)
+}
+
+#[test]
+fn delimited_text_reports_its_format_in_the_shared_vocabulary() {
+    assert_eq!(peek_result("clean_flat.csv", &[])["format"], "csv");
+    assert_eq!(peek_result("tsv.tsv", &[])["format"], "tsv");
+}
+
+#[test]
+fn workbook_peek_reports_row_shapes_by_excel_row_number() {
+    // watl_msc.xlsx is the synthetic CMBS watchlist (tests/fixtures/materialize): title rows,
+    // a CREFC boilerplate row on 2, a label+value pair on 5, header on row 11, data rows 12-15
+    // and 17 with a blank row 16, footnotes on 19-20. Expected values come from that layout.
+    let output = peek_path(&materialize_fixture("watl_msc.xlsx"), &["--suggest"]);
+    assert_eq!(output.status.code(), Some(0));
+    let result = parse_stdout(&output)["result"].clone();
+    assert_eq!(result["format"], "xlsx");
+    assert_eq!(
+        result["sheet"],
+        serde_json::json!({"index": 0, "name": "Servicer Watch List"})
+    );
+    assert_eq!(
+        result["sheets"],
+        serde_json::json!([
+            {"index": 0, "name": "Servicer Watch List", "rows": 20, "columns": 6, "first_row": 1, "first_column": 1},
+            {"index": 1, "name": "Notes", "rows": 1, "columns": 1, "first_row": 1, "first_column": 1}
+        ])
+    );
+    let indexed: Vec<(u64, String)> = result["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["row_index"].as_u64().unwrap(),
+                r["shape_class"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    let expected = [
+        (1, "sparse-label"),
+        (2, "sparse-label"),
+        (3, "blank"),
+        (4, "blank"),
+        (5, "sparse-label"),
+        (6, "blank"),
+        (7, "blank"),
+        (8, "blank"),
+        (9, "blank"),
+        (10, "blank"),
+        (11, "dense-header-candidate"),
+        (12, "dense-data"),
+        (13, "dense-data"),
+        (14, "dense-data"),
+        (15, "dense-data"),
+        (16, "blank"),
+        (17, "dense-data"),
+        (18, "blank"),
+        (19, "sparse-label"),
+        (20, "sparse-label"),
+    ];
+    assert_eq!(
+        indexed,
+        expected
+            .iter()
+            .map(|(i, c)| (*i, (*c).to_owned()))
+            .collect::<Vec<_>>()
+    );
+    let summary = &result["summary"];
+    assert_eq!(summary["header_at_row"], 11);
+    assert_eq!(summary["data_starts_at"], 12);
+    assert_eq!(summary["modal_column_count"], 6);
+    assert_eq!(result["suggestions"]["profile_pre_parse"]["skip_rows"], 10);
+    // Excel types drive the classes: row 12 is mixed (L001), text, text, date, numeric, numeric.
+    assert_eq!(
+        result["rows"][11]["cell_type_counts"],
+        serde_json::json!({"boolean": 0, "date": 1, "empty": 0, "mixed": 1, "numeric": 2, "text": 2})
+    );
+    // No delimiter concept for a workbook.
+    assert!(result.get("delimiter").is_none());
+}
+
+#[test]
+fn workbook_peek_never_emits_a_cell_value_or_header_text() {
+    let output = peek_path(&materialize_fixture("watl_msc.xlsx"), &["--suggest"]);
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+    for value in [
+        "Harbor Plaza",
+        "Elm Court",
+        "North Gate",
+        "Station Square",
+        "12500000",
+        "8400000",
+        "Loan ID",
+        "Property Name",
+        "Servicer Status",
+        "CREFC",
+        "Synthetic Servicer Report",
+        "2027-03-01",
+        "Footnote",
+    ] {
+        assert!(!stdout.contains(value), "value {value} leaked: {stdout}");
+    }
+}
+
+#[test]
+fn workbook_sheet_selection_by_name_and_index_and_unknown_sheet_refusal() {
+    let path = materialize_fixture("watl_msc.xlsx");
+    for selector in ["Notes", "1"] {
+        let output = peek_path(&path, &["--sheet", selector]);
+        assert_eq!(output.status.code(), Some(0), "{selector}");
+        let result = parse_stdout(&output)["result"].clone();
+        assert_eq!(result["sheet"]["name"], "Notes", "{selector}");
+        assert_eq!(result["rows_observed"], 1);
+    }
+    for selector in ["Missing", "7"] {
+        let output = peek_path(&path, &["--sheet", selector]);
+        assert_eq!(output.status.code(), Some(2), "{selector}");
+        let envelope = parse_stdout(&output);
+        assert_eq!(envelope["refusal"]["detail"]["reason"], "sheet_not_found");
+        assert_eq!(
+            envelope["refusal"]["detail"]["sheets"],
+            serde_json::json!(["Servicer Watch List", "Notes"])
+        );
+    }
+}
+
+#[test]
+fn workbook_rows_flag_limits_rows_and_legacy_xls_and_corrupt_files_are_handled() {
+    let path = materialize_fixture("watl_msc.xlsx");
+    let result = parse_stdout(&peek_path(&path, &["--rows", "3"]))["result"].clone();
+    assert_eq!(result["rows_observed"], 3);
+
+    let files = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/files");
+    for name in ["sample.xlsx", "sample.xls"] {
+        let output = peek_path(&files.join(name), &[]);
+        assert_eq!(output.status.code(), Some(0), "{name}");
+        assert!(
+            parse_stdout(&output)["result"]["rows_observed"]
+                .as_u64()
+                .unwrap()
+                >= 1
+        );
+    }
+
+    let output = peek_path(&files.join("corrupt.xlsx"), &[]);
+    assert_eq!(output.status.code(), Some(2));
+    let envelope = parse_stdout(&output);
+    assert_eq!(envelope["refusal"]["code"], "E_BAD_INPUT");
+    assert_eq!(envelope["refusal"]["message"], "Could not open workbook");
+}
+
+#[test]
+fn workbook_witness_hashes_the_whole_file_and_records_the_sheet() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let witness = dir.path().join("witness.jsonl");
+    let path = materialize_fixture("watl_msc.xlsx");
+    let output = run_fingerprint_with_witness(
+        &["peek", path.to_str().unwrap(), "--sheet", "Notes"],
+        &witness,
+    );
+    assert_eq!(output.status.code(), Some(0));
+    let record: Value = serde_json::from_str(
+        fs::read_to_string(&witness)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    let bytes = fs::read(&path).unwrap();
+    assert_eq!(record["inputs"][0]["bytes"], bytes.len());
+    assert_eq!(
+        record["inputs"][0]["hash"],
+        format!("blake3:{}", blake3::hash(&bytes).to_hex())
+    );
+    assert_eq!(record["params"]["sheet"], "Notes");
+    let text = fs::read_to_string(&witness).unwrap();
+    assert!(!text.contains("Harbor Plaza"));
 }
