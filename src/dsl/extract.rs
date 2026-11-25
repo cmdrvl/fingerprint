@@ -43,6 +43,7 @@ fn extract_one(doc: &Document, section: &ExtractSection) -> Result<Option<Value>
         "text_match" => extract_text_match(doc, section),
         "region" => extract_region(doc, section),
         "element" => extract_element(doc, section),
+        "records" => extract_records(doc, section),
         other => Err(format!("unsupported extract type '{other}'")),
     }
 }
@@ -90,6 +91,26 @@ fn extract_range(doc: &Document, section: &ExtractSection) -> Result<Option<Valu
         }
         _ => Ok(None),
     }
+}
+
+/// XML `records` extract: the record count at `record_path` (locating, not projecting; the
+/// table itself is produced by `fingerprint materialize`).
+fn extract_records(doc: &Document, section: &ExtractSection) -> Result<Option<Value>, String> {
+    let record_path = section
+        .record_path
+        .as_deref()
+        .ok_or_else(|| "records extract requires 'record_path'".to_owned())?;
+    let Document::Xml(xml) = doc else {
+        return Ok(None);
+    };
+    let count = xml.count_at(record_path);
+    if count == 0 {
+        return Ok(None);
+    }
+    Ok(Some(json!({
+        "record_path": record_path,
+        "record_count": count,
+    })))
 }
 
 fn extract_section(doc: &Document, section: &ExtractSection) -> Result<Option<Value>, String> {

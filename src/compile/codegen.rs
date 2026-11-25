@@ -623,6 +623,8 @@ fn generate_extracted_code(extract: &[ExtractSection]) -> String {
                     reporting_date: {reporting_date},
                     selector: {selector},
                     text_regex: {text_regex},
+                    record_path: {record_path},
+                    columns: {columns},
                 }}"#,
             name = format_args!("{:?}", section.name),
             typ = format_args!("{:?}", section.r#type),
@@ -649,6 +651,8 @@ fn generate_extracted_code(extract: &[ExtractSection]) -> String {
             ),
             selector = codegen_option_string(section.selector.as_deref()),
             text_regex = codegen_option_string(section.text_regex.as_deref()),
+            record_path = codegen_option_string(section.record_path.as_deref()),
+            columns = codegen_string_vec(&section.columns),
         ));
     }
 

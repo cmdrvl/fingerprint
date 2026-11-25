@@ -12,6 +12,7 @@ const SUPPORTED_EXTRACT_TYPES: &[&str] = &[
     "text_match",
     "region",
     "element",
+    "records",
 ];
 
 pub fn validate_definition(definition: &FingerprintDefinition) -> Result<(), String> {
@@ -455,6 +456,35 @@ fn validate_extract_sections(format: &str, extract: &[ExtractSection]) -> Result
                     validate_selector("element.selector", selector)?;
                 }
                 validate_optional_element_regex(section.text_regex.as_deref())?;
+            }
+            "records" => {
+                if format != "xml" {
+                    return Err(format!(
+                        "extract '{}' of type 'records' requires format 'xml', found '{format}'",
+                        section.name
+                    ));
+                }
+                require_extract_field(section, section.record_path.as_ref(), "record_path")?;
+                if let Some(record_path) = &section.record_path {
+                    crate::document::xml::validate_path(record_path).map_err(|error| {
+                        format!("extract '{}' record_path: {error}", section.name)
+                    })?;
+                }
+                let mut seen = std::collections::BTreeSet::new();
+                for column in &section.columns {
+                    if column.trim().is_empty() || column.contains(['/', ':', '[', ']', '@', '*']) {
+                        return Err(format!(
+                            "extract '{}' columns must be local child element names (no '/', ':', predicates or '@'), found '{column}'",
+                            section.name
+                        ));
+                    }
+                    if !seen.insert(column.as_str()) {
+                        return Err(format!(
+                            "extract '{}' lists column '{column}' twice",
+                            section.name
+                        ));
+                    }
+                }
             }
             other => {
                 return Err(format!(

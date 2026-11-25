@@ -1001,7 +1001,17 @@ pub fn dsl_json_schema() -> String {
                     "name": { "type": "string", "minLength": 1 },
                     "type": {
                         "type": "string",
-                        "enum": ["range", "table", "section", "text_match", "region", "element"]
+                        "enum": ["range", "table", "section", "text_match", "region", "element", "records"]
+                    },
+                    "record_path": {
+                        "type": "string",
+                        "pattern": "^/",
+                        "description": "records extract (xml): absolute path of the repeating record element."
+                    },
+                    "columns": {
+                        "type": "array",
+                        "items": { "type": "string", "minLength": 1 },
+                        "description": "records extract (xml): child element names to project, in column order; empty means every leaf child in first-seen order."
                     },
                     "anchor_heading": { "type": "string" },
                     "index": { "type": "integer", "minimum": 0 },
@@ -1038,6 +1048,12 @@ pub fn dsl_json_schema() -> String {
                         "required": ["type"],
                     },
                     "then": { "required": ["selector"] },
+                }, {
+                    "if": {
+                        "properties": { "type": { "const": "records" } },
+                        "required": ["type"],
+                    },
+                    "then": { "required": ["record_path"] },
                 }, {
                     "if": { "required": ["reporting_date"] },
                     "then": { "properties": { "type": { "const": "region" } } },

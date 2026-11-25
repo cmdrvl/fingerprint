@@ -281,6 +281,226 @@ impl XmlDocument {
     }
 }
 
+/// A repeating-record projection of an XML document (see [`XmlDocument::project_records`]).
+#[derive(Debug)]
+pub struct RecordTable {
+    pub columns: Vec<String>,
+    /// One row per record, aligned with `columns`; a record without that child has "".
+    pub rows: Vec<Vec<String>>,
+    /// Non-leaf direct children that were left out, with how many times each occurred
+    /// (names and counts only).
+    pub nested_children: BTreeMap<String, u64>,
+    /// Byte span in the source file from the first record's start tag to the last record's end.
+    pub byte_start: u64,
+    pub byte_end: u64,
+}
+
+struct OpenRecord {
+    /// Stack depth (after pushing the record element) of the record itself.
+    depth: usize,
+    cells: BTreeMap<String, String>,
+    /// Direct child currently open: (name, text so far, saw a nested element).
+    child: Option<(String, String, bool)>,
+}
+
+impl XmlDocument {
+    /// Project every element at `record_path` as one row. Columns are the record's direct LEAF
+    /// children (elements without child elements): the `columns` given, in that order, or all of
+    /// them in first-seen order. Non-leaf children (nested or repeated structures) are not
+    /// flattened: they are left out and counted in `nested_children`, or refused when named in
+    /// `columns`. A leaf that appears twice in one record refuses (it has no single value).
+    pub fn project_records(
+        &self,
+        record_path: &str,
+        columns: &[String],
+    ) -> Result<RecordTable, String> {
+        let file = File::open(&self.path)
+            .map_err(|error| format!("failed opening '{}': {error}", self.path.display()))?;
+        let mut reader = NsReader::from_reader(BufReader::new(file));
+        let mut buffer = Vec::new();
+        let mut stack: Vec<String> = Vec::new();
+        let mut current_path = String::new();
+        let mut record: Option<OpenRecord> = None;
+        let mut order: Vec<String> = Vec::new();
+        let mut rows: Vec<BTreeMap<String, String>> = Vec::new();
+        let mut nested_children: BTreeMap<String, u64> = BTreeMap::new();
+        let (mut byte_start, mut byte_end) = (0u64, 0u64);
+
+        loop {
+            let position = reader.buffer_position() as u64;
+            let event = reader
+                .read_event_into(&mut buffer)
+                .map_err(|error| parse_error(&self.path, position, error))?;
+            match event {
+                Event::Start(ref element) | Event::Empty(ref element) => {
+                    let is_empty = matches!(event, Event::Empty(_));
+                    let name = local(element.local_name().as_ref());
+                    let parent_len = current_path.len();
+                    current_path.push('/');
+                    current_path.push_str(&name);
+                    let depth = stack.len() + 1;
+                    if let Some(open) = record.as_mut() {
+                        if depth == open.depth + 1 {
+                            // A direct child of the record opens.
+                            if is_empty {
+                                finish_child(
+                                    open,
+                                    &name,
+                                    String::new(),
+                                    false,
+                                    &mut order,
+                                    &mut nested_children,
+                                    columns,
+                                    rows.len(),
+                                )?;
+                            } else {
+                                open.child = Some((name.clone(), String::new(), false));
+                            }
+                        } else if depth > open.depth + 1
+                            && let Some((_, _, nested)) = open.child.as_mut()
+                        {
+                            *nested = true;
+                        }
+                    } else if current_path == record_path && !is_empty {
+                        if rows.is_empty() {
+                            byte_start = position;
+                        }
+                        record = Some(OpenRecord {
+                            depth,
+                            cells: BTreeMap::new(),
+                            child: None,
+                        });
+                    } else if current_path == record_path && is_empty {
+                        if rows.is_empty() {
+                            byte_start = position;
+                        }
+                        rows.push(BTreeMap::new());
+                        byte_end = reader.buffer_position() as u64;
+                    }
+                    if is_empty {
+                        current_path.truncate(parent_len);
+                    } else {
+                        stack.push(name);
+                    }
+                }
+                Event::End(_) => {
+                    let depth = stack.len();
+                    let name = stack.pop().unwrap_or_default();
+                    if let Some(open) = record.as_mut() {
+                        if depth == open.depth + 1 {
+                            if let Some((child_name, text, nested)) = open.child.take() {
+                                finish_child(
+                                    open,
+                                    &child_name,
+                                    text,
+                                    nested,
+                                    &mut order,
+                                    &mut nested_children,
+                                    columns,
+                                    rows.len(),
+                                )?;
+                            }
+                        } else if depth == open.depth
+                            && let Some(done) = record.take()
+                        {
+                            rows.push(done.cells);
+                            byte_end = reader.buffer_position() as u64;
+                        }
+                    }
+                    let new_len = current_path.len() - name.len() - 1;
+                    current_path.truncate(new_len);
+                }
+                Event::Text(ref text) => {
+                    if let Some(open) = record.as_mut()
+                        && stack.len() == open.depth + 1
+                        && let Some((_, collected, _)) = open.child.as_mut()
+                    {
+                        let raw = String::from_utf8_lossy(text.as_ref()).into_owned();
+                        collected.push_str(
+                            &unescape(&raw)
+                                .map_err(|error| parse_error(&self.path, position, error))?,
+                        );
+                    }
+                }
+                Event::CData(ref data) => {
+                    if let Some(open) = record.as_mut()
+                        && stack.len() == open.depth + 1
+                        && let Some((_, collected, _)) = open.child.as_mut()
+                    {
+                        collected.push_str(&String::from_utf8_lossy(data.as_ref()));
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+            buffer.clear();
+        }
+
+        if rows.is_empty() {
+            return Err(format!("no elements at record path '{record_path}'"));
+        }
+        let final_columns: Vec<String> = if columns.is_empty() {
+            order
+        } else {
+            columns.to_vec()
+        };
+        let table_rows = rows
+            .into_iter()
+            .map(|mut cells| {
+                final_columns
+                    .iter()
+                    .map(|column| cells.remove(column).unwrap_or_default())
+                    .collect()
+            })
+            .collect();
+        Ok(RecordTable {
+            columns: final_columns,
+            rows: table_rows,
+            nested_children,
+            byte_start,
+            byte_end,
+        })
+    }
+}
+
+/// Close a direct child of the open record: store a leaf's text, or count a non-leaf.
+#[allow(clippy::too_many_arguments)]
+fn finish_child(
+    open: &mut OpenRecord,
+    name: &str,
+    text: String,
+    nested: bool,
+    order: &mut Vec<String>,
+    nested_children: &mut BTreeMap<String, u64>,
+    columns: &[String],
+    record_index: usize,
+) -> Result<(), String> {
+    if nested {
+        if columns.iter().any(|column| column == name) {
+            return Err(format!(
+                "column '{name}' is not a leaf element (record {}): nested structures are not flattened",
+                record_index + 1
+            ));
+        }
+        *nested_children.entry(name.to_owned()).or_insert(0) += 1;
+        return Ok(());
+    }
+    if !columns.is_empty() && !columns.iter().any(|column| column == name) {
+        return Ok(());
+    }
+    if open.cells.contains_key(name) {
+        return Err(format!(
+            "leaf element '{name}' appears more than once in record {}: it has no single value",
+            record_index + 1
+        ));
+    }
+    if columns.is_empty() && !order.iter().any(|existing| existing == name) {
+        order.push(name.to_owned());
+    }
+    open.cells.insert(name.to_owned(), text.trim().to_owned());
+    Ok(())
+}
+
 /// A well-formed absolute element path: `/a/b/c`, local names only.
 pub fn validate_path(path: &str) -> Result<(), String> {
     let Some(rest) = path.strip_prefix('/') else {

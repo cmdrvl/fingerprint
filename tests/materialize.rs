@@ -712,3 +712,359 @@ fn html_padding_is_counted_not_silent() {
     let prov: Value = serde_json::from_slice(&fs::read(sidecar(&out)).unwrap()).unwrap();
     assert_eq!(prov["skipped"]["padded_rows"], 1);
 }
+
+// ---- XML repeating records, on the three REAL SEC filings (tests/fixtures/xml) ----------------
+
+const XML_DEFINITIONS: &str = r#"
+fingerprint_id: absee-assets.v1
+format: xml
+assertions:
+  - xml_root: assetData
+extract:
+  - name: assets
+    type: records
+    record_path: /assetData/assets
+"#;
+
+const XML_COMMENTS_DEFINITION: &str = r#"
+fingerprint_id: absee-comments.v1
+format: xml
+assertions:
+  - xml_root: comments
+extract:
+  - name: comments
+    type: records
+    record_path: /comments/commentData
+"#;
+
+const XML_NPORT_DEFINITION: &str = r#"
+fingerprint_id: nport-holdings.v1
+format: xml
+assertions:
+  - xml_root: edgarSubmission
+extract:
+  - name: holdings
+    type: records
+    record_path: /edgarSubmission/formData/invstOrSecs/invstOrSec
+    columns: [name, cusip, balance, valUSD]
+  - name: nested_column
+    type: records
+    record_path: /edgarSubmission/formData/invstOrSecs/invstOrSec
+    columns: [name, identifiers]
+"#;
+
+fn xml_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/xml")
+        .join(name)
+}
+
+fn records(defs: &Scratch, id: &str, file: &Path, extract: &str, out: &Path) -> Output {
+    materialize(
+        defs,
+        &[s(file), "--fp", id, "--extract", extract, "--out", s(out)],
+    )
+}
+
+fn read_csv(path: &Path) -> (Vec<String>, Vec<Vec<String>>) {
+    let mut reader = csv::ReaderBuilder::new()
+        .flexible(false)
+        .from_path(path)
+        .unwrap();
+    let headers = reader
+        .headers()
+        .unwrap()
+        .iter()
+        .map(str::to_owned)
+        .collect();
+    let rows = reader
+        .records()
+        .map(|r| r.unwrap().iter().map(str::to_owned).collect())
+        .collect();
+    (headers, rows)
+}
+
+#[test]
+fn abs_ee_exh_102_wide_records_project_to_a_rectangular_table_with_nested_children_counted() {
+    let defs = defs(&[("absee-assets.v1", XML_DEFINITIONS)]);
+    let out_dir = Scratch::new("xml102");
+    let out = out_dir.path("assets.csv");
+    let file = xml_fixture("abs-ee/exh_102.xml");
+    let result = records(&defs, "absee-assets.v1", &file, "assets", &out);
+    assert_eq!(
+        result.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+
+    // Facts computed independently with Python's xml.etree: 47 assets, 68 distinct leaf
+    // children in first-seen order, 737 empty cells (optional fields absent from some assets),
+    // first asset's loan amount, 53 nested `property` children left out.
+    let (headers, rows) = read_csv(&out);
+    assert_eq!(rows.len(), 47);
+    assert_eq!(headers.len(), 68);
+    assert_eq!(
+        &headers[..3],
+        [
+            "assetTypeNumber",
+            "assetNumber",
+            "reportingPeriodBeginningDate"
+        ]
+    );
+    assert_eq!(headers[67], "mostRecentMasterServicerReturnDate");
+    assert!(
+        !headers.iter().any(|h| h == "property"),
+        "nested children are not columns"
+    );
+    let column = |name: &str| headers.iter().position(|h| h == name).unwrap();
+    assert_eq!(rows[0][column("originalLoanAmount")], "95000000.00000000");
+    assert_eq!(rows[0][column("assetNumber")], "1");
+    assert_eq!(rows[46][column("assetNumber")], "47");
+    assert_eq!(
+        rows.iter().flatten().filter(|cell| cell.is_empty()).count(),
+        737
+    );
+
+    let prov: Value = serde_json::from_slice(&fs::read(sidecar(&out)).unwrap()).unwrap();
+    assert_eq!(
+        prov["skipped"]["nested_children"],
+        serde_json::json!({"property": 53})
+    );
+    let locator = &prov["extract"]["locator"];
+    assert_eq!(locator["kind"], "xml_records");
+    assert_eq!(locator["record_path"], "/assetData/assets");
+    assert_eq!(locator["record_count"], 47);
+    assert_eq!(prov["source"]["bytes_hash"], blake3_of(&file));
+
+    // The pinned byte span starts at the first <assets> tag and ends right after the last
+    // </assets> of the source file.
+    let source = fs::read(&file).unwrap();
+    let start = locator["byte_offsets"]["start"].as_u64().unwrap() as usize;
+    let end = locator["byte_offsets"]["end"].as_u64().unwrap() as usize;
+    assert!(source[start..].starts_with(b"<assets>"));
+    assert!(source[..end].ends_with(b"</assets>"));
+}
+
+#[test]
+fn abs_ee_exh_103_prose_records_keep_free_text_exactly_in_every_format() {
+    let defs = defs(&[("absee-comments.v1", XML_COMMENTS_DEFINITION)]);
+    let out_dir = Scratch::new("xml103");
+    let file = xml_fixture("abs-ee/exh_103.xml");
+    let mut hashes = Vec::new();
+    for name in ["c.csv", "c.jsonl", "c.parquet"] {
+        let result = records(
+            &defs,
+            "absee-comments.v1",
+            &file,
+            "comments",
+            &out_dir.path(name),
+        );
+        assert_eq!(result.status.code(), Some(0), "{name}");
+        hashes.push(
+            stdout_json(&result)["content_hash"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    assert!(hashes.iter().all(|h| h == &hashes[0]), "{hashes:?}");
+
+    let (headers, rows) = read_csv(&out_dir.path("c.csv"));
+    assert_eq!(headers, ["itemNumber", "fieldName", "comment"]);
+    assert_eq!(rows.len(), 32);
+    // Expected cells copied from Python's xml.etree: the first and second records.
+    assert_eq!(rows[0][0], "Item 2(c)(4)");
+    assert_eq!(rows[0][1], "Original Loan Term Number");
+    assert_eq!(
+        rows[0][2],
+        "For anticipated repayment date mortgage loans: the original loan term number represents the term of the mortgage loan through the anticipated repayment date, rather than the actual Maturity Date."
+    );
+    assert_eq!(rows[1][1], "Loan Structure");
+    // Internal double space and the parentheses survive untouched.
+    assert!(rows[1][2].contains("Hilton Hawaiian Village (Asset Number 5),  the mortgage loan"));
+    let item_numbers: std::collections::BTreeSet<&String> = rows.iter().map(|r| &r[0]).collect();
+    assert_eq!(item_numbers.len(), 32);
+
+    // JSONL carries the same text.
+    let jsonl = fs::read_to_string(out_dir.path("c.jsonl")).unwrap();
+    let second: Value = serde_json::from_str(jsonl.lines().nth(1).unwrap()).unwrap();
+    assert_eq!(second["comment"], rows[1][2].as_str());
+}
+
+#[test]
+fn nport_p_holdings_project_with_explicit_columns_and_nested_children_counted() {
+    let defs = defs(&[("nport-holdings.v1", XML_NPORT_DEFINITION)]);
+    let out_dir = Scratch::new("xmlnport");
+    let out = out_dir.path("holdings.csv");
+    let result = records(
+        &defs,
+        "nport-holdings.v1",
+        &xml_fixture("nport-p/primary_doc.xml"),
+        "holdings",
+        &out,
+    );
+    assert_eq!(
+        result.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+    let (headers, rows) = read_csv(&out);
+    assert_eq!(headers, ["name", "cusip", "balance", "valUSD"]);
+    assert_eq!(rows.len(), 45);
+    assert_eq!(
+        rows[0],
+        [
+            "SA MID CAP INDEX",
+            "000000000",
+            "57662.06000000",
+            "962379.75000000"
+        ]
+    );
+    let prov: Value = serde_json::from_slice(&fs::read(sidecar(&out)).unwrap()).unwrap();
+    assert_eq!(
+        prov["skipped"]["nested_children"],
+        serde_json::json!({"identifiers": 45, "securityLending": 45})
+    );
+    assert_eq!(prov["extract"]["locator"]["columns"], "explicit");
+
+    // Byte-identical on repeat in every format.
+    for name in ["r.csv", "r.jsonl", "r.parquet"] {
+        let a = Scratch::new("xmlrep-a");
+        let b = Scratch::new("xmlrep-b");
+        for dir in [&a, &b] {
+            let r = records(
+                &defs,
+                "nport-holdings.v1",
+                &xml_fixture("nport-p/primary_doc.xml"),
+                "holdings",
+                &dir.path(name),
+            );
+            assert_eq!(r.status.code(), Some(0), "{name}");
+        }
+        assert_eq!(
+            fs::read(a.path(name)).unwrap(),
+            fs::read(b.path(name)).unwrap(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn xml_records_refuse_what_cannot_be_flattened_without_leaking_text() {
+    let defs = defs(&[
+        ("nport-holdings.v1", XML_NPORT_DEFINITION),
+        ("absee-assets.v1", XML_DEFINITIONS),
+    ]);
+    let out_dir = Scratch::new("xmlrefuse");
+
+    // Naming a nested element as a column refuses.
+    let out = out_dir.path("n.csv");
+    let result = records(
+        &defs,
+        "nport-holdings.v1",
+        &xml_fixture("nport-p/primary_doc.xml"),
+        "nested_column",
+        &out,
+    );
+    let (code, detail) = refusal(&result);
+    assert_eq!(code, "E_PROJECTION");
+    assert!(
+        detail["message"]
+            .as_str()
+            .unwrap()
+            .contains("'identifiers' is not a leaf element")
+    );
+    assert!(!out.exists());
+
+    // A leaf repeated inside one record has no single value: refuse, and never echo its text.
+    let file = out_dir.path("dup.xml");
+    fs::write(
+        &file,
+        "<assetData><assets><a>SECRET-VALUE-XYZ</a><a>SECRET-VALUE-ABC</a></assets></assetData>",
+    )
+    .unwrap();
+    let out = out_dir.path("d.csv");
+    let result = records(&defs, "absee-assets.v1", &file, "assets", &out);
+    let (code, detail) = refusal(&result);
+    assert_eq!(code, "E_PROJECTION");
+    assert!(
+        detail["message"]
+            .as_str()
+            .unwrap()
+            .contains("appears more than once in record 1")
+    );
+    let text = detail.to_string() + &String::from_utf8_lossy(&result.stderr);
+    assert!(!text.contains("SECRET-VALUE"), "{text}");
+    assert!(!out.exists());
+
+    // No record at the path.
+    let file = out_dir.path("none.xml");
+    fs::write(&file, "<assetData><other/></assetData>").unwrap();
+    let out = out_dir.path("e.csv");
+    let (code, detail) = refusal(&records(&defs, "absee-assets.v1", &file, "assets", &out));
+    assert_eq!(code, "E_PROJECTION");
+    assert!(
+        detail["message"]
+            .as_str()
+            .unwrap()
+            .contains("no elements at record path")
+    );
+
+    // A different document kind for an xml `records` extract: the real N-PORT-P is not assetData.
+    let (code, _) = refusal(&records(
+        &defs,
+        "absee-assets.v1",
+        &xml_fixture("nport-p/primary_doc.xml"),
+        "assets",
+        &out_dir.path("m.csv"),
+    ));
+    assert_eq!(code, "E_NOT_MATCHED");
+}
+
+#[test]
+fn records_extracts_are_validated_by_compile_check() {
+    let dir = Scratch::new("recheck");
+    let check = |yaml: &str| -> Output {
+        let path = dir.path("def.fp.yaml");
+        fs::write(&path, yaml).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_fingerprint"))
+            .args(["compile", s(&path), "--check"])
+            .output()
+            .unwrap()
+    };
+    assert_eq!(check(XML_DEFINITIONS).status.code(), Some(0));
+    assert_eq!(check(XML_NPORT_DEFINITION).status.code(), Some(0));
+    for (yaml, needle) in [
+        (
+            "fingerprint_id: x.v1\nformat: csv\nassertions:\n  - filename_regex:\n      pattern: x\nextract:\n  - name: r\n    type: records\n    record_path: /a\n",
+            "requires format 'xml'",
+        ),
+        (
+            "fingerprint_id: x.v1\nformat: xml\nassertions:\n  - xml_root: a\nextract:\n  - name: r\n    type: records\n",
+            "requires field 'record_path'",
+        ),
+        (
+            "fingerprint_id: x.v1\nformat: xml\nassertions:\n  - xml_root: a\nextract:\n  - name: r\n    type: records\n    record_path: a/b\n",
+            "must start with '/'",
+        ),
+        (
+            "fingerprint_id: x.v1\nformat: xml\nassertions:\n  - xml_root: a\nextract:\n  - name: r\n    type: records\n    record_path: /a\n    columns: [x, x]\n",
+            "lists column 'x' twice",
+        ),
+        (
+            "fingerprint_id: x.v1\nformat: xml\nassertions:\n  - xml_root: a\nextract:\n  - name: r\n    type: records\n    record_path: /a\n    columns: [\"p:x\"]\n",
+            "local child element names",
+        ),
+    ] {
+        let out = check(yaml);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.status.code(), Some(2), "{needle}: {text}");
+        assert!(text.contains(needle), "expected '{needle}' in: {text}");
+    }
+}

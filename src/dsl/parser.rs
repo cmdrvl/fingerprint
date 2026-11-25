@@ -56,6 +56,13 @@ pub struct ExtractSection {
     /// Optional visible text filter for the opt-in HTML source-element bounds extract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_regex: Option<String>,
+    /// XML `records` extract: absolute path of the repeating record element (`/assetData/assets`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_path: Option<String>,
+    /// XML `records` extract: child element names to project, in column order. Empty means
+    /// every leaf child, in first-seen order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<String>,
 }
 
 /// An explicit author-selected reporting-date role; no visual or date-role inference.

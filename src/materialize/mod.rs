@@ -2,7 +2,7 @@
 
 //! `fingerprint materialize <FILE> --fp <ID> --extract <NAME> --out <PATH> [--format ...]`
 //! (bd-uai): deterministically project a matched `extract:` section of a non-flat document
-//! (an XLSX header-anchored range, an HTML region) into a clean CSV / JSONL / Parquet table plus a
+//! (an XLSX header-anchored range, an HTML region, XML repeating records) into a clean CSV / JSONL / Parquet table plus a
 //! provenance sidecar that pins what it came from.
 //!
 //! Fail closed: an unmatched document, an ambiguous child routing, an unknown extract, an
@@ -285,6 +285,30 @@ fn project_section(
                 )
             })
         }
+        ("records", Document::Xml(xml)) => {
+            let record_path = section.record_path.as_deref().unwrap_or_default();
+            let table = xml
+                .project_records(record_path, &section.columns)
+                .map_err(|error| {
+                    Refusal::new(
+                        "E_PROJECTION",
+                        error,
+                        json!({ "extract": section.name, "record_path": record_path }),
+                    )
+                })?;
+            Ok(Projection {
+                locator: json!({
+                    "kind": "xml_records",
+                    "record_path": record_path,
+                    "record_count": table.rows.len(),
+                    "byte_offsets": { "start": table.byte_start, "end": table.byte_end },
+                    "columns": if section.columns.is_empty() { "all_leaf_children" } else { "explicit" },
+                }),
+                skipped: json!({ "nested_children": table.nested_children }),
+                headers: table.columns,
+                rows: table.rows,
+            })
+        }
         ("region", Document::Html(html)) => {
             let extracted = crate::dsl::extract::extract(document, std::slice::from_ref(section))
                 .map_err(|error| {
@@ -315,7 +339,7 @@ fn project_section(
                 "extract_type": kind,
                 "document": document_kind(document),
                 "file": file.display().to_string(),
-                "supported": ["range on xlsx", "region on html"],
+                "supported": ["range on xlsx", "region on html", "records on xml"],
             }),
         )),
     }
