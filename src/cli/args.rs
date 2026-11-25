@@ -65,6 +65,8 @@ pub enum Command {
     Doctor(DoctorArgs),
     /// Inspect delimited row shape without emitting cell content.
     Peek(PeekArgs),
+    /// Match files or directories directly, with no vacuum | hashbytes pipe.
+    Match(MatchArgs),
     /// Compile DSL fingerprint to Rust crate
     Compile {
         /// DSL fingerprint file (.fp.yaml)
@@ -145,6 +147,53 @@ pub enum Command {
         #[arg(long = "out", visible_alias = "output")]
         out: Option<PathBuf>,
     },
+}
+
+/// Output view for `fingerprint match`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum MatchView {
+    /// Per-file `fingerprint.v0` JSONL, identical to the piped run mode (default).
+    Full,
+    /// One bounded summary object: counts, per-family breakdown, top failed assertions.
+    Brief,
+    /// What changed since a previous `--view full` output (requires `--since`).
+    Delta,
+}
+
+#[derive(Debug, Args)]
+pub struct MatchArgs {
+    /// Files or directories to match (directories are walked recursively, sorted, symlinks
+    /// not followed).
+    #[arg(value_name = "PATH", required = true)]
+    pub paths: Vec<PathBuf>,
+
+    /// Fingerprint ID to test (repeatable; evaluated in CLI order, first match wins)
+    #[arg(long = "fp", alias = "fingerprint", value_name = "ID", required = true)]
+    pub fingerprints: Vec<String>,
+
+    /// Include assertion failure context and evaluate all assertions
+    #[arg(long)]
+    pub diagnose: bool,
+
+    /// Output view
+    #[arg(long, value_enum, default_value = "full")]
+    pub view: MatchView,
+
+    /// Previous `--view full` output to compare against (required by `--view delta`)
+    #[arg(long, value_name = "PREV_OUTPUT", requires = "view")]
+    pub since: Option<PathBuf>,
+
+    /// Number of parallel workers (default: CPU count)
+    #[arg(long)]
+    pub jobs: Option<usize>,
+
+    /// Emit progress to stderr
+    #[arg(long)]
+    pub progress: bool,
+
+    /// Accept structured-output intent; match output is already JSON/JSONL
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]

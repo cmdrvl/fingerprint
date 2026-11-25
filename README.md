@@ -463,6 +463,22 @@ Peek mode is read-only. It inspects CSV-like row shape and emits metadata only, 
 | `--suggest` | flag | | Include `profile_pre_parse` suggestions |
 | `--no-witness` | flag | | Suppress witness ledger recording |
 
+### Match mode (no pipes)
+
+```bash
+fingerprint match ./dataroom/ --fp cmbs-watl.v1 --fp csv.v0 [--diagnose] [--view full|brief|delta] [--since PREV.jsonl]
+```
+
+Match mode replaces `vacuum <DIR> | hashbytes | fingerprint --fp ...` for a handful of files or one data room. It walks the PATHs itself (files only, directories recursively, hidden files included, symlinks not followed, results sorted by path and de-duplicated), hashes each file with blake3 in-process, and runs the same pipeline as piped mode: the default `--view full` emits the same `fingerprint.v0` JSONL records and the same exit codes (`0` all matched, `1` partial, `2` refusal). An unreadable file becomes a skipped record with a `fingerprint` warning (outcome partial). Piped manifest mode is unchanged.
+
+| View | Output |
+|------|--------|
+| `full` (default) | per-file `fingerprint.v0` JSONL |
+| `brief` | one bounded object (`fingerprint.brief.v0`): counts (matched / unmatched / ambiguous / skipped), per-family breakdown (top 10), top 5 failed assertions with `nearest_match`, `refs.output_hash` of the full view |
+| `delta --since PREV` | one object (`fingerprint.delta.v0`) comparing to a previous `--view full` output by path: `newly_matched`, `regressed`, `changed_family`, `content_changed`, `new_files`, `removed_files`, exact counts, at most 5 paths per bucket |
+
+`--view` never changes the exit code. Not yet done: bare `fingerprint <PATH>` shorthand when stdin is a TTY (use `match`).
+
 ### Struct-check mode
 
 Directory completeness verification — reads `vacuum.v0` JSONL and checks whether directories contain the required files.

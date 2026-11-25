@@ -4,6 +4,7 @@
 pub mod cli;
 pub mod compile;
 pub mod config;
+pub mod direct;
 pub mod doctor;
 pub mod document;
 pub mod dsl;
@@ -129,6 +130,7 @@ pub fn run() -> u8 {
             }
         }
         Some(Command::Witness { action }) => handle_witness_command(action),
+        Some(Command::Match(args)) => handle_match_command(args, cli.no_witness),
         Some(Command::Peek(args)) => match peek::run(&args, !cli.no_witness) {
             Ok(code) => code,
             Err(error) => {
@@ -238,6 +240,7 @@ fn is_subcommand_token(arg: &std::ffi::OsStr) -> bool {
                 | "struct-check"
                 | "doctor"
                 | "peek"
+                | "match"
         )
     )
 }
@@ -323,11 +326,28 @@ fn describe_run_input(input_path: Option<&std::path::Path>) -> witness::record::
     }
 }
 
+/// What `fingerprint match` records as its input: the PATH arguments and the synthesized
+/// `hash.v0` manifest it fed to the pipeline (so the witness pins exactly what was matched).
+struct DirectWitnessInput {
+    paths: Vec<String>,
+    manifest_bytes: Vec<u8>,
+}
+
 fn append_run_mode_witness(
     cli: &cli::Cli,
     normalized_jobs: usize,
     outcome: cli::exit::Outcome,
     output_bytes: &[u8],
+) {
+    append_run_mode_witness_for(cli, normalized_jobs, outcome, output_bytes, None);
+}
+
+fn append_run_mode_witness_for(
+    cli: &cli::Cli,
+    normalized_jobs: usize,
+    outcome: cli::exit::Outcome,
+    output_bytes: &[u8],
+    direct: Option<&DirectWitnessInput>,
 ) {
     use progress::reporter::report_warning;
     use witness::ledger::{append, ledger_path, ledger_path_for_append};
@@ -355,12 +375,28 @@ fn append_run_mode_witness(
     let witness_record = WitnessRecord::new(
         env!("CARGO_PKG_VERSION").to_owned(),
         current_binary_hash(),
-        vec![describe_run_input(cli.input.as_deref())],
-        serde_json::json!({
-            "fingerprints": cli.fingerprints,
-            "jobs": normalized_jobs,
-            "input": cli.input.as_ref().map(|path| path.display().to_string())
-        }),
+        match direct {
+            Some(direct) => vec![witness::record::WitnessInput {
+                path: format!("match:{}", direct.paths.join(",")),
+                hash: Some(format!(
+                    "blake3:{}",
+                    blake3::hash(&direct.manifest_bytes).to_hex()
+                )),
+                bytes: Some(u64::try_from(direct.manifest_bytes.len()).unwrap_or(u64::MAX)),
+            }],
+            None => vec![describe_run_input(cli.input.as_deref())],
+        },
+        {
+            let mut params = serde_json::json!({
+                "fingerprints": cli.fingerprints,
+                "jobs": normalized_jobs,
+                "input": cli.input.as_ref().map(|path| path.display().to_string())
+            });
+            if let (Some(direct), Some(object)) = (direct, params.as_object_mut()) {
+                object.insert("paths".to_owned(), serde_json::json!(direct.paths));
+            }
+            params
+        },
         match outcome {
             cli::exit::Outcome::AllMatched => "ALL_MATCHED",
             cli::exit::Outcome::Partial => "PARTIAL",
@@ -836,6 +872,19 @@ fn handle_struct_check_command(
 
 /// Handle default run mode (fingerprint processing).
 fn handle_run_mode(cli: cli::Cli) -> u8 {
+    run_mode_with(cli, None)
+}
+
+/// A `fingerprint match` run: the records come from walking PATHs, not from a manifest, and
+/// the output may be a summary view instead of per-file JSONL.
+struct DirectRun {
+    records: Vec<serde_json::Value>,
+    paths: Vec<String>,
+    view: cli::args::MatchView,
+    previous: Option<Vec<serde_json::Value>>,
+}
+
+fn run_mode_with(cli: cli::Cli, direct: Option<DirectRun>) -> u8 {
     use cli::exit::Outcome;
     use pipeline::enricher::enrich_record_with_fingerprints;
     use pipeline::parallel::process_parallel_for_each;
@@ -866,11 +915,27 @@ fn handle_run_mode(cli: cli::Cli) -> u8 {
         return emit_run_mode_refusal(&cli, &refusal);
     }
 
-    // Read input records
-    let records = match read_input_records(&cli.input) {
-        Ok(recs) => recs,
-        Err(error) => return emit_run_mode_refusal(&cli, &build_bad_input_refusal(error)),
+    // Read input records (or take the ones `match` synthesized from its PATHs)
+    let (records, direct) = match direct {
+        Some(mut run) => (std::mem::take(&mut run.records), Some(run)),
+        None => match read_input_records(&cli.input) {
+            Ok(recs) => (recs, None),
+            Err(error) => return emit_run_mode_refusal(&cli, &build_bad_input_refusal(error)),
+        },
     };
+    let direct_witness = direct.as_ref().map(|run| {
+        let mut manifest_bytes = Vec::new();
+        for record in &records {
+            if let Ok(line) = serde_json::to_vec(record) {
+                manifest_bytes.extend_from_slice(&line);
+                manifest_bytes.push(b'\n');
+            }
+        }
+        DirectWitnessInput {
+            paths: run.paths.clone(),
+            manifest_bytes,
+        }
+    });
 
     let _diagnose_guard = DiagnoseModeGuard::new(cli.diagnose);
     let normalized_jobs = normalize_run_jobs(cli.jobs);
@@ -914,7 +979,7 @@ fn handle_run_mode(cli: cli::Cli) -> u8 {
         },
     );
 
-    let output_bytes = match serialize_records_to_jsonl_bytes(&enriched_records) {
+    let full_bytes = match serialize_records_to_jsonl_bytes(&enriched_records) {
         Ok(bytes) => bytes,
         Err(error) => {
             eprintln!("Error serializing output: {}", error);
@@ -922,14 +987,111 @@ fn handle_run_mode(cli: cli::Cli) -> u8 {
         }
     };
 
+    // `--view brief|delta` replace the per-file JSONL with one bounded summary object. The exit
+    // code is the run's outcome in every view, and the summary's refs.output_hash is the hash
+    // of the full per-file output for the same run.
+    let output_bytes = match direct.as_ref().map(|run| run.view) {
+        Some(cli::args::MatchView::Brief) => {
+            let full_hash = format!("blake3:{}", blake3::hash(&full_bytes).to_hex());
+            summary_bytes(&direct::brief(&enriched_records, &full_hash))
+        }
+        Some(cli::args::MatchView::Delta) => {
+            let full_hash = format!("blake3:{}", blake3::hash(&full_bytes).to_hex());
+            let previous = direct
+                .as_ref()
+                .and_then(|run| run.previous.as_deref())
+                .unwrap_or(&[]);
+            summary_bytes(&direct::delta(&enriched_records, previous, &full_hash))
+        }
+        _ => full_bytes,
+    };
+
     if let Err(error) = write_stdout_bytes(&output_bytes) {
         eprintln!("Error writing output: {}", error);
         return 2;
     }
 
-    append_run_mode_witness(&cli, normalized_jobs, outcome, &output_bytes);
+    append_run_mode_witness_for(
+        &cli,
+        normalized_jobs,
+        outcome,
+        &output_bytes,
+        direct_witness.as_ref(),
+    );
 
     outcome.exit_code()
+}
+
+fn summary_bytes(value: &serde_json::Value) -> Vec<u8> {
+    let mut bytes = serde_json::to_vec(value).unwrap_or_default();
+    bytes.push(b'\n');
+    bytes
+}
+
+/// `fingerprint match <PATH>... --fp <ID>...`: walk, hash and match in one process.
+fn handle_match_command(args: cli::args::MatchArgs, no_witness: bool) -> u8 {
+    use cli::args::MatchView;
+
+    if args.view == MatchView::Delta && args.since.is_none() {
+        eprintln!("Error: --view delta requires --since <previous --view full output>");
+        return 2;
+    }
+    if args.view != MatchView::Delta && args.since.is_some() {
+        eprintln!("Error: --since only applies to --view delta");
+        return 2;
+    }
+    let previous = match args.since.as_deref() {
+        Some(path) => {
+            let bytes = match std::fs::read(path) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    eprintln!("Error: cannot read --since '{}': {error}", path.display());
+                    return 2;
+                }
+            };
+            match direct::parse_previous(&bytes) {
+                Ok(records) => Some(records),
+                Err(error) => {
+                    eprintln!("Error: --since '{}': {error}", path.display());
+                    return 2;
+                }
+            }
+        }
+        None => None,
+    };
+    let records = match direct::build_records(&args.paths) {
+        Ok(records) => records,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            return 2;
+        }
+    };
+
+    let run = DirectRun {
+        records,
+        paths: args
+            .paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect(),
+        view: args.view,
+        previous,
+    };
+    let cli = cli::Cli {
+        command: None,
+        input: None,
+        json: args.json,
+        robot_triage: false,
+        fingerprints: args.fingerprints,
+        list: false,
+        jobs: args.jobs,
+        no_witness,
+        progress: args.progress,
+        diagnose: args.diagnose,
+        describe: false,
+        schema: false,
+    };
+    run_mode_with(cli, Some(run))
 }
 
 /// Trust configuration file format (YAML).
