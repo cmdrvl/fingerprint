@@ -250,6 +250,20 @@ fn assertion_base_name(assertion: &crate::dsl::assertions::Assertion) -> String 
             format!("json_keys_include__{}", literal_excerpt(path, 24, true))
         }
         Assertion::JsonRecordCount { .. } => "json_record_count".to_owned(),
+        Assertion::ParquetColumnExists(column) => {
+            format!(
+                "parquet_column_exists__{}",
+                literal_excerpt(column, 24, true)
+            )
+        }
+        Assertion::ParquetColumnType { column, .. } => {
+            format!("parquet_column_type__{}", literal_excerpt(column, 24, true))
+        }
+        Assertion::ParquetRowCount { .. } => "parquet_row_count".to_owned(),
+        Assertion::ParquetRowGroups { .. } => "parquet_row_groups".to_owned(),
+        Assertion::ParquetKvMetadata { key, .. } => {
+            format!("parquet_kv_metadata__{}", literal_excerpt(key, 24, true))
+        }
     }
 }
 

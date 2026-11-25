@@ -72,7 +72,7 @@
     { "name": "NO_COLOR", "description": "Disable ANSI terminal styling" },
     { "name": "TERM", "description": "Terminal capability hint" }
   ],
-  "formats": ["fingerprint.v0 JSONL", "operator.v1 JSON", "cmdrvl.doctor.v1 JSON", "csv", "xlsx", "pdf", "html", "markdown", "text", "json", "jsonl"],
+  "formats": ["fingerprint.v0 JSONL", "operator.v1 JSON", "cmdrvl.doctor.v1 JSON", "csv", "xlsx", "pdf", "html", "markdown", "text", "json", "jsonl", "parquet"],
   "side_effects": {
     "reads_files": true,
     "writes_files": true,

@@ -49,6 +49,7 @@ and its main target. Names are useful in diagnostics and tests.
 | `text` | Plain text file. | Text assertions and `filename_regex`. |
 | `json` | A single JSON document, parsed whole (refused over 256 MiB: use `jsonl`). | `json_*` assertions and `filename_regex`. |
 | `jsonl` | JSON Lines (`.jsonl`/`.ndjson`), streamed line by line; every non-empty line must parse. Path assertions run on the first record. | `json_*` assertions and `filename_regex`. |
+| `parquet` | Footer metadata only (schema, row groups, row count, key/value metadata). No column chunk is read or decompressed, so cost is independent of file size. | `parquet_*` assertions and `filename_regex`. |
 
 JSON paths are a deliberately small subset of JSONPath: `$`, `.key`, `[index]`. No wildcards, filters or recursive descent, so a path names exactly one place. Diagnose context for a failed path reports key names and types only, never values.
 
@@ -85,6 +86,11 @@ in parity with `fingerprint compile --schema`.
 | `node_text_regex` | `html` only | `selector`, `pattern`, optional `min_matches` default `1` | Text of selected DOM nodes matches `pattern` enough times. |
 | `page_count` | `pdf` only | at least one of `min` or `max` | PDF page count is within bounds. |
 | `page_section_count` | `html` only | at least one of `min` or `max` | Existing HTML page partitions stay within bounds. |
+| `parquet_column_exists` | `parquet` | string column path | The footer schema has that leaf column (nested leaves are dotted). |
+| `parquet_column_type` | `parquet` | `column`, `parquet_type` | The leaf column has that logical (`string`, `decimal`, `date`, `timestamp`, ...) or physical (`int64`, `double`, ...) type. |
+| `parquet_kv_metadata` | `parquet` | `key`, optional `pattern` | The footer key/value metadata has `key` (and its value matches `pattern`; the value is never printed). |
+| `parquet_row_count` | `parquet` | at least one of `min` or `max` | Footer total row count is within bounds. |
+| `parquet_row_groups` | `parquet` | at least one of `min` or `max` | Footer row group count is within bounds. |
 | `range_non_null` | `xlsx`, `csv` | `sheet`, `range` | All cells in the range are populated. |
 | `range_populated` | `xlsx`, `csv` | `sheet`, `range`, `min_pct` | Range population ratio is at least `min_pct`. |
 | `section_min_lines` | `html`, `markdown`, `pdf` with `text_path` | `heading`, `min_lines` | Section under matching heading has at least `min_lines`. |

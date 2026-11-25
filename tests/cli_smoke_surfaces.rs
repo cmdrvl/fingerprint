@@ -95,7 +95,8 @@ fn smoke_describe_schema_and_list_exit_zero() {
             "markdown",
             "text",
             "json",
-            "jsonl"
+            "jsonl",
+            "parquet"
         ]),
         "--describe must advertise the protocol formats and every supported runtime document format, including html (operator.v1 moved `formats` to the top level)"
     );

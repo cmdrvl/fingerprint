@@ -3,7 +3,7 @@ use crate::dsl::parser::{ContentHashConfig, ExtractSection, FingerprintDefinitio
 use std::collections::BTreeSet;
 
 const SUPPORTED_FORMATS: &[&str] = &[
-    "xlsx", "csv", "pdf", "markdown", "text", "html", "json", "jsonl",
+    "xlsx", "csv", "pdf", "markdown", "text", "html", "json", "jsonl", "parquet",
 ];
 const SUPPORTED_EXTRACT_TYPES: &[&str] = &[
     "range",
@@ -174,10 +174,61 @@ fn validate_assertion(format: &str, assertion: &NamedAssertion) -> Result<(), St
             require_json_format("json_record_count", format)?;
             validate_bounds("json_record_count", *min, *max)?;
         }
+        Assertion::ParquetColumnExists(column) => {
+            require_parquet_format("parquet_column_exists", format)?;
+            validate_parquet_column("parquet_column_exists", column)?;
+        }
+        Assertion::ParquetColumnType {
+            column,
+            parquet_type,
+        } => {
+            require_parquet_format("parquet_column_type", format)?;
+            validate_parquet_column("parquet_column_type", column)?;
+            if parquet_type.trim().is_empty() {
+                return Err("parquet_column_type.parquet_type must not be empty".to_owned());
+            }
+        }
+        Assertion::ParquetRowCount { min, max } => {
+            require_parquet_format("parquet_row_count", format)?;
+            validate_bounds("parquet_row_count", *min, *max)?;
+        }
+        Assertion::ParquetRowGroups { min, max } => {
+            require_parquet_format("parquet_row_groups", format)?;
+            validate_bounds("parquet_row_groups", *min, *max)?;
+        }
+        Assertion::ParquetKvMetadata { key, pattern } => {
+            require_parquet_format("parquet_kv_metadata", format)?;
+            if key.trim().is_empty() {
+                return Err("parquet_kv_metadata.key must not be empty".to_owned());
+            }
+            if let Some(pattern) = pattern {
+                regex::Regex::new(pattern).map_err(|error| {
+                    format!("parquet_kv_metadata.pattern is not a valid regex: {error}")
+                })?;
+            }
+        }
         _ => {}
     }
 
     Ok(())
+}
+
+fn require_parquet_format(assertion_name: &str, format: &str) -> Result<(), String> {
+    if format == "parquet" {
+        Ok(())
+    } else {
+        Err(format!(
+            "assertion '{assertion_name}' requires format 'parquet', found '{format}'"
+        ))
+    }
+}
+
+fn validate_parquet_column(assertion_name: &str, column: &str) -> Result<(), String> {
+    if column.trim().is_empty() {
+        Err(format!("{assertion_name}.column must not be empty"))
+    } else {
+        Ok(())
+    }
 }
 
 fn require_json_format(assertion_name: &str, format: &str) -> Result<(), String> {

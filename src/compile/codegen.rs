@@ -538,6 +538,28 @@ fn codegen_assertion(assertion: &crate::dsl::assertions::Assertion) -> String {
         Assertion::JsonRecordCount { min, max } => {
             format!("JsonRecordCount {{ min: {:?}, max: {:?} }}", min, max)
         }
+        Assertion::ParquetColumnExists(column) => {
+            format!("ParquetColumnExists({})", s(column))
+        }
+        Assertion::ParquetColumnType {
+            column,
+            parquet_type,
+        } => format!(
+            "ParquetColumnType {{ column: {}, parquet_type: {} }}",
+            s(column),
+            s(parquet_type)
+        ),
+        Assertion::ParquetRowCount { min, max } => {
+            format!("ParquetRowCount {{ min: {:?}, max: {:?} }}", min, max)
+        }
+        Assertion::ParquetRowGroups { min, max } => {
+            format!("ParquetRowGroups {{ min: {:?}, max: {:?} }}", min, max)
+        }
+        Assertion::ParquetKvMetadata { key, pattern } => format!(
+            "ParquetKvMetadata {{ key: {}, pattern: {} }}",
+            s(key),
+            opt_s(pattern)
+        ),
     }
 }
 

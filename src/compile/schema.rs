@@ -13,7 +13,7 @@ pub fn dsl_json_schema() -> String {
             },
             "format": {
                 "type": "string",
-                "enum": ["xlsx", "csv", "pdf", "markdown", "text", "html", "json", "jsonl"],
+                "enum": ["xlsx", "csv", "pdf", "markdown", "text", "html", "json", "jsonl", "parquet"],
             },
             "valid_from": {
                 "type": "string",
@@ -82,6 +82,11 @@ pub fn dsl_json_schema() -> String {
                     { "$ref": "#/$defs/assertion_json_array_len" },
                     { "$ref": "#/$defs/assertion_json_keys_include" },
                     { "$ref": "#/$defs/assertion_json_record_count" },
+                    { "$ref": "#/$defs/assertion_parquet_column_exists" },
+                    { "$ref": "#/$defs/assertion_parquet_column_type" },
+                    { "$ref": "#/$defs/assertion_parquet_row_count" },
+                    { "$ref": "#/$defs/assertion_parquet_row_groups" },
+                    { "$ref": "#/$defs/assertion_parquet_kv_metadata" },
                 ],
             },
             "assertion_filename_regex": {
@@ -791,6 +796,97 @@ pub fn dsl_json_schema() -> String {
                             { "required": ["min"] },
                             { "required": ["max"] },
                         ],
+                    },
+                },
+            },
+            "assertion_parquet_column_exists": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["parquet_column_exists"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "parquet_column_exists": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Leaf column path from the footer schema; nested leaves are dotted (tags.list.element).",
+                    },
+                },
+            },
+            "assertion_parquet_column_type": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["parquet_column_type"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "parquet_column_type": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["column", "parquet_type"],
+                        "properties": {
+                            "column": { "type": "string", "minLength": 1 },
+                            "parquet_type": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Logical type name (string, decimal, date, timestamp, time, ...) or physical type (boolean, int32, int64, int96, float, double, byte_array, fixed_len_byte_array).",
+                            },
+                        },
+                    },
+                },
+            },
+            "assertion_parquet_row_count": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["parquet_row_count"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "parquet_row_count": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "min": { "type": "integer", "minimum": 0 },
+                            "max": { "type": "integer", "minimum": 0 },
+                        },
+                        "anyOf": [
+                            { "required": ["min"] },
+                            { "required": ["max"] },
+                        ],
+                    },
+                },
+            },
+            "assertion_parquet_row_groups": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["parquet_row_groups"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "parquet_row_groups": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "min": { "type": "integer", "minimum": 0 },
+                            "max": { "type": "integer", "minimum": 0 },
+                        },
+                        "anyOf": [
+                            { "required": ["min"] },
+                            { "required": ["max"] },
+                        ],
+                    },
+                },
+            },
+            "assertion_parquet_kv_metadata": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["parquet_kv_metadata"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "parquet_kv_metadata": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["key"],
+                        "properties": {
+                            "key": { "type": "string", "minLength": 1 },
+                            "pattern": { "type": "string", "minLength": 1 },
+                        },
                     },
                 },
             },

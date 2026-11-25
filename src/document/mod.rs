@@ -4,6 +4,7 @@ pub mod html;
 pub(crate) mod html_source;
 pub mod json;
 pub mod markdown;
+pub mod parquet;
 pub mod pdf;
 pub mod raw;
 pub mod text;
@@ -16,6 +17,7 @@ pub use dispatch::{
 pub use html::HtmlDocument;
 pub use json::{JsonDocument, JsonKind};
 pub use markdown::{Heading, MarkdownDocument, Section, Table};
+pub use parquet::{ParquetColumn, ParquetDocument};
 use std::path::{Path, PathBuf};
 pub use text::TextDocument;
 
@@ -31,6 +33,7 @@ pub enum Document {
     Markdown(MarkdownDocument),
     Text(TextDocument),
     Json(JsonDocument),
+    Parquet(ParquetDocument),
     Unknown(RawDocument),
 }
 
@@ -52,6 +55,7 @@ impl Document {
             Document::Markdown(d) => &d.path,
             Document::Text(d) => &d.path,
             Document::Json(d) => &d.path,
+            Document::Parquet(d) => &d.path,
             Document::Unknown(d) => &d.path,
         }
     }

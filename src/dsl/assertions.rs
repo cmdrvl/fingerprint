@@ -207,6 +207,31 @@ pub enum Assertion {
         min: Option<u64>,
         max: Option<u64>,
     },
+    /// Parquet (footer only): a leaf column exists (dotted path for nested leaves).
+    ParquetColumnExists(String),
+    /// Parquet (footer only): the leaf column has this type (logical name such as `string`,
+    /// `decimal`, `date`, `timestamp`, else physical such as `int64`, `double`).
+    ParquetColumnType {
+        column: String,
+        parquet_type: String,
+    },
+    /// Parquet (footer only): total row count within `[min, max]`.
+    ParquetRowCount {
+        min: Option<u64>,
+        max: Option<u64>,
+    },
+    /// Parquet (footer only): row group count within `[min, max]`.
+    ParquetRowGroups {
+        min: Option<u64>,
+        max: Option<u64>,
+    },
+    /// Parquet (footer only): file key/value metadata has `key`, and, when `pattern` is given,
+    /// its value matches the regex. The value is never echoed in failure output.
+    ParquetKvMetadata {
+        key: String,
+        #[serde(default)]
+        pattern: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -373,6 +398,18 @@ fn evaluate_with_diagnose_and_context(
                 evaluate_json_keys_include(doc, path, keys)
             }
             Assertion::JsonRecordCount { min, max } => evaluate_json_record_count(doc, *min, *max),
+            Assertion::ParquetColumnExists(column) => evaluate_parquet_column_exists(doc, column),
+            Assertion::ParquetColumnType {
+                column,
+                parquet_type,
+            } => evaluate_parquet_column_type(doc, column, parquet_type),
+            Assertion::ParquetRowCount { min, max } => parquet_document(doc, "parquet_row_count")
+                .and_then(|p| within_bounds("row count", p.num_rows, *min, *max)),
+            Assertion::ParquetRowGroups { min, max } => parquet_document(doc, "parquet_row_groups")
+                .and_then(|p| within_bounds("row group count", p.num_row_groups, *min, *max)),
+            Assertion::ParquetKvMetadata { key, pattern } => {
+                evaluate_parquet_kv_metadata(doc, key, pattern.as_deref())
+            }
             _ => Err(format!(
                 "assertion '{}' is not implemented in v0.1",
                 assertion_type_name(assertion)
@@ -463,6 +500,12 @@ fn diagnostic_context(
             })),
             _ => None,
         },
+        Assertion::ParquetColumnExists(column) | Assertion::ParquetColumnType { column, .. } => {
+            parquet_diagnostic_context(doc, Some(column))
+        }
+        Assertion::ParquetRowCount { .. }
+        | Assertion::ParquetRowGroups { .. }
+        | Assertion::ParquetKvMetadata { .. } => parquet_diagnostic_context(doc, None),
         Assertion::HeadingExists(heading) => heading_diagnostic_context(doc, heading),
         Assertion::HeadingRegex { pattern } | Assertion::HeadingLevel { pattern, .. } => {
             heading_diagnostic_context(doc, &regex_hint(pattern))
@@ -1249,6 +1292,11 @@ fn assertion_type_name(assertion: &Assertion) -> &'static str {
         Assertion::JsonArrayLen { .. } => "json_array_len",
         Assertion::JsonKeysInclude { .. } => "json_keys_include",
         Assertion::JsonRecordCount { .. } => "json_record_count",
+        Assertion::ParquetColumnExists(_) => "parquet_column_exists",
+        Assertion::ParquetColumnType { .. } => "parquet_column_type",
+        Assertion::ParquetRowCount { .. } => "parquet_row_count",
+        Assertion::ParquetRowGroups { .. } => "parquet_row_groups",
+        Assertion::ParquetKvMetadata { .. } => "parquet_kv_metadata",
     }
 }
 
@@ -1455,6 +1503,93 @@ fn json_diagnostic_context(doc: &Document, path: &str) -> Option<Value> {
         "resolved_prefix": resolved,
         "found_type": crate::document::json::type_name(current),
         "available_keys": available,
+        "nearest_match": nearest,
+    }))
+}
+
+fn parquet_document<'a>(
+    doc: &'a Document,
+    assertion: &str,
+) -> Result<&'a crate::document::ParquetDocument, String> {
+    match doc {
+        Document::Parquet(parquet) => Ok(parquet),
+        _ => Err(format!("{assertion} requires a parquet document")),
+    }
+}
+
+fn evaluate_parquet_column_exists(doc: &Document, column: &str) -> Result<(), String> {
+    let parquet = parquet_document(doc, "parquet_column_exists")?;
+    parquet
+        .column(column)
+        .map(|_| ())
+        .ok_or_else(|| format!("parquet column '{column}' not found"))
+}
+
+fn evaluate_parquet_column_type(
+    doc: &Document,
+    column: &str,
+    expected: &str,
+) -> Result<(), String> {
+    let parquet = parquet_document(doc, "parquet_column_type")?;
+    let found = parquet
+        .column(column)
+        .ok_or_else(|| format!("parquet column '{column}' not found"))?;
+    if found.type_name.eq_ignore_ascii_case(expected) {
+        Ok(())
+    } else {
+        Err(format!(
+            "parquet column '{column}' is {}, expected {expected}",
+            found.type_name
+        ))
+    }
+}
+
+fn evaluate_parquet_kv_metadata(
+    doc: &Document,
+    key: &str,
+    pattern: Option<&str>,
+) -> Result<(), String> {
+    let parquet = parquet_document(doc, "parquet_kv_metadata")?;
+    let value = parquet
+        .key_values
+        .get(key)
+        .ok_or_else(|| format!("parquet key/value metadata key '{key}' not found"))?;
+    if let Some(pattern) = pattern {
+        let regex =
+            Regex::new(pattern).map_err(|error| format!("invalid regex '{pattern}': {error}"))?;
+        if !regex.is_match(value) {
+            // The value itself is deliberately not echoed.
+            return Err(format!(
+                "parquet key/value metadata '{key}' does not match /{pattern}/"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Footer-structure context for a failed Parquet assertion: column paths, types and counts,
+/// metadata key names; never a metadata value.
+fn parquet_diagnostic_context(doc: &Document, column: Option<&str>) -> Option<Value> {
+    let Document::Parquet(parquet) = doc else {
+        return None;
+    };
+    let mut names: Vec<String> = parquet.columns.iter().map(|c| c.path.clone()).collect();
+    names.sort();
+    let nearest = column.and_then(|target| nearest_match_by_edit_distance(target, &names));
+    let mut available: Vec<Value> = parquet
+        .columns
+        .iter()
+        .take(20)
+        .map(|c| json!({"column": c.path, "type": c.type_name}))
+        .collect();
+    available.truncate(20);
+    Some(json!({
+        "format": "parquet",
+        "row_count": parquet.num_rows,
+        "row_groups": parquet.num_row_groups,
+        "column_count": parquet.columns.len(),
+        "available_columns": available,
+        "metadata_keys": parquet.key_values.keys().collect::<Vec<_>>(),
         "nearest_match": nearest,
     }))
 }
