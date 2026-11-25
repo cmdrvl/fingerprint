@@ -463,6 +463,7 @@ fn format_matches(fingerprint_format: &str, document: &Document) -> bool {
                 || fingerprint_format.eq_ignore_ascii_case("md")
         }
         Document::Text(_) => fingerprint_format.eq_ignore_ascii_case("text"),
+        Document::Json(json) => fingerprint_format.eq_ignore_ascii_case(json.kind.as_str()),
         Document::Unknown(_) => false,
     }
 }

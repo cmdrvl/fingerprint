@@ -1,0 +1,8 @@
+{
+  "schema": "delivery.v2",
+  "filings": [
+    {"accession": "0001-26-000001", "form": "N-PORT-P", "pages": 12},
+    {"accession": "0001-26-000002", "form": "ABS-EE", "pages": 3}
+  ],
+  "meta": {"generated": "2026-01-01", "count": 2, "complete": true}
+}

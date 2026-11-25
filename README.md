@@ -194,7 +194,7 @@ For cases the DSL can't express, write Rust directly against the `Fingerprint` t
 
 ## Deterministic assertions across every document structure
 
-Fingerprint doesn't just check filenames and magic bytes. It understands the internal structure of spreadsheets, HTML, PDFs, markdown, and plain text.
+Fingerprint doesn't just check filenames and magic bytes. It understands the internal structure of spreadsheets, HTML, PDFs, markdown, plain text, and JSON/JSONL (`json_path_exists`, `json_path_type`, `json_array_len`, `json_keys_include`, `json_record_count`; see `docs/DSL_REFERENCE.md`).
 
 ### Spreadsheet assertions (Excel `.xlsx` / `.xls`, CSV)
 

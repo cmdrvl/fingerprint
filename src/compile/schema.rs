@@ -13,7 +13,7 @@ pub fn dsl_json_schema() -> String {
             },
             "format": {
                 "type": "string",
-                "enum": ["xlsx", "csv", "pdf", "markdown", "text", "html"],
+                "enum": ["xlsx", "csv", "pdf", "markdown", "text", "html", "json", "jsonl"],
             },
             "valid_from": {
                 "type": "string",
@@ -77,6 +77,11 @@ pub fn dsl_json_schema() -> String {
                     { "$ref": "#/$defs/assertion_attr_regex" },
                     { "$ref": "#/$defs/assertion_page_count" },
                     { "$ref": "#/$defs/assertion_metadata_regex" },
+                    { "$ref": "#/$defs/assertion_json_path_exists" },
+                    { "$ref": "#/$defs/assertion_json_path_type" },
+                    { "$ref": "#/$defs/assertion_json_array_len" },
+                    { "$ref": "#/$defs/assertion_json_keys_include" },
+                    { "$ref": "#/$defs/assertion_json_record_count" },
                 ],
             },
             "assertion_filename_regex": {
@@ -690,6 +695,102 @@ pub fn dsl_json_schema() -> String {
                             "key": { "type": "string", "minLength": 1 },
                             "pattern": { "type": "string", "minLength": 1 },
                         },
+                    },
+                },
+            },
+            "assertion_json_path_exists": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["json_path_exists"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "json_path_exists": {
+                        "type": "string",
+                        "pattern": "^\\$",
+                        "description": "Path like $.a.b[0] (keys and array indexes only). For jsonl, evaluated on the first record.",
+                    },
+                },
+            },
+            "assertion_json_path_type": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["json_path_type"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "json_path_type": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["path", "json_type"],
+                        "properties": {
+                            "path": { "type": "string", "pattern": "^\\$" },
+                            "json_type": {
+                                "type": "string",
+                                "enum": ["string", "number", "integer", "boolean", "array", "object", "null"],
+                            },
+                        },
+                    },
+                },
+            },
+            "assertion_json_array_len": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["json_array_len"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "json_array_len": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["path"],
+                        "properties": {
+                            "path": { "type": "string", "pattern": "^\\$" },
+                            "min": { "type": "integer", "minimum": 0 },
+                            "max": { "type": "integer", "minimum": 0 },
+                        },
+                        "anyOf": [
+                            { "required": ["min"] },
+                            { "required": ["max"] },
+                        ],
+                    },
+                },
+            },
+            "assertion_json_keys_include": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["json_keys_include"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "json_keys_include": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["path", "keys"],
+                        "properties": {
+                            "path": { "type": "string", "pattern": "^\\$" },
+                            "keys": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": { "type": "string", "minLength": 1 },
+                            },
+                        },
+                    },
+                },
+            },
+            "assertion_json_record_count": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["json_record_count"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "json_record_count": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "min": { "type": "integer", "minimum": 0 },
+                            "max": { "type": "integer", "minimum": 0 },
+                        },
+                        "anyOf": [
+                            { "required": ["min"] },
+                            { "required": ["max"] },
+                        ],
                     },
                 },
             },

@@ -47,6 +47,10 @@ and its main target. Names are useful in diagnostics and tests.
 | `pdf` | Native PDF metadata/pages from `path`; content assertions from `text_path`. | `page_count`, `metadata_regex`, text/heading/table assertions over `text_path`, and `filename_regex`. |
 | `markdown` | Markdown file normalized by the frozen markdown normalizer. | Text/heading/section/table assertions and `filename_regex`. |
 | `text` | Plain text file. | Text assertions and `filename_regex`. |
+| `json` | A single JSON document, parsed whole (refused over 256 MiB: use `jsonl`). | `json_*` assertions and `filename_regex`. |
+| `jsonl` | JSON Lines (`.jsonl`/`.ndjson`), streamed line by line; every non-empty line must parse. Path assertions run on the first record. | `json_*` assertions and `filename_regex`. |
+
+JSON paths are a deliberately small subset of JSONPath: `$`, `.key`, `[index]`. No wildcards, filters or recursive descent, so a path names exactly one place. Diagnose context for a failed path reports key names and types only, never values.
 
 Selector assertions and `region` extracts are `html` only.
 
@@ -70,6 +74,11 @@ in parity with `fingerprint compile --schema`.
 | `heading_exists` | `html`, `markdown`, `pdf` with `text_path` | string | A normalized heading exactly matches the string. |
 | `heading_level` | `html`, `markdown`, `pdf` with `text_path` | `level`, `pattern` | A heading at that level matches `pattern`. |
 | `heading_regex` | `html`, `markdown`, `pdf` with `text_path` | `pattern` | A normalized heading matches `pattern`. |
+| `json_array_len` | `json`, `jsonl` | `path`, at least one of `min` or `max` | The array at `path` has a length within bounds. |
+| `json_keys_include` | `json`, `jsonl` | `path`, `keys` | The object at `path` has every listed key. |
+| `json_path_exists` | `json`, `jsonl` | string path | The path resolves to a value (jsonl: on the first record). |
+| `json_path_type` | `json`, `jsonl` | `path`, `json_type` | The value at `path` has that JSON type (`integer` also satisfies `number`). |
+| `json_record_count` | `json`, `jsonl` | at least one of `min` or `max` | jsonl line count, or json top-level array length (1 for a non-array root), is within bounds. |
 | `metadata_regex` | `pdf` only | `key`, `pattern` | A PDF metadata field matches `pattern`. |
 | `node_count` | `html` only | `selector`, at least one of `min` or `max` | CSS selector match count is within bounds. |
 | `node_exists` | `html` only | `selector` | CSS selector matches at least one DOM node. |

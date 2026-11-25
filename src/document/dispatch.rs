@@ -1,6 +1,6 @@
 use crate::document::{
-    CsvDocument, Document, HtmlDocument, MarkdownDocument, PdfDocument, RawDocument, TextDocument,
-    XlsxDocument,
+    CsvDocument, Document, HtmlDocument, JsonDocument, JsonKind, MarkdownDocument, PdfDocument,
+    RawDocument, TextDocument, XlsxDocument,
 };
 use std::path::Path;
 
@@ -35,6 +35,8 @@ pub fn open_document_with_text_path(
             let doc = TextDocument::open(path)?;
             Ok(Document::Text(doc))
         }
+        "json" => Ok(Document::Json(JsonDocument::open(path, JsonKind::Json)?)),
+        "jsonl" | "ndjson" => Ok(Document::Json(JsonDocument::open(path, JsonKind::Jsonl)?)),
         _ => {
             // Fallback to raw bytes for unknown extensions
             let doc = RawDocument::open(path)?;

@@ -2,7 +2,9 @@ use crate::dsl::assertions::{Assertion, NamedAssertion};
 use crate::dsl::parser::{ContentHashConfig, ExtractSection, FingerprintDefinition};
 use std::collections::BTreeSet;
 
-const SUPPORTED_FORMATS: &[&str] = &["xlsx", "csv", "pdf", "markdown", "text", "html"];
+const SUPPORTED_FORMATS: &[&str] = &[
+    "xlsx", "csv", "pdf", "markdown", "text", "html", "json", "jsonl",
+];
 const SUPPORTED_EXTRACT_TYPES: &[&str] = &[
     "range",
     "table",
@@ -140,10 +142,59 @@ fn validate_assertion(format: &str, assertion: &NamedAssertion) -> Result<(), St
         Assertion::PageCount { min, max } => {
             validate_bounds("page_count", *min, *max)?;
         }
+        Assertion::JsonPathExists(path) => {
+            require_json_format("json_path_exists", format)?;
+            validate_json_path("json_path_exists.path", path)?;
+        }
+        Assertion::JsonPathType { path, json_type } => {
+            require_json_format("json_path_type", format)?;
+            validate_json_path("json_path_type.path", path)?;
+            if !crate::document::json::JSON_TYPES.contains(&json_type.as_str()) {
+                return Err(format!(
+                    "json_path_type.json_type '{json_type}' is not one of {}",
+                    crate::document::json::JSON_TYPES.join(", ")
+                ));
+            }
+        }
+        Assertion::JsonArrayLen { path, min, max } => {
+            require_json_format("json_array_len", format)?;
+            validate_json_path("json_array_len.path", path)?;
+            validate_bounds("json_array_len", *min, *max)?;
+        }
+        Assertion::JsonKeysInclude { path, keys } => {
+            require_json_format("json_keys_include", format)?;
+            validate_json_path("json_keys_include.path", path)?;
+            if keys.is_empty() || keys.iter().any(|key| key.is_empty()) {
+                return Err(
+                    "json_keys_include.keys must contain at least one non-empty key".to_owned(),
+                );
+            }
+        }
+        Assertion::JsonRecordCount { min, max } => {
+            require_json_format("json_record_count", format)?;
+            validate_bounds("json_record_count", *min, *max)?;
+        }
         _ => {}
     }
 
     Ok(())
+}
+
+fn require_json_format(assertion_name: &str, format: &str) -> Result<(), String> {
+    if format == "json" || format == "jsonl" {
+        Ok(())
+    } else {
+        Err(format!(
+            "assertion '{assertion_name}' requires format 'json' or 'jsonl', found '{format}'"
+        ))
+    }
+}
+
+/// A path must be well-formed (`$`, `.key`, `[n]`); the same grammar the runtime uses.
+fn validate_json_path(field_name: &str, path: &str) -> Result<(), String> {
+    crate::document::json::resolve_path(&serde_json::Value::Null, path)
+        .map(|_| ())
+        .map_err(|error| format!("{field_name}: {error}"))
 }
 
 fn require_html_format(assertion_name: &str, format: &str) -> Result<(), String> {

@@ -513,6 +513,31 @@ fn codegen_assertion(assertion: &crate::dsl::assertions::Assertion) -> String {
                 s(pattern)
             )
         }
+        Assertion::JsonPathExists(path) => format!("JsonPathExists({})", s(path)),
+        Assertion::JsonPathType { path, json_type } => format!(
+            "JsonPathType {{ path: {}, json_type: {} }}",
+            s(path),
+            s(json_type)
+        ),
+        Assertion::JsonArrayLen { path, min, max } => {
+            format!(
+                "JsonArrayLen {{ path: {}, min: {:?}, max: {:?} }}",
+                s(path),
+                min,
+                max
+            )
+        }
+        Assertion::JsonKeysInclude { path, keys } => {
+            let items: Vec<String> = keys.iter().map(|key| s(key)).collect();
+            format!(
+                "JsonKeysInclude {{ path: {}, keys: vec![{}] }}",
+                s(path),
+                items.join(", ")
+            )
+        }
+        Assertion::JsonRecordCount { min, max } => {
+            format!("JsonRecordCount {{ min: {:?}, max: {:?} }}", min, max)
+        }
     }
 }
 

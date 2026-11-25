@@ -237,6 +237,19 @@ fn assertion_base_name(assertion: &crate::dsl::assertions::Assertion) -> String 
         Assertion::FilenameRegex { pattern } => {
             format!("filename_regex__{}", regex_excerpt(pattern, 20))
         }
+        Assertion::JsonPathExists(path) => {
+            format!("json_path_exists__{}", literal_excerpt(path, 24, true))
+        }
+        Assertion::JsonPathType { path, .. } => {
+            format!("json_path_type__{}", literal_excerpt(path, 24, true))
+        }
+        Assertion::JsonArrayLen { path, .. } => {
+            format!("json_array_len__{}", literal_excerpt(path, 24, true))
+        }
+        Assertion::JsonKeysInclude { path, .. } => {
+            format!("json_keys_include__{}", literal_excerpt(path, 24, true))
+        }
+        Assertion::JsonRecordCount { .. } => "json_record_count".to_owned(),
     }
 }
 

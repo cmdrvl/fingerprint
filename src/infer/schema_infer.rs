@@ -49,6 +49,7 @@ pub fn infer_schema(
         Document::Html(_) => "html",
         Document::Markdown(_) => "markdown",
         Document::Text(_) => "text",
+        Document::Json(json) => json.kind.as_str(),
         Document::Unknown(_) => "raw",
     }
     .to_owned();
@@ -136,6 +137,7 @@ fn locate_field(doc: &Document, field: &SchemaField) -> Option<LocatedField> {
             }
         }
         Document::Html(_) => None,
+        Document::Json(_) => None,
         Document::Unknown(_) => None,
     }
 }

@@ -182,6 +182,31 @@ pub enum Assertion {
         key: String,
         pattern: String,
     },
+    /// JSON/JSONL: the path (`$.a.b[0]`) resolves to a value. For JSONL the path is evaluated
+    /// against the first record.
+    JsonPathExists(String),
+    /// JSON/JSONL: the value at `path` has `json_type` (`integer` also satisfies `number`).
+    JsonPathType {
+        path: String,
+        json_type: String,
+    },
+    /// JSON/JSONL: the array at `path` has a length within `[min, max]`.
+    JsonArrayLen {
+        path: String,
+        min: Option<u64>,
+        max: Option<u64>,
+    },
+    /// JSON/JSONL: the object at `path` has every one of `keys`.
+    JsonKeysInclude {
+        path: String,
+        keys: Vec<String>,
+    },
+    /// JSON/JSONL: record count within `[min, max]` (JSONL: lines; JSON: top-level array
+    /// length, or 1 for a non-array root).
+    JsonRecordCount {
+        min: Option<u64>,
+        max: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -337,6 +362,17 @@ fn evaluate_with_diagnose_and_context(
             }),
             Assertion::PageCount { min, max } => evaluate_page_count(doc, *min, *max),
             Assertion::MetadataRegex { key, pattern } => evaluate_metadata_regex(doc, key, pattern),
+            Assertion::JsonPathExists(path) => evaluate_json_path_exists(doc, path),
+            Assertion::JsonPathType { path, json_type } => {
+                evaluate_json_path_type(doc, path, json_type)
+            }
+            Assertion::JsonArrayLen { path, min, max } => {
+                evaluate_json_array_len(doc, path, *min, *max)
+            }
+            Assertion::JsonKeysInclude { path, keys } => {
+                evaluate_json_keys_include(doc, path, keys)
+            }
+            Assertion::JsonRecordCount { min, max } => evaluate_json_record_count(doc, *min, *max),
             _ => Err(format!(
                 "assertion '{}' is not implemented in v0.1",
                 assertion_type_name(assertion)
@@ -416,6 +452,17 @@ fn diagnostic_context(
     context: &EvaluationContext,
 ) -> Option<Value> {
     match assertion {
+        Assertion::JsonPathExists(path)
+        | Assertion::JsonPathType { path, .. }
+        | Assertion::JsonArrayLen { path, .. }
+        | Assertion::JsonKeysInclude { path, .. } => json_diagnostic_context(doc, path),
+        Assertion::JsonRecordCount { .. } => match doc {
+            Document::Json(json) => Some(json!({
+                "format": json.kind.as_str(),
+                "record_count": json.record_count,
+            })),
+            _ => None,
+        },
         Assertion::HeadingExists(heading) => heading_diagnostic_context(doc, heading),
         Assertion::HeadingRegex { pattern } | Assertion::HeadingLevel { pattern, .. } => {
             heading_diagnostic_context(doc, &regex_hint(pattern))
@@ -1197,6 +1244,11 @@ fn assertion_type_name(assertion: &Assertion) -> &'static str {
         Assertion::AttrRegex { .. } => "attr_regex",
         Assertion::PageCount { .. } => "page_count",
         Assertion::MetadataRegex { .. } => "metadata_regex",
+        Assertion::JsonPathExists(_) => "json_path_exists",
+        Assertion::JsonPathType { .. } => "json_path_type",
+        Assertion::JsonArrayLen { .. } => "json_array_len",
+        Assertion::JsonKeysInclude { .. } => "json_keys_include",
+        Assertion::JsonRecordCount { .. } => "json_record_count",
     }
 }
 
@@ -1221,6 +1273,190 @@ fn evaluate_filename_regex(doc: &Document, pattern: &str) -> Result<(), String> 
             file_name, pattern
         ))
     }
+}
+
+fn json_document<'a>(
+    doc: &'a Document,
+    assertion: &str,
+) -> Result<&'a crate::document::JsonDocument, String> {
+    match doc {
+        Document::Json(json) => Ok(json),
+        _ => Err(format!("{assertion} requires a json or jsonl document")),
+    }
+}
+
+fn json_value_at<'a>(
+    json: &'a crate::document::JsonDocument,
+    path: &str,
+) -> Result<&'a Value, String> {
+    crate::document::json::resolve_path(&json.root, path)?
+        .ok_or_else(|| format!("json path '{path}' not found"))
+}
+
+fn evaluate_json_path_exists(doc: &Document, path: &str) -> Result<(), String> {
+    let json = json_document(doc, "json_path_exists")?;
+    json_value_at(json, path).map(|_| ())
+}
+
+fn evaluate_json_path_type(doc: &Document, path: &str, expected: &str) -> Result<(), String> {
+    use crate::document::json::{JSON_TYPES, has_type, type_name};
+    if !JSON_TYPES.contains(&expected) {
+        return Err(format!(
+            "unknown json type '{expected}'; expected one of {}",
+            JSON_TYPES.join(", ")
+        ));
+    }
+    let json = json_document(doc, "json_path_type")?;
+    let value = json_value_at(json, path)?;
+    if has_type(value, expected) {
+        Ok(())
+    } else {
+        Err(format!(
+            "json path '{path}' is {}, expected {expected}",
+            type_name(value)
+        ))
+    }
+}
+
+fn within_bounds(
+    label: &str,
+    actual: u64,
+    min: Option<u64>,
+    max: Option<u64>,
+) -> Result<(), String> {
+    if let Some(min) = min
+        && actual < min
+    {
+        return Err(format!("{label} is {actual}, expected at least {min}"));
+    }
+    if let Some(max) = max
+        && actual > max
+    {
+        return Err(format!("{label} is {actual}, expected at most {max}"));
+    }
+    Ok(())
+}
+
+fn evaluate_json_array_len(
+    doc: &Document,
+    path: &str,
+    min: Option<u64>,
+    max: Option<u64>,
+) -> Result<(), String> {
+    let json = json_document(doc, "json_array_len")?;
+    let value = json_value_at(json, path)?;
+    let items = value.as_array().ok_or_else(|| {
+        format!(
+            "json path '{path}' is {}, expected array",
+            crate::document::json::type_name(value)
+        )
+    })?;
+    within_bounds(
+        &format!("array length at '{path}'"),
+        items.len() as u64,
+        min,
+        max,
+    )
+}
+
+fn evaluate_json_keys_include(doc: &Document, path: &str, keys: &[String]) -> Result<(), String> {
+    let json = json_document(doc, "json_keys_include")?;
+    let value = json_value_at(json, path)?;
+    let object = value.as_object().ok_or_else(|| {
+        format!(
+            "json path '{path}' is {}, expected object",
+            crate::document::json::type_name(value)
+        )
+    })?;
+    let mut missing: Vec<&str> = keys
+        .iter()
+        .map(String::as_str)
+        .filter(|key| !object.contains_key(*key))
+        .collect();
+    missing.sort_unstable();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "object at '{path}' is missing key(s): {}",
+            missing.join(", ")
+        ))
+    }
+}
+
+fn evaluate_json_record_count(
+    doc: &Document,
+    min: Option<u64>,
+    max: Option<u64>,
+) -> Result<(), String> {
+    let json = json_document(doc, "json_record_count")?;
+    within_bounds("record count", json.record_count, min, max)
+}
+
+/// Structure-only context for a failed path assertion: the deepest prefix that exists, the key
+/// names found there (never values) and the nearest key to the first missing one.
+fn json_diagnostic_context(doc: &Document, path: &str) -> Option<Value> {
+    let Document::Json(json) = doc else {
+        return None;
+    };
+    let mut resolved = String::from("$");
+    let mut current = &json.root;
+    let mut missing: Option<String> = None;
+    let rest = path.strip_prefix('$').unwrap_or(path);
+    // Re-walk step by step using the same path grammar as evaluation.
+    let mut remaining = rest;
+    while !remaining.is_empty() {
+        let (segment, next_remaining) = if let Some(after) = remaining.strip_prefix('.') {
+            let end = after.find(['.', '[']).unwrap_or(after.len());
+            (format!(".{}", &after[..end]), &after[end..])
+        } else if let Some(after) = remaining.strip_prefix('[') {
+            let Some(close) = after.find(']') else {
+                break;
+            };
+            (format!("[{}]", &after[..close]), &after[close + 1..])
+        } else {
+            break;
+        };
+        let next = if let Some(key) = segment.strip_prefix('.') {
+            current.get(key)
+        } else {
+            segment
+                .trim_matches(['[', ']'])
+                .parse::<usize>()
+                .ok()
+                .and_then(|index| current.get(index))
+        };
+        match next {
+            Some(value) => {
+                current = value;
+                resolved.push_str(&segment);
+                remaining = next_remaining;
+            }
+            None => {
+                missing = Some(segment);
+                break;
+            }
+        }
+    }
+
+    let mut available: Vec<String> = current
+        .as_object()
+        .map(|object| object.keys().cloned().collect())
+        .unwrap_or_default();
+    available.sort();
+    available.truncate(20);
+    let nearest = missing
+        .as_deref()
+        .and_then(|segment| segment.strip_prefix('.'))
+        .and_then(|key| nearest_match_by_edit_distance(key, &available));
+    Some(json!({
+        "format": json.kind.as_str(),
+        "path": path,
+        "resolved_prefix": resolved,
+        "found_type": crate::document::json::type_name(current),
+        "available_keys": available,
+        "nearest_match": nearest,
+    }))
 }
 
 fn evaluate_sheet_exists(doc: &Document, sheet: &str) -> Result<(), String> {

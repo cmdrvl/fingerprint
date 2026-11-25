@@ -1,0 +1,5 @@
+{"loan_id":"L1","balance":1000.5,"status":"current","tags":["a"]}
+{"loan_id":"L2","balance":2000,"status":"late","tags":[]}
+{"loan_id":"L3","balance":300.25,"status":"current","tags":["b","c"]}
+{"loan_id":"L4","balance":0,"status":"paid","tags":[]}
+{"loan_id":"L5","balance":42,"status":"current","tags":["a"]}

@@ -2,6 +2,7 @@ pub mod csv;
 pub mod dispatch;
 pub mod html;
 pub(crate) mod html_source;
+pub mod json;
 pub mod markdown;
 pub mod pdf;
 pub mod raw;
@@ -13,6 +14,7 @@ pub use dispatch::{
     open_document_with_text_path,
 };
 pub use html::HtmlDocument;
+pub use json::{JsonDocument, JsonKind};
 pub use markdown::{Heading, MarkdownDocument, Section, Table};
 use std::path::{Path, PathBuf};
 pub use text::TextDocument;
@@ -28,6 +30,7 @@ pub enum Document {
     Html(HtmlDocument),
     Markdown(MarkdownDocument),
     Text(TextDocument),
+    Json(JsonDocument),
     Unknown(RawDocument),
 }
 
@@ -48,6 +51,7 @@ impl Document {
             Document::Html(d) => &d.path,
             Document::Markdown(d) => &d.path,
             Document::Text(d) => &d.path,
+            Document::Json(d) => &d.path,
             Document::Unknown(d) => &d.path,
         }
     }
