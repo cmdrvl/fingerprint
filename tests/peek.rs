@@ -996,3 +996,359 @@ fn every_peek_format_carries_the_dialect_object() {
     let result = peek_result("mixed_delimiters.csv", &[]);
     assert_eq!(result["dialect"]["delimiter"], ";");
 }
+
+// ---- bd-hra: xml element-path skeleton on the three REAL SEC filings -----------------------------
+
+fn xml_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/xml")
+        .join(name)
+}
+
+fn xml_result(name: &str, extra: &[&str]) -> Value {
+    let output = peek_path(&xml_fixture(name), extra);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{name}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    parse_stdout(&output)["result"].clone()
+}
+
+fn record_candidates(result: &Value) -> Vec<(String, u64, u64)> {
+    result["summary"]["record_candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c["path"].as_str().unwrap_or("").to_owned(),
+                c["count"].as_u64().unwrap(),
+                c["leaf_children"].as_u64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn xml_peek_reports_the_element_skeleton_of_each_real_filing() {
+    // Expected values were computed independently with Python's xml.etree (see
+    // tests/fixtures/xml/README.md): element totals, the repeating record paths and the number
+    // of distinct leaf children of each record element.
+    let comments = xml_result("abs-ee/exh_103.xml", &["--explicit"]);
+    assert_eq!(comments["format"], "xml");
+    assert_eq!(
+        comments["dialect"],
+        serde_json::json!({"name": "xml", "delimiter": "none"})
+    );
+    assert_eq!(comments["root"]["name"], "comments");
+    assert_eq!(comments["root"]["namespace"], Value::Null);
+    assert_eq!(comments["element_count"], 129);
+    assert_eq!(comments["paths_total"], 5);
+    assert_eq!(comments["max_depth"], 3);
+    assert_eq!(
+        record_candidates(&comments),
+        [("/comments/commentData".to_owned(), 32, 3)]
+    );
+
+    let assets = xml_result("abs-ee/exh_102.xml", &["--explicit"]);
+    assert_eq!(assets["root"]["name"], "assetData");
+    assert_eq!(
+        assets["root"]["namespace"],
+        "http://www.sec.gov/edgar/document/absee/cmbs/assetdata"
+    );
+    assert_eq!(assets["element_count"], 4156);
+    assert_eq!(
+        record_candidates(&assets),
+        [
+            ("/assetData/assets".to_owned(), 47, 68),
+            ("/assetData/assets/property".to_owned(), 53, 53)
+        ]
+    );
+
+    let nport = xml_result("nport-p/primary_doc.xml", &["--explicit"]);
+    assert_eq!(nport["root"]["name"], "edgarSubmission");
+    assert_eq!(nport["root"]["namespace"], "http://www.sec.gov/edgar/nport");
+    assert_eq!(nport["element_count"], 1057);
+    assert_eq!(
+        record_candidates(&nport),
+        [(
+            "/edgarSubmission/formData/invstOrSecs/invstOrSec".to_owned(),
+            45,
+            15
+        )]
+    );
+}
+
+#[test]
+fn xml_peek_is_name_free_by_default_and_deterministic() {
+    let one = xml_result("abs-ee/exh_103.xml", &[]);
+    let two = xml_result("abs-ee/exh_103.xml", &[]);
+    assert_eq!(one, two);
+    let id = |p: &str| format!("blake3:{}", &blake3::hash(p.as_bytes()).to_hex()[..16]);
+    assert_eq!(one["root"]["id"], id("comments").as_str());
+    assert_eq!(one["root"]["namespace_id"], Value::Null);
+    let candidates = one["summary"]["record_candidates"].as_array().unwrap();
+    assert_eq!(candidates[0]["id"], id("/comments/commentData").as_str());
+    assert!(candidates[0].get("path").is_none());
+    // Ordered by depth then id, so the order says nothing about element names.
+    let depths: Vec<u64> = one["paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["depth"].as_u64().unwrap())
+        .collect();
+    let mut sorted = depths.clone();
+    sorted.sort_unstable();
+    assert_eq!(depths, sorted);
+}
+
+#[test]
+fn xml_peek_canary_never_prints_text_attribute_values_or_names_by_default() {
+    // exh_103 is prose: its comment text must never appear. The element and namespace NAMES of
+    // all three filings are hidden unless --explicit, and no text or attribute value is ever
+    // printed (registrant, LEI, loan amounts, state codes).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let hidden_text = [
+        "Hilton Hawaiian Village",
+        "pari passu",
+        "anticipated repayment",
+        "Cut-off Date",
+        "Item 2(c)(15)",
+        "Original Loan Term Number",
+        "SEASONS SERIES TRUST",
+        "811-07725",
+        "549300O318N6OBWGKN57",
+        "Memorial Drive",
+        "US-TX",
+        "S000008051",
+        "95000000",
+        "Prospectus Loan ID",
+        "CREFI",
+        "SA MID CAP INDEX",
+    ];
+    let hidden_names = [
+        "commentData",
+        "itemNumber",
+        "fieldName",
+        "edgarSubmission",
+        "regName",
+        "regStateConditional",
+        "assetData",
+        "originalLoanAmount",
+        "invstOrSec",
+        "sec.gov",
+        "http://",
+    ];
+    for name in [
+        "abs-ee/exh_103.xml",
+        "abs-ee/exh_102.xml",
+        "nport-p/primary_doc.xml",
+    ] {
+        let path = xml_fixture(name);
+        let witness = dir
+            .path()
+            .join(format!("{}.witness", name.replace('/', "_")));
+        let output = run_fingerprint_with_witness(&["peek", path.to_str().unwrap()], &witness);
+        assert_eq!(output.status.code(), Some(0), "{name}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let ledger = fs::read_to_string(&witness).unwrap();
+        for text in [&stdout, &ledger] {
+            for planted in hidden_text.iter().chain(hidden_names.iter()) {
+                assert!(
+                    !text.contains(planted),
+                    "{name}: {planted} leaked by default: {text}"
+                );
+            }
+        }
+        // --explicit adds names, never text or attribute values.
+        let explicit = String::from_utf8(peek_path(&path, &["--explicit"]).stdout).unwrap();
+        for planted in hidden_text {
+            assert!(
+                !explicit.contains(planted),
+                "{name}: {planted} leaked with --explicit"
+            );
+        }
+    }
+    assert!(
+        String::from_utf8(peek_path(&xml_fixture("abs-ee/exh_103.xml"), &["--explicit"]).stdout)
+            .unwrap()
+            .contains("/comments/commentData/comment")
+    );
+}
+
+#[test]
+fn xml_peek_witness_hashes_the_whole_file_and_bad_xml_refuses_without_content() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let witness = dir.path().join("witness.jsonl");
+    let path = xml_fixture("abs-ee/exh_103.xml");
+    let output = run_fingerprint_with_witness(&["peek", path.to_str().unwrap()], &witness);
+    assert_eq!(output.status.code(), Some(0));
+    let record: Value = serde_json::from_str(
+        fs::read_to_string(&witness)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        record["inputs"][0]["hash"],
+        format!(
+            "blake3:{}",
+            blake3::hash(&fs::read(&path).unwrap()).to_hex()
+        )
+    );
+
+    let bad = dir.path().join("bad.xml");
+    fs::write(&bad, "<a><secret_element>SECRET-TEXT-VALUE</a>").unwrap();
+    let output = peek_path(&bad, &[]);
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("Could not parse xml") && stdout.contains("at byte"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("SECRET-TEXT-VALUE"), "{stdout}");
+    let empty = dir.path().join("empty.xml");
+    fs::write(&empty, "").unwrap();
+    assert_eq!(peek_path(&empty, &[]).status.code(), Some(2));
+}
+
+// ---- bd-hra: peek --view brief --------------------------------------------------------------------
+
+#[test]
+fn brief_view_is_bounded_for_every_format_and_a_subset_of_the_full_view() {
+    // ~500 tokens at roughly 4 bytes a token: the whole envelope must stay under 2,000 bytes.
+    let files: Vec<(&str, PathBuf)> = vec![
+        ("csv", fixture("shape_classes.csv")),
+        ("tsv", fixture("tsv.tsv")),
+        ("xlsx", materialize_fixture("watl_msc.xlsx")),
+        ("parquet", parquet_fixture("delivery.parquet")),
+        ("jsonl", json_fixture("loans.jsonl")),
+        ("json", json_fixture("delivery.json")),
+        ("xml 102", xml_fixture("abs-ee/exh_102.xml")),
+        ("xml nport", xml_fixture("nport-p/primary_doc.xml")),
+        ("xml 103", xml_fixture("abs-ee/exh_103.xml")),
+    ];
+    for (label, path) in files {
+        let brief = peek_path(&path, &["--view", "brief", "--suggest"]);
+        assert_eq!(brief.status.code(), Some(0), "{label}");
+        let compact = serde_json::to_vec(&parse_stdout(&brief)).unwrap();
+        assert!(
+            compact.len() < 2000,
+            "{label}: brief is {} bytes",
+            compact.len()
+        );
+        let brief_result = parse_stdout(&brief)["result"].clone();
+        let full_result = parse_stdout(&peek_path(&path, &["--suggest"]))["result"].clone();
+
+        assert_eq!(brief_result["view"], "brief", "{label}");
+        for dropped in ["rows", "columns", "fields", "paths", "sheets"] {
+            assert!(
+                brief_result.get(dropped).is_none(),
+                "{label}: {dropped} must be omitted"
+            );
+        }
+        let omitted: Vec<&str> = brief_result["omitted"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(!omitted.is_empty(), "{label}: something was dropped");
+        for key in &omitted {
+            assert!(
+                full_result.get(*key).is_some(),
+                "{label}: full view has {key}"
+            );
+        }
+        // Everything kept in the brief equals the full view's value (candidates may be cut).
+        for (key, value) in brief_result.as_object().unwrap() {
+            if matches!(key.as_str(), "view" | "omitted" | "summary") {
+                continue;
+            }
+            assert_eq!(&full_result[key], value, "{label}: {key}");
+        }
+        assert_eq!(
+            full_result.get("view"),
+            None,
+            "{label}: full view is unmarked"
+        );
+    }
+}
+
+#[test]
+fn brief_view_keeps_the_decisions_agents_need() {
+    let csv = parse_stdout(&peek_path(
+        &fixture("shape_classes.csv"),
+        &["--view", "brief", "--suggest"],
+    ))["result"]
+        .clone();
+    assert_eq!(csv["summary"]["header_at_row"], 5);
+    assert_eq!(
+        csv["suggestions"]["profile_pre_parse"]["mode"],
+        "preamble_with_units"
+    );
+    let xml = parse_stdout(&peek_path(
+        &xml_fixture("abs-ee/exh_102.xml"),
+        &["--view", "brief"],
+    ))["result"]
+        .clone();
+    assert_eq!(
+        xml["summary"]["record_candidates"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(xml["element_count"], 4156);
+    let parquet = parse_stdout(&peek_path(
+        &parquet_fixture("delivery.parquet"),
+        &["--view", "brief"],
+    ))["result"]
+        .clone();
+    assert_eq!(parquet["row_count"], 30);
+    assert_eq!(parquet["summary"]["nested_columns"], 1);
+}
+
+#[test]
+fn brief_view_witness_hashes_what_was_printed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let witness = dir.path().join("witness.jsonl");
+    let path = parquet_fixture("delivery.parquet");
+    let output = run_fingerprint_with_witness(
+        &["peek", path.to_str().unwrap(), "--view", "brief"],
+        &witness,
+    );
+    assert_eq!(output.status.code(), Some(0));
+    let printed = parse_stdout(&output)["result"].clone();
+    let record: Value = serde_json::from_str(
+        fs::read_to_string(&witness)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        record["output_hash"],
+        format!(
+            "blake3:{}",
+            blake3::hash(&serde_json::to_vec(&printed).unwrap()).to_hex()
+        )
+    );
+}
+
+#[test]
+fn brief_view_is_still_zero_retention() {
+    for (name, planted) in [
+        (parquet_fixture("canary.parquet"), "CANARY"),
+        (fixture("canary.jsonl"), "CANARY"),
+        (xml_fixture("abs-ee/exh_103.xml"), "Hilton"),
+    ] {
+        let stdout = String::from_utf8(peek_path(&name, &["--view", "brief"]).stdout).unwrap();
+        assert!(!stdout.contains(planted), "{name:?}: {stdout}");
+    }
+}

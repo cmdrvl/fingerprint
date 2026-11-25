@@ -234,6 +234,15 @@ pub struct MatchArgs {
     pub json: bool,
 }
 
+/// Output view for `fingerprint peek`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum PeekView {
+    /// The whole structural report (default).
+    Full,
+    /// A bounded summary without the per-row / per-column / per-field / per-path arrays.
+    Brief,
+}
+
 #[derive(Debug, Args)]
 pub struct PeekArgs {
     /// CSV-like file to inspect.
@@ -255,6 +264,11 @@ pub struct PeekArgs {
     /// 0-based index (default: the first sheet). Ignored for CSV-like files.
     #[arg(long, value_name = "NAME|INDEX")]
     pub sheet: Option<String>,
+
+    /// Output view: `full` (default) or `brief` (no per-row/column/field/path arrays; a bounded
+    /// summary that stays well under ~500 tokens).
+    #[arg(long, value_enum, default_value = "full")]
+    pub view: PeekView,
 
     /// Parquet only: also print column names and file key/value metadata keys. By default a
     /// column is identified by a short hash of its name and metadata keys are only counted.

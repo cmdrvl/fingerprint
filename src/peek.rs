@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader};
 
 use serde_json::{Value, json};
 
-use crate::cli::args::PeekArgs;
+use crate::cli::args::{PeekArgs, PeekView};
 use crate::witness::ledger::{append, ledger_path_for_append};
 use crate::witness::record::{WitnessInput, WitnessRecord};
 
@@ -160,6 +160,9 @@ pub fn run(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
     if lower_extension.as_deref() == Some("parquet") {
         return run_parquet(args, append_witness_record);
     }
+    if lower_extension.as_deref() == Some("xml") {
+        return run_xml(args, append_witness_record);
+    }
     if let Some(kind) = match lower_extension.as_deref() {
         Some("jsonl" | "ndjson") => Some(JsonPeekKind::Jsonl),
         Some("json") => Some(JsonPeekKind::Json),
@@ -273,6 +276,7 @@ pub fn run(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
         // Only present when a line exceeded the in-memory cap; ordinary files are unchanged.
         result["truncated_lines"] = json!(input.truncated_lines);
     }
+    let result = apply_view(args, result);
 
     let witness_id = if append_witness_record {
         append_peek_witness(args, input.blake3.clone(), input.total_bytes, &result)
@@ -476,6 +480,7 @@ fn run_workbook(
     if args.suggest {
         result["suggestions"] = suggestions(&rows, modal_column_count);
     }
+    let result = apply_view(args, result);
 
     let witness_id = if append_witness_record {
         match hash_file(&args.file) {
@@ -745,9 +750,205 @@ fn run_json(
     if truncated_lines > 0 {
         result["truncated_lines"] = json!(truncated_lines);
     }
+    let result = apply_view(args, result);
 
     let witness_id = if append_witness_record {
         append_peek_witness(args, hash, total_bytes, &result)
+    } else {
+        None
+    };
+    emit_json(&json!({
+        "version": ENVELOPE_VERSION,
+        "outcome": "SUCCESS",
+        "exit_code": 0,
+        "subcommand": "peek",
+        "result": result,
+        "witness_id": witness_id
+    }))?;
+    Ok(0)
+}
+
+/// Most record candidates a brief view lists.
+const BRIEF_MAX_CANDIDATES: usize = 5;
+
+/// `--view brief`: the report without its per-row / per-column / per-field / per-path arrays,
+/// so it stays small (well under ~500 tokens) however large the file is. Everything else
+/// (format, dialect, counts, summary, suggestions, at most 5 record candidates) is kept, and
+/// `omitted` names what was dropped. The view is applied before the witness record, so the
+/// witness's output hash is that of what was actually printed.
+fn apply_view(args: &PeekArgs, mut result: Value) -> Value {
+    if args.view != PeekView::Brief {
+        return result;
+    }
+    let mut omitted = Vec::new();
+    if let Some(object) = result.as_object_mut() {
+        for key in ["rows", "columns", "fields", "paths", "sheets"] {
+            if object.remove(key).is_some() {
+                omitted.push(key);
+            }
+        }
+        if let Some(candidates) = object
+            .get_mut("summary")
+            .and_then(|summary| summary.get_mut("record_candidates"))
+            .and_then(Value::as_array_mut)
+            && candidates.len() > BRIEF_MAX_CANDIDATES
+        {
+            candidates.truncate(BRIEF_MAX_CANDIDATES);
+        }
+    }
+    result["view"] = json!("brief");
+    result["omitted"] = json!(omitted);
+    result
+}
+
+fn short_id(text: &str) -> String {
+    format!("blake3:{}", &blake3::hash(text.as_bytes()).to_hex()[..16])
+}
+
+/// `fingerprint peek x.xml`: the element-path skeleton from the streaming index (one pass over
+/// the whole file, O(distinct paths) memory): root, element and path counts, depth, and for
+/// each element path its depth, element count, attribute-name count, whether it repeats within
+/// its parent and whether it is a leaf. Repeating non-leaf paths are the record candidates
+/// (`summary.record_candidates`). Elements are identified by `id` (blake3 prefix of the path);
+/// `--explicit` adds the paths and the root namespace URI. No text and no attribute value is
+/// ever read into the report, and attribute NAMES appear only as a count.
+fn run_xml(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
+    use crate::document::XmlDocument;
+
+    let path = args.file.display().to_string();
+    let refuse = |message: &str, detail: Value| -> Result<u8, String> {
+        emit_refusal("E_BAD_INPUT", message, detail)?;
+        Ok(2)
+    };
+    let xml = match XmlDocument::open(&args.file) {
+        Ok(xml) => xml,
+        Err(error) => {
+            // The error names the byte position, never content.
+            return refuse(
+                "Could not parse xml",
+                json!({ "path": path, "error": error.replace(&path, "<file>") }),
+            );
+        }
+    };
+
+    let depth_of = |p: &str| p.matches('/').count();
+    let has_children = |p: &str| {
+        let prefix = format!("{p}/");
+        xml.paths.keys().any(|other| other.starts_with(&prefix))
+    };
+    let parent_count = |p: &str| -> Option<u64> {
+        p.rfind('/')
+            .filter(|index| *index > 0)
+            .and_then(|index| xml.paths.get(&p[..index]).copied())
+    };
+    struct Row {
+        path: String,
+        depth: usize,
+        count: u64,
+        repeating: bool,
+        leaf: bool,
+        attributes: usize,
+    }
+    let mut rows: Vec<Row> = xml
+        .paths
+        .iter()
+        .map(|(p, count)| Row {
+            path: p.clone(),
+            depth: depth_of(p),
+            count: *count,
+            repeating: parent_count(p).is_some_and(|parent| *count > parent),
+            leaf: !has_children(p),
+            attributes: xml.attribute_names.get(p).map_or(0, |names| names.len()),
+        })
+        .collect();
+    // Name-free, deterministic order: depth, then id.
+    rows.sort_by(|a, b| {
+        a.depth
+            .cmp(&b.depth)
+            .then_with(|| short_id(&a.path).cmp(&short_id(&b.path)))
+    });
+    let max_depth = rows.iter().map(|row| row.depth).max().unwrap_or(0);
+    let repeating_paths = rows.iter().filter(|row| row.repeating).count();
+    let candidates: Vec<Value> = rows
+        .iter()
+        .filter(|row| row.repeating && !row.leaf)
+        .map(|row| {
+            let prefix = format!("{}/", row.path);
+            let leaf_children = xml
+                .paths
+                .keys()
+                .filter(|other| {
+                    other
+                        .strip_prefix(&prefix)
+                        .is_some_and(|rest| !rest.contains('/') && !has_children(other))
+                })
+                .count();
+            let mut entry = json!({
+                "id": short_id(&row.path),
+                "count": row.count,
+                "leaf_children": leaf_children,
+            });
+            if args.explicit {
+                entry["path"] = json!(row.path);
+            }
+            entry
+        })
+        .collect();
+    let truncated = rows.len() > MAX_JSON_FIELDS;
+    let paths: Vec<Value> = rows
+        .iter()
+        .take(MAX_JSON_FIELDS)
+        .enumerate()
+        .map(|(index, row)| {
+            let mut entry = json!({
+                "index": index,
+                "id": short_id(&row.path),
+                "depth": row.depth,
+                "count": row.count,
+                "repeating": row.repeating,
+                "leaf": row.leaf,
+                "attribute_names": row.attributes,
+            });
+            if args.explicit {
+                entry["path"] = json!(row.path);
+            }
+            entry
+        })
+        .collect();
+
+    let mut root = json!({
+        "id": short_id(&xml.root),
+        "namespace_id": xml.root_namespace.as_deref().map(short_id),
+    });
+    if args.explicit {
+        root["name"] = json!(xml.root);
+        root["namespace"] = json!(xml.root_namespace);
+    }
+    let result = json!({
+        "file": path,
+        "format": "xml",
+        "dialect": dialect_json("xml", "none", None),
+        "root": root,
+        "element_count": xml.element_count,
+        "paths_total": rows.len(),
+        "paths_truncated": truncated,
+        "max_depth": max_depth,
+        "summary": {
+            "repeating_paths": repeating_paths,
+            "record_candidates": candidates,
+        },
+        "paths": paths,
+    });
+    let result = apply_view(args, result);
+
+    let witness_id = if append_witness_record {
+        match hash_file(&args.file) {
+            Ok((hash, bytes)) => append_peek_witness(args, Some(hash), bytes, &result),
+            Err(error) => {
+                eprintln!("Warning: Failed to hash xml file for the witness record: {error}");
+                None
+            }
+        }
     } else {
         None
     };
@@ -900,6 +1101,7 @@ fn run_parquet(args: &PeekArgs, append_witness_record: bool) -> Result<u8, Strin
                 .unwrap_or_default()
         );
     }
+    let result = apply_view(args, result);
 
     let witness_id = if append_witness_record {
         match hash_file(&args.file) {
