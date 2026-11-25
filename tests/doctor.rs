@@ -89,6 +89,31 @@ fn doctor_is_read_only_and_does_not_write_witness() {
 }
 
 #[test]
+fn help_routes_exit_success() {
+    for args in [
+        ["--help"].as_slice(),
+        ["doctor", "--help"].as_slice(),
+        ["doctor", "health", "--help"].as_slice(),
+        ["doctor", "capabilities", "--help"].as_slice(),
+        ["capabilities", "--help"].as_slice(),
+        ["robot-docs", "--help"].as_slice(),
+    ] {
+        let output = run_fingerprint(args);
+        assert_eq!(output.status.code(), Some(0), "help route failed: {args:?}");
+        assert!(output.stderr.is_empty(), "help route wrote stderr: {args:?}");
+        assert!(!output.stdout.is_empty(), "help route was empty: {args:?}");
+    }
+}
+
+#[test]
+fn doctor_health_is_read_only_and_successful() {
+    let output = run_fingerprint(["doctor", "health"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("fingerprint doctor healthy"));
+}
+
+#[test]
 fn no_color_and_non_tty_help_are_ansi_free() {
     for no_color in [true, false] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fingerprint"));
@@ -106,10 +131,21 @@ fn no_color_and_non_tty_help_are_ansi_free() {
 
 #[test]
 fn typo_recovery_keeps_edit_distance_one_hints() {
-    for args in [["--jbos", "1"].as_slice(), ["doctor", "healt"].as_slice()] {
+    // These are Clap's built-in suggestions. A bare top-level word is the
+    // positional INPUT, so fingerprint infr intentionally has no subcommand hint.
+    for (args, expected) in [
+        (["--jbos", "1"].as_slice(), "--jobs"),
+        (["--jsn"].as_slice(), "--json"),
+        (["doctor", "healt"].as_slice(), "health"),
+    ] {
         let output = run_fingerprint(args);
         assert_eq!(output.status.code(), Some(2));
-        assert!(String::from_utf8_lossy(&output.stderr).contains("similar"));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("similar"));
+        assert!(
+            stderr.contains(expected),
+            "expected suggestion {expected:?} for {args:?}, got: {stderr}"
+        );
     }
 }
 
