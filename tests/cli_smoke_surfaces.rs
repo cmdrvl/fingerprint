@@ -58,13 +58,17 @@ fn smoke_describe_schema_and_list_exit_zero() {
         serde_json::from_slice(&describe.stdout).expect("describe should be valid JSON");
     assert_eq!(describe_json["name"], "fingerprint");
     assert_eq!(
-        describe_json["version"],
+        describe_json["tool_version"],
         env!("CARGO_PKG_VERSION"),
-        "--describe version should stay aligned with Cargo.toml"
+        "--describe tool_version should stay aligned with Cargo.toml"
+    );
+    assert!(
+        describe_json.get("version").is_none(),
+        "operator.v1 renamed `version` to `tool_version`; the v0 field must not return"
     );
     assert_eq!(
-        describe_json["schema_version"], "operator.v0",
-        "--describe must emit operator.v0 schema"
+        describe_json["schema_version"], "operator.v1",
+        "--describe must emit operator.v1 schema"
     );
     assert!(
         describe_json.get("exit_codes").is_some(),
@@ -79,9 +83,23 @@ fn smoke_describe_schema_and_list_exit_zero() {
         "--describe must include pipeline"
     );
     assert_eq!(
-        describe_json["capabilities"]["formats"],
-        json!(["csv", "xlsx", "pdf", "html", "markdown", "text"]),
-        "--describe must advertise every supported runtime format, including html"
+        describe_json["formats"],
+        json!([
+            "fingerprint.v0 JSONL",
+            "operator.v1 JSON",
+            "cmdrvl.doctor.v1 JSON",
+            "csv",
+            "xlsx",
+            "pdf",
+            "html",
+            "markdown",
+            "text"
+        ]),
+        "--describe must advertise the protocol formats and every supported runtime document format, including html (operator.v1 moved `formats` to the top level)"
+    );
+    assert!(
+        describe_json.get("capabilities").is_none(),
+        "operator.v1 has no `capabilities` object in --describe"
     );
     let options = describe_json["options"]
         .as_array()
