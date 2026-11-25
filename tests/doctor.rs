@@ -100,7 +100,10 @@ fn help_routes_exit_success() {
     ] {
         let output = run_fingerprint(args);
         assert_eq!(output.status.code(), Some(0), "help route failed: {args:?}");
-        assert!(output.stderr.is_empty(), "help route wrote stderr: {args:?}");
+        assert!(
+            output.stderr.is_empty(),
+            "help route wrote stderr: {args:?}"
+        );
         assert!(!output.stdout.is_empty(), "help route was empty: {args:?}");
     }
 }
