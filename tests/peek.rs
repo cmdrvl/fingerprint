@@ -1627,11 +1627,7 @@ fn write_canary_pdf(path: &Path) {
     {
         let content_id = document.add_object(Stream::new(
             lopdf::Dictionary::new(),
-            format!(
-                "BT /F1 12 Tf ({}) Tj ET",
-                format!("CANARY-PAGE-TEXT-{index}-7a8b")
-            )
-            .into_bytes(),
+            format!("BT /F1 12 Tf (CANARY-PAGE-TEXT-{index}-7a8b) Tj ET").into_bytes(),
         ));
         let page_id = document.add_object(dictionary! {
             "Type" => "Page",
