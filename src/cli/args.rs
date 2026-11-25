@@ -390,7 +390,7 @@ mod tests {
             "out-dir",
         ]);
         assert!(
-            matches!(cli.command, Some(Command::Compile { out: Some(path), .. }) if path == PathBuf::from("out-dir"))
+            matches!(cli.command, Some(Command::Compile { out: Some(path), .. }) if path.to_str() == Some("out-dir"))
         );
 
         let cli = Cli::parse_from([
@@ -405,7 +405,7 @@ mod tests {
             "out.fp.yaml",
         ]);
         assert!(
-            matches!(cli.command, Some(Command::Infer { out: Some(path), .. }) if path == PathBuf::from("out.fp.yaml"))
+            matches!(cli.command, Some(Command::Infer { out: Some(path), .. }) if path.to_str() == Some("out.fp.yaml"))
         );
     }
 

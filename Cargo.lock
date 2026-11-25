@@ -2351,8 +2351,8 @@ dependencies = [
 
 [[package]]
 name = "spine-rules"
-version = "0.3.0"
-source = "git+https://github.com/cmdrvl/spine-rules#b2a81493b204201143171586499979311372fbe9"
+version = "0.3.1"
+source = "git+https://github.com/cmdrvl/spine-rules#f96638f7c65597d658182253350f1320002976e3"
 dependencies = [
  "serde",
  "serde_json",
