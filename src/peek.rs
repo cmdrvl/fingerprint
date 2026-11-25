@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{BufRead, BufReader};
 
 use serde_json::{Value, json};
 
@@ -19,10 +20,150 @@ struct RawRowShape {
     has_unit_tokens: bool,
 }
 
+/// Longest line kept in memory. A longer line is truncated for shape purposes (its length
+/// bucket is `65+` either way) and counted in `truncated_lines`; every byte is still hashed.
+const MAX_LINE_BYTES: usize = 1024 * 1024;
+/// Non-empty lines the delimiter guess looks at.
+const GUESS_LINES: usize = 25;
+
+/// Binary containers peek has no reader for: refused up front as "format not applicable"
+/// instead of failing later with a UTF-8 error.
+const NOT_APPLICABLE_EXTENSIONS: &[&str] = &[
+    "xlsx", "xlsm", "xls", "parquet", "pdf", "zip", "gz", "docx", "pptx", "png", "jpg", "jpeg",
+];
+
+/// What peek reads from the file: only the lines it reports on, never the whole file.
+struct PeekInput {
+    /// The first `rows` lines (blank lines included), without line terminators.
+    row_lines: Vec<Vec<u8>>,
+    /// The first [`GUESS_LINES`] non-blank lines, for the delimiter guess.
+    guess_lines: Vec<Vec<u8>>,
+    total_bytes: u64,
+    /// blake3 of every byte of the file; computed only when a witness record needs it.
+    blake3: Option<String>,
+    truncated_lines: usize,
+}
+
+/// Read one line (up to and including `\n`) keeping at most [`MAX_LINE_BYTES`] of it. Every
+/// consumed byte is passed to `consumed` (for hashing). Returns `None` at end of file, else
+/// the line without its terminator and whether it was truncated.
+fn read_capped_line<R: BufRead>(
+    reader: &mut R,
+    consumed: &mut dyn FnMut(&[u8]),
+) -> std::io::Result<Option<(Vec<u8>, bool)>> {
+    let mut line = Vec::new();
+    let mut truncated = false;
+    let mut saw_any = false;
+    loop {
+        let (used, done) = {
+            let available = reader.fill_buf()?;
+            if available.is_empty() {
+                break;
+            }
+            saw_any = true;
+            let newline = available.iter().position(|b| *b == b'\n');
+            let take = newline.map_or(available.len(), |i| i + 1);
+            consumed(&available[..take]);
+            let keep = take.min(MAX_LINE_BYTES.saturating_sub(line.len()));
+            if keep < take {
+                truncated = true;
+            }
+            line.extend_from_slice(&available[..keep]);
+            (take, newline.is_some())
+        };
+        reader.consume(used);
+        if done {
+            break;
+        }
+    }
+    if !saw_any {
+        return Ok(None);
+    }
+    while matches!(line.last(), Some(b'\n' | b'\r')) {
+        line.pop();
+    }
+    Ok(Some((line, truncated)))
+}
+
+fn read_input(
+    path: &std::path::Path,
+    max_rows: usize,
+    want_hash: bool,
+) -> std::io::Result<PeekInput> {
+    let file = fs::File::open(path)?;
+    let total_bytes = file.metadata()?.len();
+    let mut reader = BufReader::with_capacity(64 * 1024, file);
+    let mut hasher = want_hash.then(blake3::Hasher::new);
+    let mut consumed = |bytes: &[u8]| {
+        if let Some(hasher) = hasher.as_mut() {
+            hasher.update(bytes);
+        }
+    };
+
+    let mut row_lines = Vec::new();
+    let mut guess_lines = Vec::new();
+    let mut truncated_lines = 0usize;
+    let mut seen = 0usize;
+    while seen < max_rows || guess_lines.len() < GUESS_LINES {
+        let Some((line, truncated)) = read_capped_line(&mut reader, &mut consumed)? else {
+            break;
+        };
+        if truncated {
+            truncated_lines += 1;
+        }
+        let blank = String::from_utf8_lossy(&line).trim().is_empty();
+        if !blank && guess_lines.len() < GUESS_LINES {
+            guess_lines.push(line.clone());
+        }
+        if seen < max_rows {
+            row_lines.push(line);
+        }
+        seen += 1;
+    }
+    // Hash the rest of the file in chunks (the only full pass, and only for witnesses).
+    if want_hash {
+        loop {
+            let available = reader.fill_buf()?;
+            if available.is_empty() {
+                break;
+            }
+            let len = available.len();
+            consumed(available);
+            reader.consume(len);
+        }
+    }
+    let blake3 = hasher.map(|hasher| format!("blake3:{}", hasher.finalize().to_hex()));
+    Ok(PeekInput {
+        row_lines,
+        guess_lines,
+        total_bytes,
+        blake3,
+        truncated_lines,
+    })
+}
+
 pub fn run(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
     let max_rows = args.rows.max(1);
-    let bytes = match fs::read(&args.file) {
-        Ok(bytes) => bytes,
+    if let Some(extension) = args
+        .file
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        && NOT_APPLICABLE_EXTENSIONS.contains(&extension.as_str())
+    {
+        emit_refusal(
+            "E_BAD_INPUT",
+            "Format not applicable: peek inspects CSV-like text only",
+            json!({
+                "path": args.file.display().to_string(),
+                "format": extension,
+                "reason": "format_not_applicable",
+            }),
+        )?;
+        return Ok(2);
+    }
+    let input = match read_input(&args.file, max_rows, append_witness_record) {
+        Ok(input) => input,
         Err(error) => {
             emit_refusal(
                 "E_BAD_INPUT",
@@ -36,7 +177,7 @@ pub fn run(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
         }
     };
 
-    if bytes.is_empty() {
+    if input.total_bytes == 0 {
         emit_refusal(
             "E_BAD_INPUT",
             "Input file is empty",
@@ -45,8 +186,8 @@ pub fn run(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
         return Ok(2);
     }
 
-    let delimiter = guess_delimiter(&bytes);
-    let rows = match inspect_rows(&bytes, delimiter.byte, max_rows) {
+    let delimiter = guess_delimiter(&input.guess_lines);
+    let rows = match inspect_rows(&input.row_lines, delimiter.byte) {
         Ok(rows) if rows.is_empty() => {
             emit_refusal(
                 "E_BAD_INPUT",
@@ -91,9 +232,13 @@ pub fn run(args: &PeekArgs, append_witness_record: bool) -> Result<u8, String> {
     if args.suggest {
         result["suggestions"] = suggestions(&rows, modal_column_count);
     }
+    if input.truncated_lines > 0 {
+        // Only present when a line exceeded the in-memory cap; ordinary files are unchanged.
+        result["truncated_lines"] = json!(input.truncated_lines);
+    }
 
     let witness_id = if append_witness_record {
-        append_peek_witness(args, &bytes, &result)
+        append_peek_witness(args, &input, &result)
     } else {
         None
     };
@@ -142,13 +287,12 @@ struct DelimiterGuess {
     confidence: f64,
 }
 
-fn guess_delimiter(bytes: &[u8]) -> DelimiterGuess {
-    let sample = String::from_utf8_lossy(bytes);
-    let lines = sample
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .take(25)
+fn guess_delimiter(guess_lines: &[Vec<u8>]) -> DelimiterGuess {
+    let owned = guess_lines
+        .iter()
+        .map(|line| String::from_utf8_lossy(line).into_owned())
         .collect::<Vec<_>>();
+    let lines = owned.iter().map(String::as_str).collect::<Vec<_>>();
 
     let candidates = [
         ("comma", b','),
@@ -202,15 +346,19 @@ fn guess_delimiter(bytes: &[u8]) -> DelimiterGuess {
     }
 }
 
-fn inspect_rows(bytes: &[u8], delimiter: u8, max_rows: usize) -> Result<Vec<RawRowShape>, String> {
-    let content =
-        std::str::from_utf8(bytes).map_err(|_| "input is not valid UTF-8 text".to_owned())?;
+fn inspect_rows(row_lines: &[Vec<u8>], delimiter: u8) -> Result<Vec<RawRowShape>, String> {
     let mut rows = Vec::new();
 
-    for (index, line) in content.lines().enumerate() {
-        if rows.len() >= max_rows {
-            break;
-        }
+    for (index, raw) in row_lines.iter().enumerate() {
+        // A line cut at MAX_LINE_BYTES may end inside a UTF-8 sequence; that is not invalid text.
+        let line = match std::str::from_utf8(raw) {
+            Ok(line) => line,
+            Err(error) if error.error_len().is_none() && raw.len() >= MAX_LINE_BYTES => {
+                std::str::from_utf8(&raw[..error.valid_up_to()])
+                    .map_err(|_| "input is not valid UTF-8 text".to_owned())?
+            }
+            Err(_) => return Err("input is not valid UTF-8 text".to_owned()),
+        };
         if line.trim().is_empty() {
             rows.push(RawRowShape {
                 row_index: index + 1,
@@ -536,7 +684,7 @@ fn round_confidence(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
 }
 
-fn append_peek_witness(args: &PeekArgs, bytes: &[u8], result: &Value) -> Option<String> {
+fn append_peek_witness(args: &PeekArgs, input: &PeekInput, result: &Value) -> Option<String> {
     let output_bytes = match serde_json::to_vec(result) {
         Ok(output_bytes) => output_bytes,
         Err(error) => {
@@ -549,8 +697,8 @@ fn append_peek_witness(args: &PeekArgs, bytes: &[u8], result: &Value) -> Option<
         crate::current_binary_hash(),
         vec![WitnessInput {
             path: args.file.display().to_string(),
-            hash: Some(format!("blake3:{}", blake3::hash(bytes).to_hex())),
-            bytes: Some(u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
+            hash: input.blake3.clone(),
+            bytes: Some(input.total_bytes),
         }],
         json!({
             "subcommand": "peek",

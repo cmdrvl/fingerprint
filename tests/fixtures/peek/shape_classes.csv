@@ -1,0 +1,10 @@
+
+This paragraph line is deliberately long enough to exceed sixty-five characters in one single cell
+Title
+,,x,,,,
+Name,Region,Amount,Closed
+text,%,usd,date
+A,East,10,2026-01-01
+B,West,12,2026-01-02
+C,North,13,2026-01-03
+a,b,c,d,e

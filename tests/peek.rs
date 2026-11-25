@@ -119,3 +119,254 @@ fn peek_refuses_empty_file_with_json_refusal() {
 fn parse_stdout_from_str(stdout: &str) -> Value {
     serde_json::from_str(stdout).expect("stdout should be JSON")
 }
+
+// ---- bd-27o: streaming, fixture matrix, shape classes, not-applicable ------------------------
+
+fn peek_result(file: &str, extra: &[&str]) -> Value {
+    let path = fixture(file);
+    let mut args = vec!["peek", path.to_str().expect("fixture path"), "--no-witness"];
+    args.extend_from_slice(extra);
+    let output = run_fingerprint(&args);
+    assert_eq!(output.status.code(), Some(0), "{file}");
+    parse_stdout(&output)["result"].clone()
+}
+
+fn shape_classes(result: &Value) -> Vec<String> {
+    result["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .map(|row| row["shape_class"].as_str().expect("class").to_owned())
+        .collect()
+}
+
+#[test]
+fn every_documented_shape_class_is_produced_for_the_row_it_describes() {
+    let result = peek_result("shape_classes.csv", &["--suggest"]);
+    assert_eq!(
+        shape_classes(&result),
+        [
+            "blank",
+            "paragraph",
+            "sparse-label",
+            "sparse-multi",
+            "dense-header-candidate",
+            "dense-units",
+            "dense-data",
+            "dense-data",
+            "dense-data",
+            "irregular"
+        ]
+    );
+    let summary = &result["summary"];
+    assert_eq!(summary["modal_column_count"], 4);
+    assert_eq!(summary["header_at_row"], 5);
+    assert_eq!(summary["data_starts_at"], 7);
+    assert_eq!(summary["preamble_rows"], 4);
+    assert_eq!(
+        summary["shape_classes"],
+        serde_json::json!({
+            "blank": 1, "dense-data": 3, "dense-header-candidate": 1, "dense-units": 1,
+            "irregular": 1, "paragraph": 1, "sparse-label": 1, "sparse-multi": 1
+        })
+    );
+    let pre_parse = &result["suggestions"]["profile_pre_parse"];
+    assert_eq!(pre_parse["mode"], "preamble_with_units");
+    assert_eq!(pre_parse["unit_rows"], serde_json::json!([6]));
+}
+
+#[test]
+fn fixture_matrix_clean_comments_mixed_tsv_preamble_crlf_and_no_trailing_newline() {
+    // (file, delimiter, modal, header_at_row, data_starts_at, classes)
+    let header_then_data = |n: usize| {
+        let mut v = vec!["dense-header-candidate".to_owned()];
+        v.extend(std::iter::repeat_n("dense-data".to_owned(), n));
+        v
+    };
+    let with_comments = |n: usize| {
+        let mut v = vec!["sparse-label".to_owned(); 3];
+        v.extend(header_then_data(n));
+        v
+    };
+    type Case = (&'static str, &'static str, u64, u64, u64, Vec<String>);
+    let cases: [Case; 7] = [
+        ("clean_flat.csv", "comma", 4, 1, 2, header_then_data(5)),
+        ("comment_lines.csv", "comma", 4, 4, 5, with_comments(3)),
+        // Mixed delimiters: the guess follows the majority of the sampled lines (semicolon);
+        // the heuristic is pinned as it behaves today, not endorsed.
+        (
+            "mixed_delimiters.csv",
+            "semicolon",
+            4,
+            4,
+            5,
+            with_comments(3),
+        ),
+        (
+            "only_preamble.csv",
+            "comma",
+            1,
+            1,
+            2,
+            vec![
+                "sparse-label".into(),
+                "sparse-label".into(),
+                "paragraph".into(),
+            ],
+        ),
+        ("tsv.tsv", "tab", 4, 1, 2, header_then_data(3)),
+        ("crlf.csv", "comma", 4, 1, 2, header_then_data(2)),
+        (
+            "no_trailing_newline.csv",
+            "comma",
+            4,
+            1,
+            2,
+            header_then_data(2),
+        ),
+    ];
+    for (file, delimiter, modal, header, data_start, classes) in cases {
+        let result = peek_result(file, &[]);
+        assert_eq!(result["delimiter"]["name"], delimiter, "{file}");
+        assert_eq!(result["summary"]["modal_column_count"], modal, "{file}");
+        assert_eq!(result["summary"]["header_at_row"], header, "{file}");
+        assert_eq!(result["summary"]["data_starts_at"], data_start, "{file}");
+        assert_eq!(shape_classes(&result), classes, "{file}");
+    }
+}
+
+#[test]
+fn peek_does_not_read_past_the_rows_it_reports_on() {
+    // 20 clean lines, then 100 MiB of bytes that are not UTF-8. A whole-file read would refuse
+    // (or take a long time); streaming inspects only the head and succeeds quickly.
+    use std::io::Write;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("huge.csv");
+    {
+        let mut file = fs::File::create(&path).expect("create");
+        file.write_all(b"loan_id,region,balance,rate\n").unwrap();
+        for i in 0..20 {
+            writeln!(file, "L{i},East,{i}.5,0.05").unwrap();
+        }
+        let garbage = vec![0xFFu8; 1024 * 1024];
+        for _ in 0..100 {
+            file.write_all(&garbage).unwrap();
+        }
+    }
+    let started = std::time::Instant::now();
+    let output = run_fingerprint(&[
+        "peek",
+        path.to_str().unwrap(),
+        "--rows",
+        "10",
+        "--no-witness",
+    ]);
+    let elapsed = started.elapsed();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result = parse_stdout(&output)["result"].clone();
+    assert_eq!(result["rows_observed"], 10);
+    assert_eq!(result["summary"]["modal_column_count"], 4);
+    assert!(
+        elapsed.as_secs() < 20,
+        "peek took {elapsed:?} on a 100 MiB file"
+    );
+}
+
+#[test]
+fn witness_hash_and_size_cover_the_whole_file_even_though_peek_streams() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("big.csv");
+    {
+        let mut file = fs::File::create(&path).expect("create");
+        file.write_all(b"a,b\n").unwrap();
+        for i in 0..200_000 {
+            writeln!(file, "{i},x{i}").unwrap();
+        }
+    }
+    let witness = dir.path().join("witness.jsonl");
+    let output =
+        run_fingerprint_with_witness(&["peek", path.to_str().unwrap(), "--rows", "5"], &witness);
+    assert_eq!(output.status.code(), Some(0));
+    let record: Value = serde_json::from_str(
+        fs::read_to_string(&witness)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    let bytes = fs::read(&path).unwrap();
+    assert_eq!(record["inputs"][0]["bytes"], bytes.len());
+    assert_eq!(
+        record["inputs"][0]["hash"],
+        format!("blake3:{}", blake3::hash(&bytes).to_hex())
+    );
+}
+
+#[test]
+fn an_overlong_line_is_truncated_for_shape_counted_and_still_hashed() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("long.csv");
+    {
+        let mut file = fs::File::create(&path).expect("create");
+        file.write_all(b"a,b\n1,2\n").unwrap();
+        file.write_all(&vec![b'z'; 3 * 1024 * 1024]).unwrap();
+        file.write_all(b"\n").unwrap();
+    }
+    let witness = dir.path().join("witness.jsonl");
+    let output =
+        run_fingerprint_with_witness(&["peek", path.to_str().unwrap(), "--rows", "5"], &witness);
+    assert_eq!(output.status.code(), Some(0));
+    let result = parse_stdout(&output)["result"].clone();
+    assert_eq!(result["truncated_lines"], 1);
+    assert_eq!(result["rows"][2]["shape_class"], "paragraph");
+    let record: Value = serde_json::from_str(
+        fs::read_to_string(&witness)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        record["inputs"][0]["hash"],
+        format!(
+            "blake3:{}",
+            blake3::hash(&fs::read(&path).unwrap()).to_hex()
+        )
+    );
+}
+
+#[test]
+fn invalid_utf8_inside_the_inspected_rows_still_refuses() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("bad.csv");
+    fs::write(&path, b"a,b\n1,\xFF\xFE\n").unwrap();
+    let output = run_fingerprint(&["peek", path.to_str().unwrap(), "--no-witness"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(parse_stdout(&output)["refusal"]["code"], "E_BAD_INPUT");
+}
+
+#[test]
+fn non_csv_containers_are_refused_as_format_not_applicable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for name in ["book.xlsx", "data.parquet", "doc.pdf", "archive.zip"] {
+        let path = dir.path().join(name);
+        fs::write(&path, b"PK\x03\x04 not really").unwrap();
+        let output = run_fingerprint(&["peek", path.to_str().unwrap(), "--no-witness"]);
+        assert_eq!(output.status.code(), Some(2), "{name}");
+        let envelope = parse_stdout(&output);
+        assert_eq!(envelope["refusal"]["code"], "E_BAD_INPUT", "{name}");
+        assert_eq!(
+            envelope["refusal"]["detail"]["reason"], "format_not_applicable",
+            "{name}"
+        );
+    }
+}

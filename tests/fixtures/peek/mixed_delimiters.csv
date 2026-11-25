@@ -1,0 +1,7 @@
+loan_id,region,balance,rate
+L1,East,1000.5,0.05
+L2,West,2000,0.06
+loan_id;region;balance;rate
+L3;North;300.25;0.04
+L4;South;42;0.07
+L5;East;7;0.01

@@ -454,6 +454,8 @@ For spreadsheet corpora, `--format xlsx` covers both `.xlsx` and `.xls` inputs; 
 fingerprint peek <FILE> [--rows N] [--json] [--suggest] [--no-witness]
 ```
 
+Peek streams: it reads only the first `--rows` lines (plus the first 25 non-blank lines for the delimiter guess), so a 100 MB file costs the same as a small one; the witness record, when enabled, still hashes the whole file in 64 KiB chunks. A line longer than 1 MiB is truncated for shape purposes (it is a `paragraph` either way) and reported as `truncated_lines`. Text that is not UTF-8 is refused only if it is inside the inspected rows. Binary containers (`.xlsx`, `.xls`, `.parquet`, `.pdf`, `.zip`, ...) are refused up front with `E_BAD_INPUT` and `detail.reason: "format_not_applicable"`.
+
 Peek mode is read-only. It inspects CSV-like row shape and emits metadata only, so agents can decide whether a file needs preamble skipping, multi-row headers, or units-row handling before calling `profile slice`.
 
 | Flag | Type | Default | Description |

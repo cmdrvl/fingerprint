@@ -1,0 +1,4 @@
+loan_id	region	balance	rate
+L1	East	1000.5	0.05
+L2	West	2000	0.06
+L3	North	300.25	0.04
