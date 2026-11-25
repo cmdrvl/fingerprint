@@ -2,7 +2,7 @@
 
 //! `fingerprint materialize <FILE> --fp <ID> --extract <NAME> --out <PATH> [--format ...]`
 //! (bd-uai): deterministically project a matched `extract:` section of a non-flat document
-//! (an XLSX header-anchored range today) into a clean CSV / JSONL / Parquet table plus a
+//! (an XLSX header-anchored range, an HTML region) into a clean CSV / JSONL / Parquet table plus a
 //! provenance sidecar that pins what it came from.
 //!
 //! Fail closed: an unmatched document, an ambiguous child routing, an unknown extract, an
@@ -285,6 +285,25 @@ fn project_section(
                 )
             })
         }
+        ("region", Document::Html(html)) => {
+            let extracted = crate::dsl::extract::extract(document, std::slice::from_ref(section))
+                .map_err(|error| {
+                Refusal::new("E_PROJECTION", error, json!({ "extract": section.name }))
+            })?;
+            let region = extracted.get(&section.name).ok_or_else(|| {
+                Refusal::new(
+                    "E_PROJECTION",
+                    format!(
+                        "region extract '{}' did not locate a region in this document",
+                        section.name
+                    ),
+                    json!({ "extract": section.name }),
+                )
+            })?;
+            project::html_region(html, region).map_err(|error| {
+                Refusal::new("E_PROJECTION", error, json!({ "extract": section.name }))
+            })
+        }
         (kind, document) => Err(Refusal::new(
             "E_EXTRACT_UNSUPPORTED",
             format!(
@@ -296,7 +315,7 @@ fn project_section(
                 "extract_type": kind,
                 "document": document_kind(document),
                 "file": file.display().to_string(),
-                "supported": ["range on xlsx"],
+                "supported": ["range on xlsx", "region on html"],
             }),
         )),
     }

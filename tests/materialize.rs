@@ -478,3 +478,237 @@ fn projected_csv_is_rectangular_and_has_unique_nonempty_headers() {
         .len();
     assert_eq!(rows, 5);
 }
+
+// ---- HTML region projection -------------------------------------------------------------------
+
+fn soi_definition() -> String {
+    fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/evidence/source-offsets-20261106/soi-schedule.v2.fp.yaml"),
+    )
+    .unwrap()
+}
+
+fn html_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/html")
+        .join(name)
+}
+
+fn soi(defs: &Scratch, file: &Path, out: &Path, extra: &[&str]) -> Output {
+    let mut args = vec![
+        s(file).to_owned(),
+        "--fp".to_owned(),
+        "soi-schedule.v2".to_owned(),
+        "--extract".to_owned(),
+        "schedule_region".to_owned(),
+        "--out".to_owned(),
+        s(out).to_owned(),
+    ];
+    args.extend(extra.iter().map(|a| (*a).to_owned()));
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    materialize(defs, &refs)
+}
+
+#[test]
+fn html_region_projects_a_continued_schedule_with_groups_and_provenance() {
+    let soi_yaml = soi_definition();
+    let defs = defs(&[("soi-schedule.v2", &soi_yaml)]);
+    let out_dir = Scratch::new("html");
+
+    // bdc_soi_golub_like.html: two pages, each a table with the same header row, each with a
+    // full-width industry row. Expected table written out by hand from the HTML.
+    let out = out_dir.path("golub.csv");
+    let result = soi(&defs, &html_fixture("bdc_soi_golub_like.html"), &out, &[]);
+    assert_eq!(
+        result.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&out).unwrap(),
+        "_group,Company,Spread,Maturity,Cost,Fair Value\n\
+Software,Mariner Cloud,SOFR + 5.75%,2028-12-31,\"$6,100\",\"$6,180\"\n\
+Healthcare,North Lake,SOFR + 5.25%,2029-09-30,\"$5,400\",\"$5,520\"\n"
+    );
+
+    let prov: Value = serde_json::from_slice(&fs::read(sidecar(&out)).unwrap()).unwrap();
+    let locator = &prov["extract"]["locator"];
+    assert_eq!(locator["kind"], "html_region");
+    assert_eq!(locator["table_indices"], serde_json::json!([0, 1]));
+    assert_eq!(prov["skipped"]["repeated_header_rows"], 1);
+    assert_eq!(prov["skipped"]["full_width_rows_carried_as_group"], 2);
+    assert_eq!(prov["skipped"]["padded_rows"], 0);
+    assert_eq!(
+        prov["source"]["bytes_hash"],
+        blake3_of(&html_fixture("bdc_soi_golub_like.html"))
+    );
+    assert_eq!(
+        prov["fingerprint"]["source_hash"],
+        blake3_of(&defs.path("soi-schedule.v2.fp.yaml"))
+    );
+
+    // The pinned byte offsets really bracket the projected content in the source file.
+    let source = fs::read(html_fixture("bdc_soi_golub_like.html")).unwrap();
+    let start = locator["byte_offsets"]["start"].as_u64().unwrap() as usize;
+    let end = locator["byte_offsets"]["end"].as_u64().unwrap() as usize;
+    let region = String::from_utf8_lossy(&source[start..end]).into_owned();
+    assert!(
+        region.contains("Mariner Cloud") && region.contains("North Lake"),
+        "{region}"
+    );
+    assert!(
+        region.starts_with("<h1>Schedule of Investments</h1>"),
+        "the region starts at its anchor heading: {region}"
+    );
+    assert!(end <= source.len());
+}
+
+#[test]
+fn html_region_second_fixture_and_all_three_formats_agree() {
+    let soi_yaml = soi_definition();
+    let defs = defs(&[("soi-schedule.v2", &soi_yaml)]);
+    let out_dir = Scratch::new("html2");
+    let mut hashes = Vec::new();
+    for name in ["a.csv", "a.jsonl", "a.parquet"] {
+        let result = soi(
+            &defs,
+            &html_fixture("bdc_soi_ares_like.html"),
+            &out_dir.path(name),
+            &[],
+        );
+        assert_eq!(result.status.code(), Some(0), "{name}");
+        hashes.push(
+            stdout_json(&result)["content_hash"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    assert!(hashes.iter().all(|h| h == &hashes[0]));
+    assert_eq!(
+        fs::read_to_string(out_dir.path("a.csv")).unwrap(),
+        "_group,Portfolio Company,Investment,Business Description,Coupon,Cost,Fair Value\n\
+Software,Atlas Systems,First Lien,Enterprise software,SOFR + 6.50%,\"$18,100\",\"$18,450\"\n\
+Healthcare,Beacon Health,Second Lien,Provider services,11.25%,\"$9,400\",\"$9,650\"\n"
+    );
+    // Repeat run: byte-identical in every format.
+    let again = Scratch::new("html2b");
+    for name in ["a.csv", "a.jsonl", "a.parquet"] {
+        soi(
+            &defs,
+            &html_fixture("bdc_soi_ares_like.html"),
+            &again.path(name),
+            &[],
+        );
+        assert_eq!(
+            fs::read(again.path(name)).unwrap(),
+            fs::read(out_dir.path(name)).unwrap(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn html_region_refuses_what_it_cannot_flatten() {
+    let soi_yaml = soi_definition();
+    let defs = defs(&[("soi-schedule.v2", &soi_yaml)]);
+    let out_dir = Scratch::new("html3");
+
+    // Real fixture: the region's tables carry DIFFERENT header rows (one schedule is not one
+    // table shape), so projection refuses instead of merging them.
+    let out = out_dir.path("subsections.csv");
+    let result = soi(
+        &defs,
+        &html_fixture("soi_subsections_repeated_period.html"),
+        &out,
+        &[],
+    );
+    let (code, detail) = refusal(&result);
+    assert_eq!(code, "E_PROJECTION");
+    assert!(
+        detail["message"]
+            .as_str()
+            .unwrap()
+            .contains("different header row"),
+        "{detail}"
+    );
+    assert!(!out.exists());
+
+    // Synthetic edge cases, each a tiny page with the same heading the definition anchors on.
+    let page =
+        |table: &str| format!("<html><body><h1>Schedule of Investments</h1>{table}</body></html>");
+    let cases = [
+        (
+            "rowspan",
+            page(
+                "<table><tr><th>A</th><th>B</th></tr><tr><td rowspan=\"2\">x</td><td>y</td></tr></table>",
+            ),
+            "rowspan",
+        ),
+        (
+            "wide",
+            page(
+                "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td><td>3</td></tr></table>",
+            ),
+            "wider than the 2-column header",
+        ),
+        (
+            "nested",
+            page(
+                "<table><tr><th>A</th></tr><tr><td><table><tr><td>z</td></tr></table></td></tr></table>",
+            ),
+            "nested table",
+        ),
+        (
+            "dupheader",
+            page("<table><tr><th>A</th><th>A</th></tr><tr><td>1</td><td>2</td></tr></table>"),
+            "repeats a column name",
+        ),
+        (
+            "emptyheader",
+            page("<table><tr><th>A</th><th></th></tr><tr><td>1</td><td>2</td></tr></table>"),
+            "empty header cell",
+        ),
+    ];
+    for (name, html, needle) in cases {
+        let file = out_dir.path(&format!("{name}.html"));
+        fs::write(&file, html).unwrap();
+        let out = out_dir.path(&format!("{name}.csv"));
+        let result = soi(&defs, &file, &out, &[]);
+        let (code, detail) = refusal(&result);
+        // Some synthetic pages may fail to match the schedule fingerprint before projecting;
+        // the assertion below pins the exact outcome so a silent change cannot hide.
+        assert_eq!(code, "E_PROJECTION", "{name}: {detail}");
+        assert!(
+            detail["message"].as_str().unwrap().contains(needle),
+            "{name}: {detail}"
+        );
+        assert!(!out.exists(), "{name}: nothing written");
+    }
+}
+
+#[test]
+fn html_padding_is_counted_not_silent() {
+    let soi_yaml = soi_definition();
+    let defs = defs(&[("soi-schedule.v2", &soi_yaml)]);
+    let out_dir = Scratch::new("html4");
+    let file = out_dir.path("short.html");
+    fs::write(
+        &file,
+        "<html><body><h1>Schedule of Investments</h1><table><tr><th>A</th><th>B</th><th>C</th></tr><tr><td>1</td><td>2</td></tr><tr><td>4</td><td>5</td><td>6</td></tr></table></body></html>",
+    )
+    .unwrap();
+    let out = out_dir.path("short.csv");
+    let result = soi(&defs, &file, &out, &[]);
+    assert_eq!(
+        result.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+    assert_eq!(fs::read_to_string(&out).unwrap(), "A,B,C\n1,2,\n4,5,6\n");
+    let prov: Value = serde_json::from_slice(&fs::read(sidecar(&out)).unwrap()).unwrap();
+    assert_eq!(prov["skipped"]["padded_rows"], 1);
+}

@@ -39,7 +39,7 @@
     { "name": "robot-docs", "description": "Print paste-ready operating notes for agents", "read_only": true },
     { "name": "doctor", "description": "Read-only health, capabilities, and triage diagnostics", "aliases": ["doctor health", "doctor --robot-triage"], "read_only": true },
     { "name": "peek", "description": "Inspect delimited row shape without emitting cell content" },
-    { "name": "materialize", "description": "Project a matched extract section (XLSX header-anchored range) into a deterministic CSV/JSONL/Parquet table plus a provenance sidecar; fails closed" },
+    { "name": "materialize", "description": "Project a matched extract section (XLSX header-anchored range or an HTML region) into a deterministic CSV/JSONL/Parquet table plus a provenance sidecar; fails closed" },
     { "name": "match", "description": "Match files or directories directly (walk, blake3 hash, fingerprint) with no vacuum | hashbytes pipe; --view full|brief|delta" },
     { "name": "compile", "description": "Compile a fingerprint DSL definition" },
     { "name": "infer", "description": "Infer a fingerprint definition from example documents" },

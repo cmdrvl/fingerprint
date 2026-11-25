@@ -143,6 +143,219 @@ pub fn xlsx_range(path: &Path, sheet: &str, range: &str) -> Result<Projection, S
     })
 }
 
+/// Visible text of an element with all whitespace (including non-breaking spaces) collapsed.
+fn collapsed_text(element: scraper::ElementRef<'_>) -> String {
+    element
+        .text()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// One table of an HTML region as rows of cell text. `colspan` expands the spanned cells with
+/// empty text; `rowspan`, nested tables and a missing row are refused (fail closed) because they
+/// cannot be flattened without guessing.
+fn html_table_rows(
+    table: scraper::ElementRef<'_>,
+    table_index: usize,
+) -> Result<Vec<Vec<(String, usize)>>, String> {
+    let tr = scraper::Selector::parse("tr").map_err(|e| format!("{e:?}"))?;
+    let cells = scraper::Selector::parse("th, td").map_err(|e| format!("{e:?}"))?;
+    let nested = scraper::Selector::parse("table").map_err(|e| format!("{e:?}"))?;
+    if table.select(&nested).next().is_some() {
+        return Err(format!(
+            "table {table_index} contains a nested table, which cannot be flattened"
+        ));
+    }
+    let mut rows = Vec::new();
+    for (row_index, row) in table.select(&tr).enumerate() {
+        let mut out = Vec::new();
+        for cell in row.select(&cells) {
+            if cell
+                .value()
+                .attr("rowspan")
+                .is_some_and(|v| v.trim() != "1")
+            {
+                return Err(format!(
+                    "table {table_index} row {} uses rowspan, which cannot be flattened",
+                    row_index + 1
+                ));
+            }
+            let span = cell
+                .value()
+                .attr("colspan")
+                .map(|v| v.trim().parse::<usize>())
+                .transpose()
+                .map_err(|_| {
+                    format!(
+                        "table {table_index} row {} has a non-numeric colspan",
+                        row_index + 1
+                    )
+                })?
+                .unwrap_or(1)
+                .max(1);
+            out.push((collapsed_text(cell), span));
+        }
+        rows.push(out);
+    }
+    Ok(rows)
+}
+
+/// Project an HTML `region` extract: every `<table>` the region covers (`table_indices`, the
+/// document-order indices of the matched region), first row = header.
+///
+/// - Later tables whose first row equals the header (a continued schedule) contribute only
+///   their data rows (counted as `repeated_header_rows`); a different header refuses.
+/// - A full-width row (one cell spanning every column: an industry or classification label)
+///   is not data. It is carried into a leading `_group` column on the rows that follow it, so
+///   nothing is dropped and nothing is guessed. The column exists only if the region has one.
+/// - Short rows are padded with empty cells and counted; rows wider than the header refuse.
+pub fn html_region(
+    html: &crate::document::HtmlDocument,
+    region: &Value,
+) -> Result<Projection, String> {
+    let indices: Vec<usize> = region
+        .get("table_indices")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|v| v.as_u64().map(|n| n as usize))
+                .collect()
+        })
+        .unwrap_or_default();
+    if indices.is_empty() {
+        return Err("the region covers no <table>: nothing to project".to_owned());
+    }
+    let tables = html.select_nodes("table")?;
+
+    let mut header: Option<Vec<String>> = None;
+    let mut grouped: Vec<(Option<String>, Vec<String>)> = Vec::new(); // (group label, cells)
+    let (mut repeated_headers, mut padded_rows, mut full_width_rows) = (0u64, 0u64, 0u64);
+    let mut current_group: Option<String> = None;
+
+    for &table_index in &indices {
+        let table = tables.get(table_index).ok_or_else(|| {
+            format!(
+                "region names table {table_index} but the document has {} tables",
+                tables.len()
+            )
+        })?;
+        let rows = html_table_rows(*table, table_index)?;
+        let mut rows = rows.into_iter();
+        let first = rows
+            .next()
+            .ok_or_else(|| format!("table {table_index} has no rows"))?;
+        let first_cells: Vec<String> = first
+            .iter()
+            .flat_map(|(text, span)| {
+                std::iter::once(text.clone()).chain(std::iter::repeat_n(String::new(), span - 1))
+            })
+            .collect();
+        match &header {
+            None => {
+                if first_cells.iter().any(|name| name.is_empty()) {
+                    return Err(format!(
+                        "table {table_index}: the first row must name every column (found an empty header cell)"
+                    ));
+                }
+                let mut seen = std::collections::BTreeSet::new();
+                if let Some(duplicate) = first_cells.iter().find(|name| !seen.insert(*name)) {
+                    let _ = duplicate;
+                    return Err(format!(
+                        "table {table_index}: the header row repeats a column name; headers must be unique"
+                    ));
+                }
+                header = Some(first_cells);
+            }
+            Some(existing) => {
+                if &first_cells == existing {
+                    repeated_headers += 1;
+                } else {
+                    return Err(format!(
+                        "table {table_index} has a different header row than table {}: a region must be one schedule",
+                        indices[0]
+                    ));
+                }
+            }
+        }
+        let width = header.as_ref().map_or(0, Vec::len);
+        for (offset, row) in rows.enumerate() {
+            let expanded: Vec<String> = row
+                .iter()
+                .flat_map(|(text, span)| {
+                    std::iter::once(text.clone())
+                        .chain(std::iter::repeat_n(String::new(), span - 1))
+                })
+                .collect();
+            let is_full_width = row.len() == 1 && row[0].1 >= width.max(2) && !row[0].0.is_empty();
+            if is_full_width {
+                current_group = Some(row[0].0.clone());
+                full_width_rows += 1;
+                continue;
+            }
+            if expanded.iter().all(|cell| cell.is_empty()) {
+                continue;
+            }
+            if expanded.len() > width {
+                return Err(format!(
+                    "table {table_index} row {} has {} cells, wider than the {width}-column header",
+                    offset + 2,
+                    expanded.len()
+                ));
+            }
+            let mut cells = expanded;
+            if cells.len() < width {
+                padded_rows += 1;
+                cells.resize(width, String::new());
+            }
+            grouped.push((current_group.clone(), cells));
+        }
+    }
+
+    let mut headers = header.unwrap_or_default();
+    let has_groups = full_width_rows > 0;
+    if has_groups && headers.iter().any(|name| name == "_group") {
+        return Err("the header already has a column named _group".to_owned());
+    }
+    let rows: Vec<Vec<String>> = grouped
+        .into_iter()
+        .map(|(group, cells)| {
+            if has_groups {
+                let mut row = vec![group.unwrap_or_default()];
+                row.extend(cells);
+                row
+            } else {
+                cells
+            }
+        })
+        .collect();
+    if has_groups {
+        headers.insert(0, "_group".to_owned());
+    }
+
+    let pick = |key: &str| region.get(key).cloned().unwrap_or(Value::Null);
+    Ok(Projection {
+        headers,
+        rows,
+        locator: json!({
+            "kind": "html_region",
+            "table_indices": indices,
+            "byte_offsets": pick("byte_offsets"),
+            "start_line": pick("start_line"),
+            "end_line": pick("end_line"),
+            "page_span": pick("page_span"),
+        }),
+        skipped: json!({
+            "repeated_header_rows": repeated_headers,
+            "full_width_rows_carried_as_group": full_width_rows,
+            "padded_rows": padded_rows,
+        }),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
