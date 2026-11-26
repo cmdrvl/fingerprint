@@ -1,0 +1,21 @@
+fingerprint_id: nucor-financial.v1
+format: xlsx
+assertions:
+  - name: inventory_detail_sheet
+    sheet_name_regex:
+      pattern: "^Inventories - Additional Inform$"
+      bind: inventory_sheet
+  - name: inventory_detail_title
+    cell_regex:
+      sheet: "$inventory_sheet"
+      cell: A1
+      pattern: "^Inventories - Additional Information \\(Detail\\)$"
+extract:
+  - name: inventory_detail
+    type: range
+    sheet: "$inventory_sheet"
+    range: "A1:C4"
+  - name: inventory_labels
+    type: range
+    sheet: "$inventory_sheet"
+    range: "A1:A4"

@@ -203,6 +203,87 @@ fn html_table_rows(
     Ok(rows)
 }
 
+#[derive(Debug, Clone)]
+struct HtmlLayout {
+    /// Logical headers and the expanded source columns they own. SEC HTML often uses empty
+    /// separator cells between visible columns and splits one rendered value over several cells.
+    groups: Vec<(String, std::ops::Range<usize>)>,
+    expanded_width: usize,
+}
+
+fn expanded_cells(row: &[(String, usize)]) -> Vec<String> {
+    row.iter()
+        .flat_map(|(text, span)| {
+            std::iter::once(text.clone()).chain(std::iter::repeat_n(String::new(), span - 1))
+        })
+        .collect()
+}
+
+/// Recognize the explicit-column layout used by SEC filing HTML. This is deliberately narrower
+/// than accepting arbitrary blank headers: at least one `colspan` must be present, and the
+/// header names remain the only source of output column names. Blank cells before the first
+/// named header are checked against every data row and refuse if they carry data.
+fn sec_layout(row: &[(String, usize)]) -> Option<HtmlLayout> {
+    if !row.iter().any(|(_, span)| *span > 1) || !row.iter().any(|(text, _)| !text.is_empty()) {
+        return None;
+    }
+    let expanded_width = row.iter().map(|(_, span)| *span).sum::<usize>();
+    let mut cursor = 0;
+    let mut named = Vec::new();
+    for (text, span) in row {
+        if !text.is_empty() {
+            named.push((text.clone(), cursor));
+        }
+        cursor += *span;
+    }
+    let mut groups = Vec::with_capacity(named.len());
+    for (index, (name, start)) in named.iter().enumerate() {
+        let end = named
+            .get(index + 1)
+            .map_or(expanded_width, |(_, next_start)| *next_start);
+        groups.push((name.clone(), *start..end));
+    }
+    Some(HtmlLayout {
+        groups,
+        expanded_width,
+    })
+}
+
+fn project_sec_layout(
+    expanded: &[String],
+    layout: &HtmlLayout,
+    table_index: usize,
+) -> Result<Vec<String>, String> {
+    if expanded.len() != layout.expanded_width {
+        return Err(format!(
+            "table {table_index} row has {} expanded cells, expected {} for the SEC column layout",
+            expanded.len(),
+            layout.expanded_width
+        ));
+    }
+    let first_start = layout.groups.first().map_or(0, |(_, range)| range.start);
+    if expanded[..first_start]
+        .iter()
+        .any(|cell| !cell.trim().is_empty())
+    {
+        return Err(format!(
+            "table {table_index} has data in unnamed cells before the first named SEC column"
+        ));
+    }
+    Ok(layout
+        .groups
+        .iter()
+        .map(|(_, range)| {
+            expanded[range.clone()]
+                .iter()
+                .filter(|cell| !cell.trim().is_empty())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect())
+}
+
 /// Project an HTML `region` extract: every `<table>` the region covers (`table_indices`, the
 /// document-order indices of the matched region), first row = header.
 ///
@@ -232,8 +313,10 @@ pub fn html_region(
     let tables = html.select_nodes("table")?;
 
     let mut header: Option<Vec<String>> = None;
+    let mut layout: Option<HtmlLayout> = None;
     let mut grouped: Vec<(Option<String>, Vec<String>)> = Vec::new(); // (group label, cells)
-    let (mut repeated_headers, mut padded_rows, mut full_width_rows) = (0u64, 0u64, 0u64);
+    let (mut repeated_headers, mut padded_rows, mut full_width_rows, mut leading_layout_rows) =
+        (0u64, 0u64, 0u64, 0u64);
     let mut current_group: Option<String> = None;
 
     for &table_index in &indices {
@@ -245,15 +328,29 @@ pub fn html_region(
         })?;
         let rows = html_table_rows(*table, table_index)?;
         let mut rows = rows.into_iter();
-        let first = rows
-            .next()
-            .ok_or_else(|| format!("table {table_index} has no rows"))?;
-        let first_cells: Vec<String> = first
-            .iter()
-            .flat_map(|(text, span)| {
-                std::iter::once(text.clone()).chain(std::iter::repeat_n(String::new(), span - 1))
-            })
-            .collect();
+        // SEC's inline-XBRL renderer commonly emits a leading row containing only empty
+        // width/layout cells. It is source structure, not a header or data row; skipping only
+        // these leading all-empty rows preserves the fail-closed checks for every later row.
+        let first_raw: Vec<(String, usize)> = loop {
+            let first = rows
+                .next()
+                .ok_or_else(|| format!("table {table_index} has no non-empty rows"))?;
+            let expanded = expanded_cells(&first);
+            if expanded.iter().all(|cell| cell.trim().is_empty()) {
+                leading_layout_rows += 1;
+                continue;
+            }
+            break first;
+        };
+        let table_layout = sec_layout(&first_raw);
+        let first_cells = match &table_layout {
+            Some(table_layout) => table_layout
+                .groups
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect(),
+            None => expanded_cells(&first_raw),
+        };
         match &header {
             None => {
                 if first_cells.iter().any(|name| name.is_empty()) {
@@ -269,6 +366,7 @@ pub fn html_region(
                     ));
                 }
                 header = Some(first_cells);
+                layout = table_layout;
             }
             Some(existing) => {
                 if &first_cells == existing {
@@ -282,15 +380,13 @@ pub fn html_region(
             }
         }
         let width = header.as_ref().map_or(0, Vec::len);
+        let expanded_width = layout
+            .as_ref()
+            .map_or(width, |table_layout| table_layout.expanded_width);
         for (offset, row) in rows.enumerate() {
-            let expanded: Vec<String> = row
-                .iter()
-                .flat_map(|(text, span)| {
-                    std::iter::once(text.clone())
-                        .chain(std::iter::repeat_n(String::new(), span - 1))
-                })
-                .collect();
-            let is_full_width = row.len() == 1 && row[0].1 >= width.max(2) && !row[0].0.is_empty();
+            let expanded = expanded_cells(&row);
+            let is_full_width =
+                row.len() == 1 && row[0].1 >= expanded_width.max(2) && !row[0].0.is_empty();
             if is_full_width {
                 current_group = Some(row[0].0.clone());
                 full_width_rows += 1;
@@ -299,18 +395,22 @@ pub fn html_region(
             if expanded.iter().all(|cell| cell.is_empty()) {
                 continue;
             }
-            if expanded.len() > width {
+            if expanded.len() > expanded_width {
                 return Err(format!(
                     "table {table_index} row {} has {} cells, wider than the {width}-column header",
                     offset + 2,
                     expanded.len()
                 ));
             }
-            let mut cells = expanded;
-            if cells.len() < width {
+            let mut expanded = expanded;
+            if expanded.len() < expanded_width {
                 padded_rows += 1;
-                cells.resize(width, String::new());
+                expanded.resize(expanded_width, String::new());
             }
+            let cells = match &layout {
+                Some(layout) => project_sec_layout(&expanded, layout, table_index)?,
+                None => expanded,
+            };
             grouped.push((current_group.clone(), cells));
         }
     }
@@ -349,6 +449,7 @@ pub fn html_region(
             "page_span": pick("page_span"),
         }),
         skipped: json!({
+            "leading_layout_rows": leading_layout_rows,
             "repeated_header_rows": repeated_headers,
             "full_width_rows_carried_as_group": full_width_rows,
             "padded_rows": padded_rows,

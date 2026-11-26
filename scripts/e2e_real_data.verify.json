@@ -1,0 +1,33 @@
+{
+  "version": "verify.constraint.v1",
+  "constraint_set_id": "bd-uai.real.nucor.labels",
+  "bindings": [
+    {
+      "name": "input",
+      "kind": "relation",
+      "key_fields": ["Inventories - Additional Information (Detail)"]
+    }
+  ],
+  "rules": [
+    {
+      "id": "REAL_LABELS_NOT_NULL",
+      "severity": "error",
+      "portability": "portable",
+      "check": {
+        "op": "not_null",
+        "binding": "input",
+        "columns": ["Inventories - Additional Information (Detail)"]
+      }
+    },
+    {
+      "id": "REAL_LABELS_UNIQUE",
+      "severity": "error",
+      "portability": "portable",
+      "check": {
+        "op": "unique",
+        "binding": "input",
+        "columns": ["Inventories - Additional Information (Detail)"]
+      }
+    }
+  ]
+}
