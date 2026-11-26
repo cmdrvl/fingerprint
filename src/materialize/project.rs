@@ -219,6 +219,31 @@ fn expanded_cells(row: &[(String, usize)]) -> Vec<String> {
         .collect()
 }
 
+#[derive(Debug, Clone)]
+struct ExpandedHtmlCell {
+    text: String,
+    source_cell: usize,
+}
+
+fn expanded_cells_with_sources(row: &[(String, usize)]) -> Vec<ExpandedHtmlCell> {
+    row.iter()
+        .enumerate()
+        .flat_map(|(source_cell, (text, span))| {
+            std::iter::once(ExpandedHtmlCell {
+                text: text.clone(),
+                source_cell,
+            })
+            .chain(std::iter::repeat_n(
+                ExpandedHtmlCell {
+                    text: String::new(),
+                    source_cell,
+                },
+                span - 1,
+            ))
+        })
+        .collect()
+}
+
 /// Recognize the explicit-column layout used by SEC filing HTML. This is deliberately narrower
 /// than accepting arbitrary blank headers: at least one `colspan` must be present, and the
 /// header names remain the only source of output column names. A named header owns exactly its
@@ -269,26 +294,23 @@ fn is_number(value: &str) -> bool {
 /// Collapse only the split renderings used by SEC's HTML tables. A group with two or more
 /// unrelated non-empty source cells is ambiguous and must refuse instead of being joined.
 fn collapse_sec_group(
-    values: Vec<(usize, String)>,
+    values: Vec<(usize, usize, String)>,
     table_index: usize,
     row_index: usize,
     name: &str,
 ) -> Result<String, String> {
     match values.as_slice() {
         [] => Ok(String::new()),
-        [(_, value)] => Ok(value.clone()),
-        [(_, first), (_, second)] if is_currency_symbol(first) && is_number(second) => {
+        [(_, _, value)] => Ok(value.clone()),
+        [(_, _, first), (_, _, second)] if is_currency_symbol(first) && is_number(second) => {
             Ok(format!("{first} {second}"))
         }
-        [(_, first), (_, second)]
+        [(_, _, first), (_, _, second)]
             if is_number(first) && (is_closing_parenthesis(second) || is_percent_sign(second)) =>
         {
             Ok(format!("{first}{second}"))
         }
-        [(_, first), (_, second)] if is_percent_sign(first) && is_number(second) => {
-            Ok(format!("{first}{second}"))
-        }
-        [(first_column, _), (second_column, _)] => Err(format!(
+        [(first_column, _, _), (second_column, _, _)] => Err(format!(
             "table {table_index} row {row_index} column '{name}' has multiple non-empty cells at expanded columns {} and {}; only currency-symbol/number, number/closing-parenthesis, and number/percent split renderings are allowed",
             column_name(*first_column),
             column_name(*second_column),
@@ -299,8 +321,37 @@ fn collapse_sec_group(
     }
 }
 
+fn validate_source_cell_spans(
+    row: &[(String, usize)],
+    layout: &HtmlLayout,
+    table_index: usize,
+    row_index: usize,
+) -> Result<(), String> {
+    let mut start = 0;
+    for (source_cell, (text, span)) in row.iter().enumerate() {
+        let end = start + *span;
+        if !text.trim().is_empty() {
+            let intersecting_groups = layout
+                .groups
+                .iter()
+                .filter(|(_, group)| group.start < end && start < group.end)
+                .count();
+            if intersecting_groups > 1 {
+                return Err(format!(
+                    "table {table_index} row {row_index} source cell {} at expanded columns {}:{} intersects multiple named groups",
+                    source_cell + 1,
+                    column_name(start),
+                    column_name(end - 1),
+                ));
+            }
+        }
+        start = end;
+    }
+    Ok(())
+}
+
 fn project_sec_layout(
-    expanded: &[String],
+    expanded: &[ExpandedHtmlCell],
     layout: &HtmlLayout,
     table_index: usize,
     row_index: usize,
@@ -323,29 +374,46 @@ fn project_sec_layout(
         let mut values = range
             .clone()
             .filter_map(|column| {
-                let value = expanded[column].trim();
-                (!value.is_empty()).then(|| (column, value.to_owned()))
+                let value = expanded[column].text.trim();
+                (!value.is_empty())
+                    .then(|| (column, expanded[column].source_cell, value.to_owned()))
             })
             .collect::<Vec<_>>();
-        if let Some(value) = expanded.get(range.end).map(|value| value.trim())
+        let next_column_is_unowned = expanded.get(range.end).is_some_and(|_| !owned[range.end]);
+        if let Some(value) = expanded.get(range.end).map(|value| value.text.trim())
             && !value.is_empty()
+            && next_column_is_unowned
             && (is_closing_parenthesis(value) || is_percent_sign(value))
-            && values.last().is_some_and(|(_, last)| is_number(last))
+            && values.last().is_some_and(|(_, _, last)| is_number(last))
         {
             // Some SEC renderers put a closing parenthesis or percent sign in the separator
             // cell immediately after a numeric colspan group. It is still an explicit split
             // rendering, not arbitrary separator data.
-            values.push((range.end, value.to_owned()));
+            values.push((range.end, expanded[range.end].source_cell, value.to_owned()));
             owned[range.end] = true;
         }
         values_by_group.push(values);
     }
     for (column, cell) in expanded.iter().enumerate() {
-        if !owned[column] && !cell.trim().is_empty() {
+        if !owned[column] && !cell.text.trim().is_empty() {
             return Err(format!(
                 "table {table_index} row {row_index} has data in unnamed cells (separator/unnamed expanded column {})",
                 column_name(column)
             ));
+        }
+    }
+    // Code-level invariant: one non-empty source cell can contribute to at most one output
+    // group, even when a split-rendering lookahead is involved.
+    let mut emitted_source_cells = std::collections::BTreeSet::new();
+    for values in &values_by_group {
+        for (column, source_cell, _) in values {
+            if !emitted_source_cells.insert(*source_cell) {
+                return Err(format!(
+                    "table {table_index} row {row_index} source cell {} at expanded column {} would be emitted more than once",
+                    source_cell + 1,
+                    column_name(*column),
+                ));
+            }
         }
     }
     layout
@@ -454,7 +522,7 @@ pub fn html_region(
             .as_ref()
             .map_or(width, |table_layout| table_layout.expanded_width);
         for (offset, row) in rows.enumerate() {
-            let expanded = expanded_cells(&row);
+            let expanded_text = expanded_cells(&row);
             let is_full_width =
                 row.len() == 1 && row[0].1 >= expanded_width.max(2) && !row[0].0.is_empty();
             if is_full_width {
@@ -462,24 +530,33 @@ pub fn html_region(
                 full_width_rows += 1;
                 continue;
             }
-            if expanded.iter().all(|cell| cell.is_empty()) {
+            if expanded_text.iter().all(String::is_empty) {
                 continue;
             }
-            if expanded.len() > expanded_width {
+            if expanded_text.len() > expanded_width {
                 return Err(format!(
                     "table {table_index} row {} has {} cells, wider than the {width}-column header",
                     offset + 2,
-                    expanded.len()
+                    expanded_text.len()
                 ));
             }
-            let mut expanded = expanded;
+            if let Some(layout) = &table_layout {
+                validate_source_cell_spans(&row, layout, table_index, offset + 2)?;
+            }
+            let mut expanded = expanded_cells_with_sources(&row);
             if expanded.len() < expanded_width {
                 padded_rows += 1;
-                expanded.resize(expanded_width, String::new());
+                expanded.resize(
+                    expanded_width,
+                    ExpandedHtmlCell {
+                        text: String::new(),
+                        source_cell: usize::MAX,
+                    },
+                );
             }
             let cells = match &table_layout {
                 Some(layout) => project_sec_layout(&expanded, layout, table_index, offset + 2)?,
-                None => expanded,
+                None => expanded.into_iter().map(|cell| cell.text).collect(),
             };
             grouped.push((current_group.clone(), cells));
         }

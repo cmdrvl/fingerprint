@@ -844,6 +844,76 @@ fn sec_layout_refuses_data_in_separator_before_next_header() {
 }
 
 #[test]
+fn sec_layout_does_not_consume_the_next_named_groups_value() {
+    let soi_yaml = soi_definition();
+    let defs = defs(&[("soi-schedule.v2", &soi_yaml)]);
+    let out_dir = Scratch::new("sec-owned-lookahead");
+    let file = out_dir.path("owned-lookahead.html");
+    fs::write(
+        &file,
+        "<html><body><h1>Schedule of Investments</h1><table>\
+         <tr><th colspan=\"2\">Par</th><th>Spread</th></tr>\
+         <tr><td>2024</td><td></td><td>%</td></tr>\
+         </table></body></html>",
+    )
+    .unwrap();
+    let out = out_dir.path("owned-lookahead.csv");
+    let result = soi(&defs, &file, &out, &[]);
+    assert_eq!(result.status.code(), Some(0), "{result:?}");
+    assert_eq!(fs::read_to_string(&out).unwrap(), "Par,Spread\n2024,%\n");
+}
+
+#[test]
+fn sec_layout_refuses_a_source_cell_spanning_named_groups() {
+    let soi_yaml = soi_definition();
+    let defs = defs(&[("soi-schedule.v2", &soi_yaml)]);
+    let out_dir = Scratch::new("sec-cross-group-cell");
+    let file = out_dir.path("cross-group-cell.html");
+    fs::write(
+        &file,
+        "<html><body><h1>Schedule of Investments</h1><table>\
+         <tr><th>Name</th><th colspan=\"2\">Cost</th><th colspan=\"2\">Fair Value</th></tr>\
+         <tr><td>x</td><td colspan=\"4\">pending</td></tr>\
+         </table></body></html>",
+    )
+    .unwrap();
+    let out = out_dir.path("cross-group-cell.csv");
+    let (code, detail) = refusal(&soi(&defs, &file, &out, &[]));
+    assert_eq!(code, "E_PROJECTION");
+    let message = detail["message"].as_str().unwrap();
+    assert!(
+        message.contains("intersects multiple named groups"),
+        "{detail}"
+    );
+    assert!(!message.contains("pending"), "{detail}");
+    assert!(!out.exists());
+}
+
+#[test]
+fn sec_layout_refuses_percent_before_number() {
+    let soi_yaml = soi_definition();
+    let defs = defs(&[("soi-schedule.v2", &soi_yaml)]);
+    let out_dir = Scratch::new("sec-percent-order");
+    let file = out_dir.path("percent-order.html");
+    fs::write(
+        &file,
+        "<html><body><h1>Schedule of Investments</h1><table>\
+         <tr><th colspan=\"2\">Metric</th></tr>\
+         <tr><td>%</td><td>5</td></tr>\
+         </table></body></html>",
+    )
+    .unwrap();
+    let out = out_dir.path("percent-order.csv");
+    let (code, detail) = refusal(&soi(&defs, &file, &out, &[]));
+    assert_eq!(code, "E_PROJECTION");
+    let message = detail["message"].as_str().unwrap();
+    assert!(message.contains("multiple non-empty cells"), "{detail}");
+    assert!(!message.contains("%"), "{detail}");
+    assert!(!message.contains("5"), "{detail}");
+    assert!(!out.exists());
+}
+
+#[test]
 fn sec_layout_refuses_two_real_values_in_one_group() {
     let soi_yaml = soi_definition();
     let defs = defs(&[("soi-schedule.v2", &soi_yaml)]);
