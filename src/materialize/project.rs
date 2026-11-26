@@ -221,27 +221,20 @@ fn expanded_cells(row: &[(String, usize)]) -> Vec<String> {
 
 /// Recognize the explicit-column layout used by SEC filing HTML. This is deliberately narrower
 /// than accepting arbitrary blank headers: at least one `colspan` must be present, and the
-/// header names remain the only source of output column names. Blank cells before the first
-/// named header are checked against every data row and refuse if they carry data.
+/// header names remain the only source of output column names. A named header owns exactly its
+/// declared colspan; blank header cells are separators and cannot silently absorb data.
 fn sec_layout(row: &[(String, usize)]) -> Option<HtmlLayout> {
     if !row.iter().any(|(_, span)| *span > 1) || !row.iter().any(|(text, _)| !text.is_empty()) {
         return None;
     }
     let expanded_width = row.iter().map(|(_, span)| *span).sum::<usize>();
     let mut cursor = 0;
-    let mut named = Vec::new();
+    let mut groups = Vec::new();
     for (text, span) in row {
         if !text.is_empty() {
-            named.push((text.clone(), cursor));
+            groups.push((text.clone(), cursor..cursor + *span));
         }
         cursor += *span;
-    }
-    let mut groups = Vec::with_capacity(named.len());
-    for (index, (name, start)) in named.iter().enumerate() {
-        let end = named
-            .get(index + 1)
-            .map_or(expanded_width, |(_, next_start)| *next_start);
-        groups.push((name.clone(), *start..end));
     }
     Some(HtmlLayout {
         groups,
@@ -249,10 +242,68 @@ fn sec_layout(row: &[(String, usize)]) -> Option<HtmlLayout> {
     })
 }
 
+fn is_currency_symbol(value: &str) -> bool {
+    matches!(value, "$" | "€" | "£" | "¥")
+}
+
+fn is_percent_sign(value: &str) -> bool {
+    value == "%"
+}
+
+fn is_closing_parenthesis(value: &str) -> bool {
+    value == ")"
+}
+
+fn is_number(value: &str) -> bool {
+    let value = value.trim();
+    let value = value.strip_prefix('(').unwrap_or(value);
+    let value = value.strip_suffix(')').unwrap_or(value);
+    let value = value.strip_prefix('+').unwrap_or(value);
+    let value = value.strip_prefix('-').unwrap_or(value);
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_digit() || matches!(character, ',' | '.'))
+}
+
+/// Collapse only the split renderings used by SEC's HTML tables. A group with two or more
+/// unrelated non-empty source cells is ambiguous and must refuse instead of being joined.
+fn collapse_sec_group(
+    values: Vec<(usize, String)>,
+    table_index: usize,
+    row_index: usize,
+    name: &str,
+) -> Result<String, String> {
+    match values.as_slice() {
+        [] => Ok(String::new()),
+        [(_, value)] => Ok(value.clone()),
+        [(_, first), (_, second)] if is_currency_symbol(first) && is_number(second) => {
+            Ok(format!("{first} {second}"))
+        }
+        [(_, first), (_, second)]
+            if is_number(first) && (is_closing_parenthesis(second) || is_percent_sign(second)) =>
+        {
+            Ok(format!("{first}{second}"))
+        }
+        [(_, first), (_, second)] if is_percent_sign(first) && is_number(second) => {
+            Ok(format!("{first}{second}"))
+        }
+        [(first_column, _), (second_column, _)] => Err(format!(
+            "table {table_index} row {row_index} column '{name}' has multiple non-empty cells at expanded columns {} and {}; only currency-symbol/number, number/closing-parenthesis, and number/percent split renderings are allowed",
+            column_name(*first_column),
+            column_name(*second_column),
+        )),
+        _ => Err(format!(
+            "table {table_index} row {row_index} column '{name}' has multiple non-empty cells in expanded columns; only SEC split renderings are allowed"
+        )),
+    }
+}
+
 fn project_sec_layout(
     expanded: &[String],
     layout: &HtmlLayout,
     table_index: usize,
+    row_index: usize,
 ) -> Result<Vec<String>, String> {
     if expanded.len() != layout.expanded_width {
         return Err(format!(
@@ -261,27 +312,48 @@ fn project_sec_layout(
             layout.expanded_width
         ));
     }
-    let first_start = layout.groups.first().map_or(0, |(_, range)| range.start);
-    if expanded[..first_start]
-        .iter()
-        .any(|cell| !cell.trim().is_empty())
-    {
-        return Err(format!(
-            "table {table_index} has data in unnamed cells before the first named SEC column"
-        ));
+    let mut owned = vec![false; layout.expanded_width];
+    for (_, range) in &layout.groups {
+        for column in range.clone() {
+            owned[column] = true;
+        }
     }
-    Ok(layout
+    let mut values_by_group = Vec::with_capacity(layout.groups.len());
+    for (_, range) in &layout.groups {
+        let mut values = range
+            .clone()
+            .filter_map(|column| {
+                let value = expanded[column].trim();
+                (!value.is_empty()).then(|| (column, value.to_owned()))
+            })
+            .collect::<Vec<_>>();
+        if let Some(value) = expanded.get(range.end).map(|value| value.trim())
+            && !value.is_empty()
+            && (is_closing_parenthesis(value) || is_percent_sign(value))
+            && values.last().is_some_and(|(_, last)| is_number(last))
+        {
+            // Some SEC renderers put a closing parenthesis or percent sign in the separator
+            // cell immediately after a numeric colspan group. It is still an explicit split
+            // rendering, not arbitrary separator data.
+            values.push((range.end, value.to_owned()));
+            owned[range.end] = true;
+        }
+        values_by_group.push(values);
+    }
+    for (column, cell) in expanded.iter().enumerate() {
+        if !owned[column] && !cell.trim().is_empty() {
+            return Err(format!(
+                "table {table_index} row {row_index} has data in unnamed cells (separator/unnamed expanded column {})",
+                column_name(column)
+            ));
+        }
+    }
+    layout
         .groups
         .iter()
-        .map(|(_, range)| {
-            expanded[range.clone()]
-                .iter()
-                .filter(|cell| !cell.trim().is_empty())
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .collect())
+        .zip(values_by_group)
+        .map(|((name, _), values)| collapse_sec_group(values, table_index, row_index, name))
+        .collect()
 }
 
 /// Project an HTML `region` extract: every `<table>` the region covers (`table_indices`, the
@@ -313,7 +385,6 @@ pub fn html_region(
     let tables = html.select_nodes("table")?;
 
     let mut header: Option<Vec<String>> = None;
-    let mut layout: Option<HtmlLayout> = None;
     let mut grouped: Vec<(Option<String>, Vec<String>)> = Vec::new(); // (group label, cells)
     let (mut repeated_headers, mut padded_rows, mut full_width_rows, mut leading_layout_rows) =
         (0u64, 0u64, 0u64, 0u64);
@@ -366,7 +437,6 @@ pub fn html_region(
                     ));
                 }
                 header = Some(first_cells);
-                layout = table_layout;
             }
             Some(existing) => {
                 if &first_cells == existing {
@@ -380,7 +450,7 @@ pub fn html_region(
             }
         }
         let width = header.as_ref().map_or(0, Vec::len);
-        let expanded_width = layout
+        let expanded_width = table_layout
             .as_ref()
             .map_or(width, |table_layout| table_layout.expanded_width);
         for (offset, row) in rows.enumerate() {
@@ -407,8 +477,8 @@ pub fn html_region(
                 padded_rows += 1;
                 expanded.resize(expanded_width, String::new());
             }
-            let cells = match &layout {
-                Some(layout) => project_sec_layout(&expanded, layout, table_index)?,
+            let cells = match &table_layout {
+                Some(layout) => project_sec_layout(&expanded, layout, table_index, offset + 2)?,
                 None => expanded,
             };
             grouped.push((current_group.clone(), cells));

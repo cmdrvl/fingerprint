@@ -268,22 +268,51 @@ fn real_sec_fixtures_repeat_with_pinned_provenance() {
     ]);
     let cases = [
         (
-            "nucor",
+            "nucor-detail",
             "nucor_2024q2_financial_report.xlsx",
             "nucor-financial.v1",
             "inventory_detail",
             "blake3:91515afd18fa8d35230d8aaf677f179d2558a96a436845c16a3df791eeca554e",
+            // Hand-transcribed from the visible A1:C4 cells in the SEC workbook XML. The two
+            // NBSP cells are source cells, not blank rows, so their UTF-8 form is intentional.
+            "Inventories - Additional Information (Detail),\"Jun. 29, 2024\",\"Dec. 31, 2023\"\n\
+Inventory Disclosure [Abstract],\u{a0},\u{a0}\n\
+\"Raw materials and supplies in inventory, percentage\",0.33,0.37\n\
+\"Finished and semi-finished products in inventory, percentage\",0.67,0.63\n",
+            3,
+        ),
+        (
+            "nucor-labels",
+            "nucor_2024q2_financial_report.xlsx",
+            "nucor-financial.v1",
+            "inventory_labels",
+            "blake3:91515afd18fa8d35230d8aaf677f179d2558a96a436845c16a3df791eeca554e",
+            // Hand-transcribed from the same SEC source cells, retaining the CSV quoting rule.
+            "Inventories - Additional Information (Detail)\n\
+Inventory Disclosure [Abstract]\n\
+\"Raw materials and supplies in inventory, percentage\"\n\
+\"Finished and semi-finished products in inventory, percentage\"\n",
+            3,
         ),
         (
             "bdc",
-            "gbdc_2025q3_soi_excerpt.html",
+            "crescent_2017q1_soi_excerpt.html",
             "bdc-soi-real.v1",
             "schedule_region",
             "blake3:d9cdfc6dd37cb0d6b3df3cea22c21d1e5ad310764a97cfdd0087b17239b306c7",
+            // Hand-transcribed from the visible Crescent Capital BDC table in the SEC filing.
+            // Currency symbols and the closing parenthesis are the only split-cell joins.
+            "Investment Type,Cost,Fair Value,Unrealized Appreciation/ (Depreciation)\n\
+Senior Secured First Lien,\"$ 197,457,209\",\"$ 198,793,014\",\"$ 1,335,805\"\n\
+Senior Secured Second Lien,\"52,884,717\",\"54,789,572\",\"1,904,855\"\n\
+Unsecured Debt,\"5,374,891\",\"5,512,520\",\"137,629\"\n\
+Common Stock,\"5,332,317\",\"5,295,482\",\"(36,835)\"\n\
+Total Investments,\"$ 261,049,134\",\"$ 264,390,588\",\"$ 3,341,454\"\n",
+            5,
         ),
     ];
 
-    for (tag, source, fp, extract, source_hash) in cases {
+    for (tag, source, fp, extract, source_hash, expected_csv, expected_rows) in cases {
         let first_dir = Scratch::new(&format!("real-{tag}-first"));
         let second_dir = Scratch::new(&format!("real-{tag}-second"));
         let first = first_dir.path("materialized.csv");
@@ -307,6 +336,11 @@ fn real_sec_fixtures_repeat_with_pinned_provenance() {
             fs::read(&second).unwrap(),
             "{tag}: repeated materialization changed CSV bytes"
         );
+        assert_eq!(
+            fs::read_to_string(&first).unwrap(),
+            expected_csv,
+            "{tag}: materialized CSV differs from the hand-transcribed SEC source expectation"
+        );
 
         let first_prov: Value =
             serde_json::from_slice(&fs::read(sidecar(&first)).unwrap()).unwrap();
@@ -324,6 +358,10 @@ fn real_sec_fixtures_repeat_with_pinned_provenance() {
         assert_eq!(
             first_prov["output"]["bytes_hash"], second_prov["output"]["bytes_hash"],
             "{tag}: output hash drift"
+        );
+        assert_eq!(
+            first_prov["output"]["rows"], expected_rows,
+            "{tag}: row count"
         );
         assert!(first_prov["content_hash"].as_str().is_some(), "{tag}");
         assert!(
@@ -780,6 +818,73 @@ fn html_region_refuses_what_it_cannot_flatten() {
         );
         assert!(!out.exists(), "{name}: nothing written");
     }
+}
+
+#[test]
+fn sec_layout_refuses_data_in_separator_before_next_header() {
+    let soi_yaml = soi_definition();
+    let defs = defs(&[("soi-schedule.v2", &soi_yaml)]);
+    let out_dir = Scratch::new("sec-separator");
+    let file = out_dir.path("separator.html");
+    fs::write(
+        &file,
+        "<html><body><h1>Schedule of Investments</h1><table>\
+         <tr><th colspan=\"2\">Left</th><th></th><th colspan=\"2\">Right</th></tr>\
+         <tr><td>left-value</td><td></td><td>UNASSIGNED-SEPARATOR</td><td>right-value</td><td></td></tr>\
+         </table></body></html>",
+    )
+    .unwrap();
+    let out = out_dir.path("separator.csv");
+    let (code, detail) = refusal(&soi(&defs, &file, &out, &[]));
+    assert_eq!(code, "E_PROJECTION");
+    let message = detail["message"].as_str().unwrap();
+    assert!(message.contains("separator"), "{detail}");
+    assert!(!message.contains("UNASSIGNED-SEPARATOR"), "{detail}");
+    assert!(!out.exists());
+}
+
+#[test]
+fn sec_layout_refuses_two_real_values_in_one_group() {
+    let soi_yaml = soi_definition();
+    let defs = defs(&[("soi-schedule.v2", &soi_yaml)]);
+    let out_dir = Scratch::new("sec-multiple-values");
+    let file = out_dir.path("multiple-values.html");
+    fs::write(
+        &file,
+        "<html><body><h1>Schedule of Investments</h1><table>\
+         <tr><th colspan=\"2\">Amount</th></tr>\
+         <tr><td>12</td><td>34</td></tr>\
+         </table></body></html>",
+    )
+    .unwrap();
+    let out = out_dir.path("multiple-values.csv");
+    let (code, detail) = refusal(&soi(&defs, &file, &out, &[]));
+    assert_eq!(code, "E_PROJECTION");
+    let message = detail["message"].as_str().unwrap();
+    assert!(message.contains("multiple non-empty cells"), "{detail}");
+    assert!(!message.contains("12"), "{detail}");
+    assert!(!message.contains("34"), "{detail}");
+    assert!(!out.exists());
+}
+
+#[test]
+fn sec_layout_uses_each_continuation_tables_own_physical_layout() {
+    let soi_yaml = soi_definition();
+    let defs = defs(&[("soi-schedule.v2", &soi_yaml)]);
+    let out_dir = Scratch::new("sec-continuation-layout");
+    let file = out_dir.path("continuation-layout.html");
+    fs::write(
+        &file,
+        "<html><body><h1>Schedule of Investments</h1>\
+         <table><tr><th colspan=\"2\">A</th><th>B</th></tr><tr><td>a1</td><td></td><td>b1</td></tr></table>\
+         <table><tr><th>A</th><th colspan=\"2\">B</th></tr><tr><td>a2</td><td>b2</td><td></td></tr></table>\
+         </body></html>",
+    )
+    .unwrap();
+    let out = out_dir.path("continuation-layout.csv");
+    let result = soi(&defs, &file, &out, &[]);
+    assert_eq!(result.status.code(), Some(0), "{result:?}");
+    assert_eq!(fs::read_to_string(&out).unwrap(), "A,B\na1,b1\na2,b2\n");
 }
 
 #[test]

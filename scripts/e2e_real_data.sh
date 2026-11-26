@@ -21,7 +21,7 @@ materialize() {
 }
 
 detail_input="$root_dir/tests/fixtures/real/nucor_2024q2_financial_report.xlsx"
-bdc_input="$root_dir/tests/fixtures/real/gbdc_2025q3_soi_excerpt.html"
+bdc_input="$root_dir/tests/fixtures/real/crescent_2017q1_soi_excerpt.html"
 
 materialize "$released_fingerprint_bin" "$work_dir/released/detail.csv" \
   "$detail_input" --fp nucor-financial.v1 --extract inventory_detail
