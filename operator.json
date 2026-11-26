@@ -1,7 +1,7 @@
 {
   "schema_version": "operator.v1",
   "name": "fingerprint",
-  "tool_version": "0.12.0",
+  "tool_version": "0.13.0",
   "contract_version": "1.0.0",
   "description": "Tests artifacts against fingerprint definitions and produces deterministic content hashes",
   "repository": "https://github.com/cmdrvl/fingerprint",
